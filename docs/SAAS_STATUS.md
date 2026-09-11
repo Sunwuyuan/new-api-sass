@@ -10,7 +10,7 @@
 
 ## 当前状态
 
-实现和本机验收已完成，正在提交到 `feat/saas-multitenant`，随后创建到 `Sunwuyuan/new-api-sass:main` 的 PR。没有单租户模式开关。
+实现、本机验收和代码提交已完成。`feat/saas-multitenant` 已推送，已创建 [PR #1](https://github.com/Sunwuyuan/new-api-sass/pull/1) 到 `Sunwuyuan/new-api-sass:main`。功能提交为 `fe96f51eb`。没有单租户模式开关。
 
 ## 已交付
 
