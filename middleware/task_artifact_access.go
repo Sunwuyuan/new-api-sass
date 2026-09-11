@@ -196,8 +196,8 @@ func TokenOrTaskArtifactAccessAuth(taskParam, artifactParam string) gin.HandlerF
 		if ip == "" {
 			ip = "unknown"
 		}
-		if invalid || !service.VerifyTaskArtifactAccess(rawAccess, taskID, artifactKey) {
-			if !taskArtifactAnonymousLimiter.invalidAttempt(time.Now(), ip) {
+		if invalid || !service.VerifyTaskArtifactAccess(c.Request.Context(), rawAccess, taskID, artifactKey) {
+			if !TenantState(c.Request.Context()).taskArtifactAnonymousLimiter.invalidAttempt(time.Now(), ip) {
 				writeTaskArtifactAccessLimited(c)
 				return
 			}
@@ -205,7 +205,7 @@ func TokenOrTaskArtifactAccessAuth(taskParam, artifactParam string) gin.HandlerF
 			return
 		}
 
-		release, ok := taskArtifactAnonymousLimiter.acquire(ip, taskID, artifactKey)
+		release, ok := TenantState(c.Request.Context()).taskArtifactAnonymousLimiter.acquire(ip, taskID, artifactKey)
 		if !ok {
 			writeTaskArtifactAccessLimited(c)
 			return

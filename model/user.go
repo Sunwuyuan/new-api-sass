@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"database/sql"
 	"errors"
@@ -11,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"gorm.io/gorm"
@@ -77,8 +80,9 @@ func resolveUserSortOptions(sortOptions []UserSortOptions) UserSortOptions {
 // User if you add sensitive fields, don't forget to clean them in setupLogin function.
 // Otherwise, the sensitive information will be saved on local storage in plain text!
 type User struct {
+	TenantID             int64                      `json:"-" gorm:"not null;index;uniqueIndex:tenant_user_username,priority:1;uniqueIndex:tenant_user_access_token,priority:1;uniqueIndex:tenant_user_aff_code,priority:1"`
 	Id                   int                        `json:"id"`
-	Username             string                     `json:"username" gorm:"unique;index" validate:"max=20"`
+	Username             string                     `json:"username" gorm:"uniqueIndex:tenant_user_username;index" validate:"max=20"`
 	Password             string                     `json:"password" gorm:"not null;" validate:"min=8,max=128"`
 	HasPassword          bool                       `json:"-" gorm:"-:all"`
 	OriginalPassword     string                     `json:"original_password" gorm:"-:all"` // this field is only for Password change verification, don't save it to database!
@@ -91,14 +95,14 @@ type User struct {
 	OidcId               string                     `json:"oidc_id" gorm:"column:oidc_id;index"`
 	WeChatId             string                     `json:"wechat_id" gorm:"column:wechat_id;index"`
 	TelegramId           string                     `json:"telegram_id" gorm:"column:telegram_id;index"`
-	VerificationCode     string                     `json:"verification_code" gorm:"-:all"`                         // this field is only for Email verification, don't save it to database!
-	AccessToken          *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex"` // this token is for system management
+	VerificationCode     string                     `json:"verification_code" gorm:"-:all"`                                                  // this field is only for Email verification, don't save it to database!
+	AccessToken          *string                    `json:"-" gorm:"type:char(32);column:access_token;uniqueIndex:tenant_user_access_token"` // this token is for system management
 	AccessTokenCreatedAt *int64                     `json:"-" gorm:"type:bigint;column:access_token_created_at"`
 	Quota                int                        `json:"quota" gorm:"type:int;default:0"`
 	UsedQuota            int                        `json:"used_quota" gorm:"type:int;default:0;column:used_quota"` // used quota
 	RequestCount         int                        `json:"request_count" gorm:"type:int;default:0;"`               // request number
 	Group                string                     `json:"group" gorm:"type:varchar(64);default:'default'"`
-	AffCode              string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex"`
+	AffCode              string                     `json:"aff_code" gorm:"type:varchar(32);column:aff_code;uniqueIndex:tenant_user_aff_code"`
 	AffCount             int                        `json:"aff_count" gorm:"type:int;default:0;column:aff_count"`
 	AffQuota             int                        `json:"aff_quota" gorm:"type:int;default:0;column:aff_quota"`           // 邀请剩余额度
 	AffHistoryQuota      int                        `json:"aff_history_quota" gorm:"type:int;default:0;column:aff_history"` // 邀请历史额度
@@ -143,11 +147,11 @@ func (user *User) SetAccessToken(token string) {
 
 // UpdateUserAccessToken rotates a dashboard personal access token without
 // writing a stale user snapshot back over concurrently updated fields.
-func UpdateUserAccessToken(id int, token string) error {
+func UpdateUserAccessToken(tenantCtx context.Context, id int, token string) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
-	result := DB.Model(&User{}).Where("id = ?", id).Updates(map[string]any{
+	result := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Updates(map[string]any{
 		"access_token": token, "access_token_created_at": common.GetTimestamp(),
 	})
 	if result.Error != nil {
@@ -160,9 +164,9 @@ func UpdateUserAccessToken(id int, token string) error {
 }
 
 // RevokeUserAccessToken returns the generation actually revoked under the row lock.
-func RevokeUserAccessToken(id int) (string, error) {
+func RevokeUserAccessToken(tenantCtx context.Context, id int) (string, error) {
 	var tokenRef string
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var user User
 		if err := lockForUpdate(tx).Select("id", "access_token").First(&user, id).Error; err != nil {
 			return err
@@ -196,7 +200,7 @@ func (user *User) SetSetting(setting dto.UserSetting) {
 	user.Setting = string(settingBytes)
 }
 
-func UpdateUserSetting(userId int, setting dto.UserSetting) error {
+func UpdateUserSetting(tenantCtx context.Context, userId int, setting dto.UserSetting) error {
 	if userId == 0 {
 		return errors.New("id 为空！")
 	}
@@ -205,10 +209,10 @@ func UpdateUserSetting(userId int, setting dto.UserSetting) error {
 		return err
 	}
 	settingValue := string(settingBytes)
-	if err = DB.Model(&User{}).Where("id = ?", userId).Update("setting", settingValue).Error; err != nil {
+	if err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", userId).Update("setting", settingValue).Error; err != nil {
 		return err
 	}
-	return updateUserSettingCache(userId, settingValue)
+	return updateUserSettingCache(tenantCtx, userId, settingValue)
 }
 
 // userBindColumns 允许通过 UpdateUserBindColumn 更新的第三方账号绑定列白名单。
@@ -225,14 +229,14 @@ var userBindColumns = map[string]bool{
 // 绑定操作必须只写绑定列：若改为“读取完整用户 → 改一个字段 → 整体更新”，
 // 读快照期间并发发生的封禁、降权或分组变更会被旧快照覆盖恢复。
 // 角色、状态、分组只允许通过各自带锁/CAS 的专用方法修改。
-func UpdateUserBindColumn(userId int, column string, value string) error {
+func UpdateUserBindColumn(tenantCtx context.Context, userId int, column string, value string) error {
 	if userId <= 0 {
 		return errors.New("id 为空！")
 	}
 	if !userBindColumns[column] {
 		return fmt.Errorf("invalid user bind column: %s", column)
 	}
-	return DB.Model(&User{}).Where("id = ?", userId).Update(column, value).Error
+	return DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", userId).Update(column, value).Error
 }
 
 // 根据用户角色生成默认的边栏配置
@@ -298,7 +302,7 @@ func generateDefaultSidebarConfigForRole(userRole int) string {
 }
 
 // CheckUserExistOrDeleted check if user exist or deleted, if not exist, return false, nil, if deleted or exist, return true, nil
-func CheckUserExistOrDeleted(username string, email string) (bool, error) {
+func CheckUserExistOrDeleted(tenantCtx context.Context, username string, email string) (bool, error) {
 	var user User
 
 	// err := DB.Unscoped().First(&user, "username = ? or email = ?", username, email).Error
@@ -306,9 +310,9 @@ func CheckUserExistOrDeleted(username string, email string) (bool, error) {
 	var err error
 	email = NormalizeEmail(email)
 	if email == "" {
-		err = DB.Unscoped().First(&user, "username = ?", username).Error
+		err = DB.WithContext(tenantCtx).Unscoped().First(&user, "username = ?", username).Error
 	} else {
-		err = DB.Unscoped().First(&user, "username = ? or LOWER(email) = ?", username, email).Error
+		err = DB.WithContext(tenantCtx).Unscoped().First(&user, "username = ? or LOWER(email) = ?", username, email).Error
 	}
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -327,28 +331,25 @@ func NormalizeEmail(email string) string {
 }
 
 func emailQuery(tx *gorm.DB, email string) *gorm.DB {
-	if tx == nil {
-		tx = DB
-	}
 	return tx.Unscoped().Model(&User{}).Where("LOWER(email) = ?", NormalizeEmail(email))
 }
 
-func CountUsersByEmail(email string) (int64, error) {
+func CountUsersByEmail(tenantCtx context.Context, email string) (int64, error) {
 	email = NormalizeEmail(email)
 	if email == "" {
 		return 0, nil
 	}
 	var count int64
-	err := emailQuery(DB, email).Count(&count).Error
+	err := emailQuery(DB.WithContext(tenantCtx), email).Count(&count).Error
 	return count, err
 }
 
-func IsEmailAvailable(email string, excludeUserID int) (bool, error) {
+func IsEmailAvailable(tenantCtx context.Context, email string, excludeUserID int) (bool, error) {
 	email = NormalizeEmail(email)
 	if email == "" {
 		return true, nil
 	}
-	query := emailQuery(DB, email)
+	query := emailQuery(DB.WithContext(tenantCtx), email)
 	if excludeUserID > 0 {
 		query = query.Where("id <> ?", excludeUserID)
 	}
@@ -359,8 +360,8 @@ func IsEmailAvailable(email string, excludeUserID int) (bool, error) {
 	return count == 0, nil
 }
 
-func EnsureEmailAvailable(email string, excludeUserID int) error {
-	available, err := IsEmailAvailable(email, excludeUserID)
+func EnsureEmailAvailable(tenantCtx context.Context, email string, excludeUserID int) error {
+	available, err := IsEmailAvailable(tenantCtx, email, excludeUserID)
 	if err != nil {
 		return err
 	}
@@ -394,29 +395,23 @@ func lockNormalizedEmail(tx *gorm.DB, email string) error {
 	if email == "" {
 		return nil
 	}
-	switch {
-	case common.UsingMainDatabase(common.DatabaseTypePostgreSQL):
-		if err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext(?))", email).Error; err != nil {
-			return err
-		}
-	case common.UsingMainDatabase(common.DatabaseTypeMySQL):
-		var ids []int
-		if err := tx.Raw("SELECT id FROM users WHERE email = ? FOR UPDATE", email).Scan(&ids).Error; err != nil {
-			return err
-		}
+	identity, err := tenant.FromContext(tx.Statement.Context)
+	if err != nil {
+		return err
 	}
-	return nil
+	return tx.Model(&tenant.Workspace{}).Where("id = ?", identity.ID).
+		UpdateColumn("updated_at", gorm.Expr("updated_at")).Error
 }
 
-func GetMaxUserId() int {
+func GetMaxUserId(tenantCtx context.Context) int {
 	var user User
-	DB.Unscoped().Last(&user)
+	DB.WithContext(tenantCtx).Unscoped().Last(&user)
 	return user.Id
 }
 
-func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
+func GetAllUsers(tenantCtx context.Context, pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (users []*User, total int64, err error) {
 	// Start transaction
-	tx := DB.Begin()
+	tx := DB.WithContext(tenantCtx).Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
 	}
@@ -449,13 +444,13 @@ func GetAllUsers(pageInfo *common.PageInfo, sortOptions ...UserSortOptions) (use
 	return users, total, nil
 }
 
-func SearchUsers(keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
+func SearchUsers(tenantCtx context.Context, keyword string, group string, role *int, status *int, startIdx int, num int, sortOptions ...UserSortOptions) ([]*User, int64, error) {
 	var users []*User
 	var total int64
 	var err error
 
 	// 开始事务
-	tx := DB.Begin()
+	tx := DB.WithContext(tenantCtx).Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
 	}
@@ -518,23 +513,23 @@ func SearchUsers(keyword string, group string, role *int, status *int, startIdx 
 	return users, total, nil
 }
 
-func GetUserById(id int, selectAll bool) (*User, error) {
+func GetUserById(tenantCtx context.Context, id int, selectAll bool) (*User, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空！")
 	}
 	user := User{Id: id}
 	var err error = nil
 	if selectAll {
-		err = DB.First(&user, "id = ?", id).Error
+		err = DB.WithContext(tenantCtx).First(&user, "id = ?", id).Error
 	} else {
-		err = DB.Omit("password", "access_token").First(&user, "id = ?", id).Error
+		err = DB.WithContext(tenantCtx).Omit("password", "access_token").First(&user, "id = ?", id).Error
 	}
 	return &user, err
 }
 
 // GetSelfUserById reads dashboard profile data and password existence in one
 // query. The password hash and management access token are never selected.
-func GetSelfUserById(id int) (*User, error) {
+func GetSelfUserById(tenantCtx context.Context, id int) (*User, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空！")
 	}
@@ -542,7 +537,7 @@ func GetSelfUserById(id int) (*User, error) {
 		User
 		HasPassword bool `gorm:"column:has_password"`
 	}
-	err := DB.Model(&User{}).Select([]string{
+	err := DB.WithContext(tenantCtx).Model(&User{}).Select([]string{
 		"id", "username", "display_name", "role", "status", "email",
 		"github_id", "discord_id", "oidc_id", "wechat_id", "telegram_id",
 		"group", "quota", "used_quota", "request_count", "aff_code", "aff_count",
@@ -554,36 +549,36 @@ func GetSelfUserById(id int) (*User, error) {
 	return &profile.User, err
 }
 
-func GetUserIdByAffCode(affCode string) (int, error) {
+func GetUserIdByAffCode(tenantCtx context.Context, affCode string) (int, error) {
 	if affCode == "" {
 		return 0, errors.New("affCode 为空！")
 	}
 	var user User
-	err := DB.Select("id").First(&user, "aff_code = ?", affCode).Error
+	err := DB.WithContext(tenantCtx).Select("id").First(&user, "aff_code = ?", affCode).Error
 	return user.Id, err
 }
 
-func DeleteUserById(id int) (err error) {
+func DeleteUserById(tenantCtx context.Context, id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
 	user := User{Id: id}
-	return user.Delete()
+	return user.Delete(tenantCtx)
 }
 
-func HardDeleteUserById(id int) error {
+func HardDeleteUserById(tenantCtx context.Context, id int) error {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
 	user := User{Id: id}
-	return user.HardDelete()
+	return user.HardDelete(tenantCtx)
 }
 
-func inviteUser(inviterId int) error {
-	result := DB.Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
+func inviteUser(tenantCtx context.Context, inviterId int) error {
+	result := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", inviterId).Updates(map[string]any{
 		"aff_count":   gorm.Expr("aff_count + ?", 1),
-		"aff_quota":   gorm.Expr("aff_quota + ?", common.QuotaForInviter),
-		"aff_history": gorm.Expr("aff_history + ?", common.QuotaForInviter),
+		"aff_quota":   gorm.Expr("aff_quota + ?", common.TenantState(tenantCtx).QuotaForInviter),
+		"aff_history": gorm.Expr("aff_history + ?", common.TenantState(tenantCtx).QuotaForInviter),
 	})
 	if result.Error != nil {
 		return result.Error
@@ -594,14 +589,14 @@ func inviteUser(inviterId int) error {
 	return nil
 }
 
-func (user *User) TransferAffQuotaToQuota(quota int) error {
+func (user *User) TransferAffQuotaToQuota(tenantCtx context.Context, quota int) error {
 	// 检查quota是否小于最小额度
-	if float64(quota) < common.QuotaPerUnit {
-		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(common.QuotaFromFloat(common.QuotaPerUnit)))
+	if float64(quota) < common.TenantState(tenantCtx).QuotaPerUnit {
+		return fmt.Errorf("转移额度最小为%s！", logger.LogQuota(tenantCtx, common.QuotaFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)))
 	}
 
 	// 开始数据库事务
-	tx := DB.Begin()
+	tx := DB.WithContext(tenantCtx).Begin()
 	if tx.Error != nil {
 		return tx.Error
 	}
@@ -647,9 +642,9 @@ func (user *User) prepareForInsert(tx *gorm.DB) error {
 // BindEmailToUser atomically checks email availability and assigns it to the
 // user, serializing concurrent binds of the same email so two accounts cannot
 // end up sharing one address. The email is normalized before check and store.
-func BindEmailToUser(user *User, email string) error {
+func BindEmailToUser(tenantCtx context.Context, user *User, email string) error {
 	email = NormalizeEmail(email)
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		return withNormalizedEmailLock(tx, email, func(tx *gorm.DB) error {
 			if err := ensureEmailAvailableWithTx(tx, email, user.Id); err != nil {
 				return err
@@ -660,7 +655,7 @@ func BindEmailToUser(user *User, email string) error {
 	}); err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	return updateUserCache(tenantCtx, *user)
 }
 
 func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) error {
@@ -682,13 +677,13 @@ func ensureEmailAvailableWithTx(tx *gorm.DB, email string, excludeUserID int) er
 	return nil
 }
 
-func (user *User) Insert(inviterId int) error {
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+func (user *User) Insert(tenantCtx context.Context, inviterId int) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		return withNormalizedEmailLock(tx, user.Email, func(tx *gorm.DB) error {
 			if err := user.prepareForInsert(tx); err != nil {
 				return err
 			}
-			user.Quota = common.QuotaForNewUser
+			user.Quota = common.TenantState(tx.Statement.Context).QuotaForNewUser
 			user.AffCode = common.GetRandomString(4)
 
 			// 初始化用户设置，包括默认的边栏配置
@@ -704,44 +699,44 @@ func (user *User) Insert(inviterId int) error {
 		return err
 	}
 
-	user.finishInsert(inviterId)
+	user.finishInsert(tenantCtx, inviterId)
 	return nil
 }
 
-func (user *User) finishInsert(inviterId int) {
+func (user *User) finishInsert(tenantCtx context.Context, inviterId int) {
 	// 用户创建成功后，根据角色初始化边栏配置
 	// 需要重新获取用户以确保有正确的ID和Role
 	var createdUser User
-	if err := DB.Where("username = ?", user.Username).First(&createdUser).Error; err == nil {
+	if err := DB.WithContext(tenantCtx).Where("username = ?", user.Username).First(&createdUser).Error; err == nil {
 		// 生成基于角色的默认边栏配置
 		defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
 		if defaultSidebarConfig != "" {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.Update(tenantCtx, false)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+	if common.TenantState(tenantCtx).QuotaForNewUser > 0 {
+		RecordLog(tenantCtx, user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed(tenantCtx) {
+		if common.TenantState(tenantCtx).QuotaForInvitee > 0 {
+			_ = IncreaseUserQuota(tenantCtx, user.Id, common.TenantState(tenantCtx).QuotaForInvitee, true)
+			RecordLog(tenantCtx, user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForInvitee)))
 		}
-		if common.QuotaForInviter > 0 {
+		if common.TenantState(tenantCtx).QuotaForInviter > 0 {
 			//_ = IncreaseUserQuota(inviterId, common.QuotaForInviter)
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+			RecordLog(tenantCtx, inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForInviter)))
+			_ = inviteUser(tenantCtx, inviterId)
 		}
 	}
 }
 
-func (user *User) FinishInsert(inviterId int) {
-	user.finishInsert(inviterId)
+func (user *User) FinishInsert(tenantCtx context.Context, inviterId int) {
+	user.finishInsert(tenantCtx, inviterId)
 }
 
 // InsertWithTx inserts a new user within an existing transaction.
@@ -752,7 +747,7 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 		if err := user.prepareForInsert(tx); err != nil {
 			return err
 		}
-		user.Quota = common.QuotaForNewUser
+		user.Quota = common.TenantState(tx.Statement.Context).QuotaForNewUser
 		user.AffCode = common.GetRandomString(4)
 
 		// 初始化用户设置
@@ -767,50 +762,50 @@ func (user *User) InsertWithTx(tx *gorm.DB, inviterId int) error {
 
 // FinalizeOAuthUserCreation performs post-transaction tasks for OAuth user creation.
 // This should be called after the transaction commits successfully.
-func (user *User) FinalizeOAuthUserCreation(inviterId int) {
+func (user *User) FinalizeOAuthUserCreation(tenantCtx context.Context, inviterId int) {
 	// 用户创建成功后，根据角色初始化边栏配置
 	var createdUser User
-	if err := DB.Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
+	if err := DB.WithContext(tenantCtx).Where("id = ?", user.Id).First(&createdUser).Error; err == nil {
 		defaultSidebarConfig := generateDefaultSidebarConfigForRole(createdUser.Role)
 		if defaultSidebarConfig != "" {
 			currentSetting := createdUser.GetSetting()
 			currentSetting.SidebarModules = defaultSidebarConfig
 			createdUser.SetSetting(currentSetting)
-			createdUser.Update(false)
+			createdUser.Update(tenantCtx, false)
 			common.SysLog(fmt.Sprintf("为新用户 %s (角色: %d) 初始化边栏配置", createdUser.Username, createdUser.Role))
 		}
 	}
 
-	if common.QuotaForNewUser > 0 {
-		RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(common.QuotaForNewUser)))
+	if common.TenantState(tenantCtx).QuotaForNewUser > 0 {
+		RecordLog(tenantCtx, user.Id, LogTypeSystem, fmt.Sprintf("新用户注册赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForNewUser)))
 	}
-	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed() {
-		if common.QuotaForInvitee > 0 {
-			_ = IncreaseUserQuota(user.Id, common.QuotaForInvitee, true)
-			RecordLog(user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(common.QuotaForInvitee)))
+	if inviterId != 0 && operation_setting.IsPaymentComplianceConfirmed(tenantCtx) {
+		if common.TenantState(tenantCtx).QuotaForInvitee > 0 {
+			_ = IncreaseUserQuota(tenantCtx, user.Id, common.TenantState(tenantCtx).QuotaForInvitee, true)
+			RecordLog(tenantCtx, user.Id, LogTypeSystem, fmt.Sprintf("使用邀请码赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForInvitee)))
 		}
-		if common.QuotaForInviter > 0 {
-			RecordLog(inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(common.QuotaForInviter)))
-			_ = inviteUser(inviterId)
+		if common.TenantState(tenantCtx).QuotaForInviter > 0 {
+			RecordLog(tenantCtx, inviterId, LogTypeSystem, fmt.Sprintf("邀请用户赠送 %s", logger.LogQuota(tenantCtx, common.TenantState(tenantCtx).QuotaForInviter)))
+			_ = inviteUser(tenantCtx, inviterId)
 		}
 	}
 }
 
-func (user *User) Update(updatePassword bool) error {
+func (user *User) Update(tenantCtx context.Context, updatePassword bool) error {
 	var previousAuthVersion int64
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
 		return err
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		return user.UpdateWithTx(tx, updatePassword)
 	}); err != nil {
 		return err
 	}
-	if err := updateUserCache(*user); err != nil {
+	if err := updateUserCache(tenantCtx, *user); err != nil {
 		return err
 	}
 	if user.AuthVersion > previousAuthVersion {
-		_, err := RevokeAllUserSessions(user.Id, "user_security_changed")
+		_, err := RevokeAllUserSessions(tenantCtx, user.Id, "user_security_changed")
 		return err
 	}
 	return nil
@@ -857,21 +852,21 @@ func (user *User) UpdateWithTx(tx *gorm.DB, updatePassword bool) error {
 	return tx.First(user, user.Id).Error
 }
 
-func (user *User) Edit(updatePassword bool) error {
+func (user *User) Edit(tenantCtx context.Context, updatePassword bool) error {
 	var previousAuthVersion int64
-	if err := DB.Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", user.Id).Select("auth_version").Find(&previousAuthVersion).Error; err != nil {
 		return err
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		return user.EditWithTx(tx, updatePassword)
 	}); err != nil {
 		return err
 	}
-	if err := updateUserCache(*user); err != nil {
+	if err := updateUserCache(tenantCtx, *user); err != nil {
 		return err
 	}
 	if user.AuthVersion > previousAuthVersion {
-		_, err := RevokeAllUserSessions(user.Id, "user_security_changed")
+		_, err := RevokeAllUserSessions(tenantCtx, user.Id, "user_security_changed")
 		return err
 	}
 	return nil
@@ -914,7 +909,7 @@ func (user *User) EditWithTx(tx *gorm.DB, updatePassword bool) error {
 	return tx.First(user, user.Id).Error
 }
 
-func (user *User) ClearBinding(bindingType string) error {
+func (user *User) ClearBinding(tenantCtx context.Context, bindingType string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
@@ -934,7 +929,7 @@ func (user *User) ClearBinding(bindingType string) error {
 		return errors.New("invalid binding type")
 	}
 
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&User{}).Where("id = ?", user.Id).Update(column, "").Error; err != nil {
 			return err
 		}
@@ -946,28 +941,28 @@ func (user *User) ClearBinding(bindingType string) error {
 		return err
 	}
 
-	if err := DB.Where("id = ?", user.Id).First(user).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("id = ?", user.Id).First(user).Error; err != nil {
 		return err
 	}
 
-	return updateUserCache(*user)
+	return updateUserCache(tenantCtx, *user)
 }
 
-func (user *User) Delete() error {
-	return user.delete(nil)
+func (user *User) Delete(tenantCtx context.Context) error {
+	return user.delete(tenantCtx, nil)
 }
 
-func DeleteUserForSession(identity AuthSessionIdentity) error {
+func DeleteUserForSession(tenantCtx context.Context, identity AuthSessionIdentity) error {
 	user := User{Id: identity.UserID}
-	return user.delete(&identity)
+	return user.delete(tenantCtx, &identity)
 }
 
-func (user *User) delete(identity *AuthSessionIdentity) error {
+func (user *User) delete(tenantCtx context.Context, identity *AuthSessionIdentity) error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
 	var nextAuthVersion int64
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if identity != nil {
 			if err := ValidateAuthSessionWithTx(tx, *identity); err != nil {
 				return err
@@ -989,22 +984,22 @@ func (user *User) delete(identity *AuthSessionIdentity) error {
 	}); err != nil {
 		return err
 	}
-	if err := publishCommittedUserAuthVersion(user.Id, nextAuthVersion); err != nil {
+	if err := publishCommittedUserAuthVersion(tenantCtx, user.Id, nextAuthVersion); err != nil {
 		return err
 	}
-	if _, err := RevokeAllUserSessions(user.Id, "user_deleted"); err != nil {
+	if _, err := RevokeAllUserSessions(tenantCtx, user.Id, "user_deleted"); err != nil {
 		return err
 	}
-	return invalidateUserCache(user.Id)
+	return invalidateUserCache(tenantCtx, user.Id)
 }
 
-func (user *User) HardDelete() error {
+func (user *User) HardDelete(tenantCtx context.Context) error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
 	var tokens []Token
 	var deletedAuthVersion int64
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		deletedAuthVersion, err = IncrementUserAuthVersionWithTx(tx, user.Id)
 		if err != nil {
@@ -1023,13 +1018,13 @@ func (user *User) HardDelete() error {
 	if err != nil {
 		return err
 	}
-	if err := publishCommittedUserAuthVersion(user.Id, deletedAuthVersion); err != nil {
+	if err := publishCommittedUserAuthVersion(tenantCtx, user.Id, deletedAuthVersion); err != nil {
 		common.SysError(fmt.Sprintf("failed to publish auth tombstone after hard deleting user %d: %v", user.Id, err))
 	}
-	if err := invalidateTokensCache(tokens); err != nil {
+	if err := invalidateTokensCache(tenantCtx, tokens); err != nil {
 		common.SysError(fmt.Sprintf("failed to invalidate token cache after hard deleting user %d: %v", user.Id, err))
 	}
-	if err := invalidateUserCache(user.Id); err != nil {
+	if err := invalidateUserCache(tenantCtx, user.Id); err != nil {
 		common.SysError(fmt.Sprintf("failed to invalidate user cache after hard deleting user %d: %v", user.Id, err))
 	}
 	return nil
@@ -1055,7 +1050,7 @@ func deleteUserAuthenticationData(tx *gorm.DB, userId int) error {
 }
 
 // ValidateAndFill check password & user status
-func (user *User) ValidateAndFill() (err error) {
+func (user *User) ValidateAndFill(tenantCtx context.Context) (err error) {
 	// When querying with struct, GORM will only query with non-zero fields,
 	// that means if your field's value is 0, '', false or other zero values,
 	// it won't be used to build query conditions
@@ -1065,7 +1060,7 @@ func (user *User) ValidateAndFill() (err error) {
 		return ErrUserEmptyCredentials
 	}
 	// find by username or email
-	err = DB.Where("username = ? OR email = ?", username, username).First(user).Error
+	err = DB.WithContext(tenantCtx).Where("username = ? OR email = ?", username, username).First(user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrInvalidCredentials
@@ -1082,85 +1077,85 @@ func (user *User) ValidateAndFill() (err error) {
 	return nil
 }
 
-func (user *User) FillUserById() error {
+func (user *User) FillUserById(tenantCtx context.Context) error {
 	if user.Id == 0 {
 		return errors.New("id 为空！")
 	}
-	DB.Where(User{Id: user.Id}).First(user)
+	DB.WithContext(tenantCtx).Where(User{Id: user.Id}).First(user)
 	return nil
 }
 
-func (user *User) FillUserByEmail() error {
+func (user *User) FillUserByEmail(tenantCtx context.Context) error {
 	if user.Email == "" {
 		return errors.New("email 为空！")
 	}
-	DB.Where(User{Email: user.Email}).First(user)
+	DB.WithContext(tenantCtx).Where(User{Email: user.Email}).First(user)
 	return nil
 }
 
-func (user *User) FillUserByGitHubId() error {
+func (user *User) FillUserByGitHubId(tenantCtx context.Context) error {
 	if user.GitHubId == "" {
 		return errors.New("GitHub id 为空！")
 	}
-	DB.Where(User{GitHubId: user.GitHubId}).First(user)
+	DB.WithContext(tenantCtx).Where(User{GitHubId: user.GitHubId}).First(user)
 	return nil
 }
 
 // UpdateGitHubId updates the user's GitHub ID (used for migration from login to numeric ID)
-func (user *User) UpdateGitHubId(newGitHubId string) error {
+func (user *User) UpdateGitHubId(tenantCtx context.Context, newGitHubId string) error {
 	if user.Id == 0 {
 		return errors.New("user id is empty")
 	}
-	return DB.Model(user).Update("github_id", newGitHubId).Error
+	return DB.WithContext(tenantCtx).Model(user).Update("github_id", newGitHubId).Error
 }
 
-func (user *User) FillUserByDiscordId() error {
+func (user *User) FillUserByDiscordId(tenantCtx context.Context) error {
 	if user.DiscordId == "" {
 		return errors.New("discord id 为空！")
 	}
-	DB.Where(User{DiscordId: user.DiscordId}).First(user)
+	DB.WithContext(tenantCtx).Where(User{DiscordId: user.DiscordId}).First(user)
 	return nil
 }
 
-func (user *User) FillUserByOidcId() error {
+func (user *User) FillUserByOidcId(tenantCtx context.Context) error {
 	if user.OidcId == "" {
 		return errors.New("oidc id 为空！")
 	}
-	DB.Where(User{OidcId: user.OidcId}).First(user)
+	DB.WithContext(tenantCtx).Where(User{OidcId: user.OidcId}).First(user)
 	return nil
 }
 
-func (user *User) FillUserByWeChatId() error {
+func (user *User) FillUserByWeChatId(tenantCtx context.Context) error {
 	if user.WeChatId == "" {
 		return errors.New("WeChat id 为空！")
 	}
-	DB.Where(User{WeChatId: user.WeChatId}).First(user)
+	DB.WithContext(tenantCtx).Where(User{WeChatId: user.WeChatId}).First(user)
 	return nil
 }
 
-func (user *User) FillUserByTelegramId() error {
+func (user *User) FillUserByTelegramId(tenantCtx context.Context) error {
 	if user.TelegramId == "" {
 		return errors.New("Telegram id 为空！")
 	}
-	err := DB.Where(User{TelegramId: user.TelegramId}).First(user).Error
+	err := DB.WithContext(tenantCtx).Where(User{TelegramId: user.TelegramId}).First(user).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return errors.New("该 Telegram 账户未绑定")
 	}
 	return nil
 }
 
-func IsEmailAlreadyTaken(email string) bool {
-	count, err := CountUsersByEmail(email)
+func IsEmailAlreadyTaken(tenantCtx context.Context, email string) bool {
+	count, err := CountUsersByEmail(tenantCtx, email)
 	return err == nil && count > 0
 }
 
-func GetUniqueUserByEmail(email string) (*User, error) {
+func GetUniqueUserByEmail(tenantCtx context.Context, email string) (*User, error) {
 	email = NormalizeEmail(email)
 	if email == "" {
 		return nil, ErrEmailNotFound
 	}
 	var users []User
-	if err := DB.Where("LOWER(email) = ?", email).Limit(2).Find(&users).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("LOWER(email) = ?", email).Limit(2).Find(&users).Error; err != nil {
 		return nil, err
 	}
 	switch len(users) {
@@ -1173,31 +1168,31 @@ func GetUniqueUserByEmail(email string) (*User, error) {
 	}
 }
 
-func IsWeChatIdAlreadyTaken(wechatId string) bool {
-	return DB.Unscoped().Where("wechat_id = ?", wechatId).Find(&User{}).RowsAffected == 1
+func IsWeChatIdAlreadyTaken(tenantCtx context.Context, wechatId string) bool {
+	return DB.WithContext(tenantCtx).Unscoped().Where("wechat_id = ?", wechatId).Find(&User{}).RowsAffected == 1
 }
 
-func IsGitHubIdAlreadyTaken(githubId string) bool {
-	return DB.Unscoped().Where("github_id = ?", githubId).Find(&User{}).RowsAffected == 1
+func IsGitHubIdAlreadyTaken(tenantCtx context.Context, githubId string) bool {
+	return DB.WithContext(tenantCtx).Unscoped().Where("github_id = ?", githubId).Find(&User{}).RowsAffected == 1
 }
 
-func IsDiscordIdAlreadyTaken(discordId string) bool {
-	return DB.Unscoped().Where("discord_id = ?", discordId).Find(&User{}).RowsAffected == 1
+func IsDiscordIdAlreadyTaken(tenantCtx context.Context, discordId string) bool {
+	return DB.WithContext(tenantCtx).Unscoped().Where("discord_id = ?", discordId).Find(&User{}).RowsAffected == 1
 }
 
-func IsOidcIdAlreadyTaken(oidcId string) bool {
-	return DB.Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
+func IsOidcIdAlreadyTaken(tenantCtx context.Context, oidcId string) bool {
+	return DB.WithContext(tenantCtx).Where("oidc_id = ?", oidcId).Find(&User{}).RowsAffected == 1
 }
 
-func IsTelegramIdAlreadyTaken(telegramId string) bool {
-	return DB.Unscoped().Where("telegram_id = ?", telegramId).Find(&User{}).RowsAffected == 1
+func IsTelegramIdAlreadyTaken(tenantCtx context.Context, telegramId string) bool {
+	return DB.WithContext(tenantCtx).Unscoped().Where("telegram_id = ?", telegramId).Find(&User{}).RowsAffected == 1
 }
 
-func ResetUserPasswordByEmail(email string, password string) error {
+func ResetUserPasswordByEmail(tenantCtx context.Context, email string, password string) error {
 	if email == "" || password == "" {
 		return errors.New("邮箱地址或密码为空！")
 	}
-	user, err := GetUniqueUserByEmail(email)
+	user, err := GetUniqueUserByEmail(tenantCtx, email)
 	if err != nil {
 		return err
 	}
@@ -1205,7 +1200,7 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	if err != nil {
 		return err
 	}
-	if err = DB.Transaction(func(tx *gorm.DB) error {
+	if err = DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if _, err := IncrementUserAuthVersionWithTx(tx, user.Id); err != nil {
 			return err
 		}
@@ -1213,19 +1208,19 @@ func ResetUserPasswordByEmail(email string, password string) error {
 	}); err != nil {
 		return err
 	}
-	if err := PublishUserAuthCache(user.Id); err != nil {
+	if err := PublishUserAuthCache(tenantCtx, user.Id); err != nil {
 		return err
 	}
-	_, err = RevokeAllUserSessions(user.Id, "password_reset")
+	_, err = RevokeAllUserSessions(tenantCtx, user.Id, "password_reset")
 	return err
 }
 
-func IsAdmin(userId int) bool {
+func IsAdmin(tenantCtx context.Context, userId int) bool {
 	if userId == 0 {
 		return false
 	}
 	var user User
-	err := DB.Where("id = ?", userId).Select("role").Find(&user).Error
+	err := DB.WithContext(tenantCtx).Where("id = ?", userId).Select("role").Find(&user).Error
 	if err != nil {
 		common.SysLog("no such user " + err.Error())
 		return false
@@ -1233,13 +1228,13 @@ func IsAdmin(userId int) bool {
 	return user.Role >= common.RoleAdminUser
 }
 
-func ValidateAccessToken(token string) (*User, error) {
+func ValidateAccessToken(tenantCtx context.Context, token string) (*User, error) {
 	if token == "" {
 		return nil, nil
 	}
 	token = strings.Replace(token, "Bearer ", "", 1)
 	user := &User{}
-	err := DB.Where("access_token = ?", token).First(user).Error
+	err := DB.WithContext(tenantCtx).Where("access_token = ?", token).First(user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -1250,11 +1245,11 @@ func ValidateAccessToken(token string) (*User, error) {
 }
 
 // GetUserQuota gets quota from Redis first, falls back to DB if needed
-func GetUserQuota(id int, fromDB bool) (quota int, err error) {
+func GetUserQuota(tenantCtx context.Context, id int, fromDB bool) (quota int, err error) {
 	if !fromDB && common.RedisEnabled {
-		return getUserQuotaCache(id)
+		return getUserQuotaCache(tenantCtx, id)
 	}
-	err = DB.Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select("quota").Find(&quota).Error
 	if err != nil {
 		return 0, err
 	}
@@ -1262,37 +1257,37 @@ func GetUserQuota(id int, fromDB bool) (quota int, err error) {
 	return quota, nil
 }
 
-func GetUserUsedQuota(id int) (quota int, err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Select("used_quota").Find(&quota).Error
+func GetUserUsedQuota(tenantCtx context.Context, id int) (quota int, err error) {
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select("used_quota").Find(&quota).Error
 	return quota, err
 }
 
-func GetUserEmail(id int) (email string, err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Select("email").Find(&email).Error
+func GetUserEmail(tenantCtx context.Context, id int) (email string, err error) {
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select("email").Find(&email).Error
 	return email, err
 }
 
 // GetUserGroup gets group from Redis first, falls back to DB if needed
-func GetUserGroup(id int, fromDB bool) (group string, err error) {
+func GetUserGroup(tenantCtx context.Context, id int, fromDB bool) (group string, err error) {
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
 			gopool.Go(func() {
-				if err := RefreshUserGroupCache(id); err != nil {
+				if err := RefreshUserGroupCache(tenantCtx, id); err != nil {
 					common.SysLog("failed to update user group cache: " + err.Error())
 				}
 			})
 		}
 	}()
 	if !fromDB && common.RedisEnabled {
-		group, err := getUserGroupCache(id)
+		group, err := getUserGroupCache(tenantCtx, id)
 		if err == nil {
 			return group, nil
 		}
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select(commonGroupCol).Find(&group).Error
 	if err != nil {
 		return "", err
 	}
@@ -1301,20 +1296,20 @@ func GetUserGroup(id int, fromDB bool) (group string, err error) {
 }
 
 // GetUserSetting gets setting from Redis first, falls back to DB if needed
-func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error) {
+func GetUserSetting(tenantCtx context.Context, id int, fromDB bool) (settingMap dto.UserSetting, err error) {
 	var setting string
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
 			gopool.Go(func() {
-				if err := updateUserSettingCache(id, setting); err != nil {
+				if err := updateUserSettingCache(tenantCtx, id, setting); err != nil {
 					common.SysLog("failed to update user setting cache: " + err.Error())
 				}
 			})
 		}
 	}()
 	if !fromDB && common.RedisEnabled {
-		setting, err := getUserSettingCache(id)
+		setting, err := getUserSettingCache(tenantCtx, id)
 		if err == nil {
 			return setting, nil
 		}
@@ -1323,7 +1318,7 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	fromDB = true
 	// can be nil setting
 	var safeSetting sql.NullString
-	err = DB.Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select("setting").Find(&safeSetting).Error
 	if err != nil {
 		return settingMap, err
 	}
@@ -1338,7 +1333,7 @@ func GetUserSetting(id int, fromDB bool) (settingMap dto.UserSetting, err error)
 	return userBase.GetSetting(), nil
 }
 
-func IncreaseUserQuota(id int, quota int, db bool) (err error) {
+func IncreaseUserQuota(tenantCtx context.Context, id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
@@ -1346,27 +1341,27 @@ func IncreaseUserQuota(id int, quota int, db bool) (err error) {
 		return err
 	}
 	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, quota)
+		addNewRecord(tenantCtx, BatchUpdateTypeUserQuota, id, quota)
 		gopool.Go(func() {
-			if err := cacheIncrUserQuota(id, int64(quota)); err != nil {
+			if err := cacheIncrUserQuota(tenantCtx, id, int64(quota)); err != nil {
 				common.SysLog("failed to increase user quota: " + err.Error())
 			}
 		})
 		return nil
 	}
-	if err := increaseUserQuota(id, quota); err != nil {
+	if err := increaseUserQuota(tenantCtx, id, quota); err != nil {
 		return err
 	}
 	gopool.Go(func() {
-		if err := cacheIncrUserQuota(id, int64(quota)); err != nil {
+		if err := cacheIncrUserQuota(tenantCtx, id, int64(quota)); err != nil {
 			common.SysLog("failed to increase user quota: " + err.Error())
 		}
 	})
 	return nil
 }
 
-func increaseUserQuota(id int, quota int) (err error) {
-	result := DB.Model(&User{}).
+func increaseUserQuota(tenantCtx context.Context, id int, quota int) (err error) {
+	result := DB.WithContext(tenantCtx).Model(&User{}).
 		Where("id = ? AND quota <= ?", id, common.MaxWalletQuota-quota).
 		Update("quota", gorm.Expr("quota + ?", quota))
 	if result.Error != nil {
@@ -1376,7 +1371,7 @@ func increaseUserQuota(id int, quota int) (err error) {
 		return nil
 	}
 	var count int64
-	if err := DB.Model(&User{}).Where("id = ?", id).Count(&count).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Count(&count).Error; err != nil {
 		return err
 	}
 	if count == 0 {
@@ -1385,39 +1380,39 @@ func increaseUserQuota(id int, quota int) (err error) {
 	return ErrWalletQuotaLimitExceeded
 }
 
-func DecreaseUserQuota(id int, quota int, db bool) (err error) {
+func DecreaseUserQuota(tenantCtx context.Context, id int, quota int, db bool) (err error) {
 	if quota < 0 {
 		return errors.New("quota 不能为负数！")
 	}
 	gopool.Go(func() {
-		err := cacheDecrUserQuota(id, int64(quota))
+		err := cacheDecrUserQuota(tenantCtx, id, int64(quota))
 		if err != nil {
 			common.SysLog("failed to decrease user quota: " + err.Error())
 		}
 	})
 	if !db && common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUserQuota, id, -quota)
+		addNewRecord(tenantCtx, BatchUpdateTypeUserQuota, id, -quota)
 		return nil
 	}
-	return decreaseUserQuota(id, quota)
+	return decreaseUserQuota(tenantCtx, id, quota)
 }
 
-func decreaseUserQuota(id int, quota int) (err error) {
-	err = DB.Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
+func decreaseUserQuota(tenantCtx context.Context, id int, quota int) (err error) {
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Update("quota", gorm.Expr("quota - ?", quota)).Error
 	if err != nil {
 		return err
 	}
 	return err
 }
 
-func DeltaUpdateUserQuota(id int, delta int) (err error) {
+func DeltaUpdateUserQuota(tenantCtx context.Context, id int, delta int) (err error) {
 	if delta == 0 {
 		return nil
 	}
 	if delta > 0 {
-		return IncreaseUserQuota(id, delta, false)
+		return IncreaseUserQuota(tenantCtx, id, delta, false)
 	} else {
-		return DecreaseUserQuota(id, -delta, false)
+		return DecreaseUserQuota(tenantCtx, id, -delta, false)
 	}
 }
 
@@ -1426,39 +1421,39 @@ func DeltaUpdateUserQuota(id int, delta int) (err error) {
 //	return email
 //}
 
-func GetRootUser() (user *User) {
-	DB.Where("role = ?", common.RoleRootUser).First(&user)
+func GetRootUser(tenantCtx context.Context) (user *User) {
+	DB.WithContext(tenantCtx).Where("role = ?", common.RoleRootUser).First(&user)
 	return user
 }
 
-func UpdateUserLastLoginAt(id int) {
-	if err := DB.Model(&User{}).Where("id = ?", id).Update("last_login_at", common.GetTimestamp()).Error; err != nil {
+func UpdateUserLastLoginAt(tenantCtx context.Context, id int) {
+	if err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Update("last_login_at", common.GetTimestamp()).Error; err != nil {
 		common.SysLog("failed to update user last_login_at: " + err.Error())
 	}
 }
 
-func UpdateUserUsedQuotaAndRequestCount(id int, quota int) {
+func UpdateUserUsedQuotaAndRequestCount(tenantCtx context.Context, id int, quota int) {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
-		addNewRecord(BatchUpdateTypeRequestCount, id, 1)
+		addNewRecord(tenantCtx, BatchUpdateTypeUsedQuota, id, quota)
+		addNewRecord(tenantCtx, BatchUpdateTypeRequestCount, id, 1)
 		return
 	}
-	updateUserUsedQuotaAndRequestCount(id, quota, 1)
+	updateUserUsedQuotaAndRequestCount(tenantCtx, id, quota, 1)
 }
 
 // UpdateUserUsedQuota adjusts accumulated usage without changing request count.
-func UpdateUserUsedQuota(id int, quota int) {
+func UpdateUserUsedQuota(tenantCtx context.Context, id int, quota int) {
 	if common.BatchUpdateEnabled {
-		addNewRecord(BatchUpdateTypeUsedQuota, id, quota)
+		addNewRecord(tenantCtx, BatchUpdateTypeUsedQuota, id, quota)
 		return
 	}
-	if err := DB.Model(&User{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Update("used_quota", gorm.Expr("used_quota + ?", quota)).Error; err != nil {
 		common.SysLog("failed to update user used quota: " + err.Error())
 	}
 }
 
-func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
-	err := DB.Model(&User{}).Where("id = ?", id).Updates(
+func updateUserUsedQuotaAndRequestCount(tenantCtx context.Context, id int, quota int, count int) {
+	err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Updates(
 		map[string]any{
 			"used_quota":    gorm.Expr("used_quota + ?", quota),
 			"request_count": gorm.Expr("request_count + ?", count),
@@ -1475,12 +1470,12 @@ func updateUserUsedQuotaAndRequestCount(id int, quota int, count int) {
 	//}
 }
 
-func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, requestCount int) {
+func updateUserQuotaUsedQuotaAndRequestCount(tenantCtx context.Context, id int, quota int, usedQuota int, requestCount int) {
 	if quota == 0 && usedQuota == 0 && requestCount == 0 {
 		return
 	}
 
-	err := DB.Model(&User{}).Where("id = ?", id).Updates(
+	err := DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Updates(
 		map[string]any{
 			"quota":         gorm.Expr("quota + ?", quota),
 			"used_quota":    gorm.Expr("used_quota + ?", usedQuota),
@@ -1493,26 +1488,26 @@ func updateUserQuotaUsedQuotaAndRequestCount(id int, quota int, usedQuota int, r
 }
 
 // GetUsernameById gets username from Redis first, falls back to DB if needed
-func GetUsernameById(id int, fromDB bool) (username string, err error) {
+func GetUsernameById(tenantCtx context.Context, id int, fromDB bool) (username string, err error) {
 	defer func() {
 		// Update Redis cache asynchronously on successful DB read
 		if shouldUpdateRedis(fromDB, err) {
 			gopool.Go(func() {
-				if err := updateUserNameCache(id, username); err != nil {
+				if err := updateUserNameCache(tenantCtx, id, username); err != nil {
 					common.SysLog("failed to update user name cache: " + err.Error())
 				}
 			})
 		}
 	}()
 	if !fromDB && common.RedisEnabled {
-		username, err := getUserNameCache(id)
+		username, err := getUserNameCache(tenantCtx, id)
 		if err == nil {
 			return username, nil
 		}
 		// Don't return error - fall through to DB
 	}
 	fromDB = true
-	err = DB.Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
+	err = DB.WithContext(tenantCtx).Model(&User{}).Where("id = ?", id).Select("username").Find(&username).Error
 	if err != nil {
 		return "", err
 	}
@@ -1520,23 +1515,23 @@ func GetUsernameById(id int, fromDB bool) (username string, err error) {
 	return username, nil
 }
 
-func IsLinuxDOIdAlreadyTaken(linuxDOId string) bool {
+func IsLinuxDOIdAlreadyTaken(tenantCtx context.Context, linuxDOId string) bool {
 	var user User
-	err := DB.Unscoped().Where("linux_do_id = ?", linuxDOId).First(&user).Error
+	err := DB.WithContext(tenantCtx).Unscoped().Where("linux_do_id = ?", linuxDOId).First(&user).Error
 	return !errors.Is(err, gorm.ErrRecordNotFound)
 }
 
-func (user *User) FillUserByLinuxDOId() error {
+func (user *User) FillUserByLinuxDOId(tenantCtx context.Context) error {
 	if user.LinuxDOId == "" {
 		return errors.New("linux do id is empty")
 	}
-	err := DB.Where("linux_do_id = ?", user.LinuxDOId).First(user).Error
+	err := DB.WithContext(tenantCtx).Where("linux_do_id = ?", user.LinuxDOId).First(user).Error
 	return err
 }
 
-func RootUserExists() bool {
+func RootUserExists(tenantCtx context.Context) bool {
 	var user User
-	err := DB.Where("role = ?", common.RoleRootUser).First(&user).Error
+	err := DB.WithContext(tenantCtx).Where("role = ?", common.RoleRootUser).First(&user).Error
 	if err != nil {
 		return false
 	}

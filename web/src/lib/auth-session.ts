@@ -22,6 +22,7 @@ import { t } from 'i18next'
 
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
 import { hasSessionHint } from '@/lib/session-hint'
+import { tenantBasePath, tenantKey } from '@/lib/tenant'
 import {
   useAuthStore,
   type AuthBootstrapState,
@@ -68,7 +69,7 @@ export class AuthRotationError extends Error {
 }
 
 const authClient = axios.create({
-  baseURL: '',
+  baseURL: tenantBasePath,
   withCredentials: true,
   headers: {
     // no-store forbids storage; no-cache also revalidates any older cached response.
@@ -322,7 +323,7 @@ async function performRefreshWithBrowserLock(
       return runRefresh(refreshEpoch)
     }
     return navigator.locks.request(
-      'new-api:auth-refresh',
+      tenantKey('new-api:auth-refresh'),
       { mode: 'exclusive' },
       () => runRefresh(refreshEpoch)
     )

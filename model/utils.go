@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -32,21 +34,21 @@ func init() {
 	}
 }
 
-func InitBatchUpdater() {
+func InitBatchUpdater(tenantCtx context.Context) {
 	gopool.Go(func() {
 		for {
 			time.Sleep(time.Duration(common.BatchUpdateInterval) * time.Second)
-			batchUpdate()
+			batchUpdate(tenantCtx)
 		}
 	})
 }
 
-func addNewRecord(type_ int, id int, value int) {
-	batchUpdateLocks[type_].Lock()
-	defer batchUpdateLocks[type_].Unlock()
-	old, ok := batchUpdateStores[type_][id]
+func addNewRecord(tenantCtx context.Context, type_ int, id int, value int) {
+	TenantState(tenantCtx).batchUpdateLocks[type_].Lock()
+	defer TenantState(tenantCtx).batchUpdateLocks[type_].Unlock()
+	old, ok := TenantState(tenantCtx).batchUpdateStores[type_][id]
 	if !ok {
-		batchUpdateStores[type_][id] = value
+		TenantState(tenantCtx).batchUpdateStores[type_][id] = value
 		return
 	}
 
@@ -59,20 +61,20 @@ func addNewRecord(type_ int, id int, value int) {
 			sum = math.MinInt
 		}
 	}
-	batchUpdateStores[type_][id] = sum
+	TenantState(tenantCtx).batchUpdateStores[type_][id] = sum
 }
 
-func batchUpdate() {
+func batchUpdate(tenantCtx context.Context) {
 	// check if there's any data to update
 	hasData := false
 	for i := range BatchUpdateTypeCount {
-		batchUpdateLocks[i].Lock()
-		if len(batchUpdateStores[i]) > 0 {
+		TenantState(tenantCtx).batchUpdateLocks[i].Lock()
+		if len(TenantState(tenantCtx).batchUpdateStores[i]) > 0 {
 			hasData = true
-			batchUpdateLocks[i].Unlock()
+			TenantState(tenantCtx).batchUpdateLocks[i].Unlock()
 			break
 		}
-		batchUpdateLocks[i].Unlock()
+		TenantState(tenantCtx).batchUpdateLocks[i].Unlock()
 	}
 
 	if !hasData {
@@ -82,10 +84,10 @@ func batchUpdate() {
 	common.SysLog("batch update started")
 	stores := make([]map[int]int, BatchUpdateTypeCount)
 	for i := range BatchUpdateTypeCount {
-		batchUpdateLocks[i].Lock()
-		stores[i] = batchUpdateStores[i]
-		batchUpdateStores[i] = make(map[int]int)
-		batchUpdateLocks[i].Unlock()
+		TenantState(tenantCtx).batchUpdateLocks[i].Lock()
+		stores[i] = TenantState(tenantCtx).batchUpdateStores[i]
+		TenantState(tenantCtx).batchUpdateStores[i] = make(map[int]int)
+		TenantState(tenantCtx).batchUpdateLocks[i].Unlock()
 	}
 
 	for i, store := range stores {
@@ -95,12 +97,12 @@ func batchUpdate() {
 		for key, value := range store {
 			switch i {
 			case BatchUpdateTypeTokenQuota:
-				err := increaseTokenQuota(key, value)
+				err := increaseTokenQuota(tenantCtx, key, value)
 				if err != nil {
 					common.SysLog("failed to batch update token quota: " + err.Error())
 				}
 			case BatchUpdateTypeChannelUsedQuota:
-				updateChannelUsedQuota(key, value)
+				updateChannelUsedQuota(tenantCtx, key, value)
 			}
 		}
 	}
@@ -120,7 +122,7 @@ func batchUpdate() {
 		userIDs[key] = struct{}{}
 	}
 	for key := range userIDs {
-		updateUserQuotaUsedQuotaAndRequestCount(key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key])
+		updateUserQuotaUsedQuotaAndRequestCount(tenantCtx, key, userQuotaStore[key], usedQuotaStore[key], requestCountStore[key])
 	}
 	common.SysLog("batch update finished")
 }

@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"fmt"
 	"math"
@@ -135,31 +137,31 @@ var (
 	rankingCache   = map[string]rankingCacheItem{}
 )
 
-func GetRankingsSnapshot(period string) (*RankingsResponse, error) {
+func GetRankingsSnapshot(tenantCtx context.Context, period string) (*RankingsResponse, error) {
 	config, err := rankingConfig(period)
 	if err != nil {
 		return nil, err
 	}
 
 	now := time.Now()
-	rankingCacheMu.Lock()
-	if item, ok := rankingCache[config.id]; ok && now.Before(item.expiresAt) {
-		rankingCacheMu.Unlock()
+	TenantState(tenantCtx).rankingCacheMu.Lock()
+	if item, ok := TenantState(tenantCtx).rankingCache[config.id]; ok && now.Before(item.expiresAt) {
+		TenantState(tenantCtx).rankingCacheMu.Unlock()
 		return item.data, nil
 	}
-	rankingCacheMu.Unlock()
+	TenantState(tenantCtx).rankingCacheMu.Unlock()
 
-	data, err := buildRankingsSnapshot(config, now)
+	data, err := buildRankingsSnapshot(tenantCtx, config, now)
 	if err != nil {
 		return nil, err
 	}
 
-	rankingCacheMu.Lock()
-	rankingCache[config.id] = rankingCacheItem{
+	TenantState(tenantCtx).rankingCacheMu.Lock()
+	TenantState(tenantCtx).rankingCache[config.id] = rankingCacheItem{
 		expiresAt: now.Add(rankingCacheTTL),
 		data:      data,
 	}
-	rankingCacheMu.Unlock()
+	TenantState(tenantCtx).rankingCacheMu.Unlock()
 
 	return data, nil
 }
@@ -179,13 +181,13 @@ func rankingConfig(period string) (rankingPeriodConfig, error) {
 	}
 }
 
-func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*RankingsResponse, error) {
+func buildRankingsSnapshot(tenantCtx context.Context, config rankingPeriodConfig, now time.Time) (*RankingsResponse, error) {
 	startTime, endTime := rankingTimeRange(config, now)
-	currentTotals, err := model.GetRankingQuotaTotals(startTime, endTime)
+	currentTotals, err := model.GetRankingQuotaTotals(tenantCtx, startTime, endTime)
 	if err != nil {
 		return nil, err
 	}
-	currentBuckets, err := model.GetRankingQuotaBuckets(startTime, endTime, config.bucketSize)
+	currentBuckets, err := model.GetRankingQuotaBuckets(tenantCtx, startTime, endTime, config.bucketSize)
 	if err != nil {
 		return nil, err
 	}
@@ -193,13 +195,13 @@ func buildRankingsSnapshot(config rankingPeriodConfig, now time.Time) (*Rankings
 	var previousTotals []model.RankingQuotaTotal
 	if config.hasPrevious {
 		previousStart, previousEnd := previousRankingTimeRange(config, startTime)
-		previousTotals, err = model.GetRankingQuotaTotals(previousStart, previousEnd)
+		previousTotals, err = model.GetRankingQuotaTotals(tenantCtx, previousStart, previousEnd)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	meta := buildRankingModelMeta()
+	meta := buildRankingModelMeta(tenantCtx)
 	totalTokens := sumRankingTokens(currentTotals)
 	previousRankByModel := rankingRankMap(previousTotals)
 	previousTokensByModel := rankingTokenMap(previousTotals)
@@ -234,14 +236,14 @@ func previousRankingTimeRange(config rankingPeriodConfig, currentStart int64) (i
 	return previousStart, previousEnd
 }
 
-func buildRankingModelMeta() map[string]rankingModelMeta {
+func buildRankingModelMeta(tenantCtx context.Context) map[string]rankingModelMeta {
 	vendorByID := make(map[int]model.PricingVendor)
-	for _, vendor := range model.GetVendors() {
+	for _, vendor := range model.GetVendors(tenantCtx) {
 		vendorByID[vendor.ID] = vendor
 	}
 
 	meta := make(map[string]rankingModelMeta)
-	for _, pricing := range model.GetPricing() {
+	for _, pricing := range model.GetPricing(tenantCtx) {
 		item := rankingModelMeta{vendor: rankingUnknownVendor}
 		if vendor, ok := vendorByID[pricing.VendorID]; ok {
 			item.vendor = vendor.Name

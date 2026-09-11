@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"crypto/tls"
 	"encoding/base64"
@@ -10,44 +12,44 @@ import (
 	"time"
 )
 
-func generateMessageID() (string, error) {
-	split := strings.Split(SMTPFrom, "@")
+func generateMessageID(tenantCtx context.Context) (string, error) {
+	split := strings.Split(TenantState(tenantCtx).SMTPFrom, "@")
 	if len(split) < 2 {
 		return "", fmt.Errorf("invalid SMTP account")
 	}
-	domain := strings.Split(SMTPFrom, "@")[1]
+	domain := strings.Split(TenantState(tenantCtx).SMTPFrom, "@")[1]
 	return fmt.Sprintf("<%d.%s@%s>", time.Now().UnixNano(), GetRandomString(12), domain), nil
 }
 
-func shouldUseSMTPLoginAuth() bool {
-	if SMTPForceAuthLogin {
+func shouldUseSMTPLoginAuth(tenantCtx context.Context) bool {
+	if TenantState(tenantCtx).SMTPForceAuthLogin {
 		return true
 	}
-	return isOutlookServer(SMTPAccount) || slices.Contains(EmailLoginAuthServerList, SMTPServer)
+	return isOutlookServer(TenantState(tenantCtx).SMTPAccount) || slices.Contains(EmailLoginAuthServerList, TenantState(tenantCtx).SMTPServer)
 }
 
-func getSMTPAuth() smtp.Auth {
-	return AutoSMTPAuth(SMTPAccount, SMTPToken)
+func getSMTPAuth(tenantCtx context.Context) smtp.Auth {
+	return AutoSMTPAuth(tenantCtx, TenantState(tenantCtx).SMTPAccount, TenantState(tenantCtx).SMTPToken)
 }
 
-func shouldAuthenticateSMTP() bool {
-	return SMTPAccount != "" && SMTPToken != ""
+func shouldAuthenticateSMTP(tenantCtx context.Context) bool {
+	return TenantState(tenantCtx).SMTPAccount != "" && TenantState(tenantCtx).SMTPToken != ""
 }
 
-func smtpTLSConfig() *tls.Config {
+func smtpTLSConfig(tenantCtx context.Context) *tls.Config {
 	return &tls.Config{
-		ServerName:         SMTPServer,
-		InsecureSkipVerify: SMTPInsecureSkipVerify, // #nosec G402 -- admin-controlled SMTP compatibility option.
+		ServerName:         TenantState(tenantCtx).SMTPServer,
+		InsecureSkipVerify: TenantState(tenantCtx).SMTPInsecureSkipVerify, // #nosec G402 -- admin-controlled SMTP compatibility option.
 	}
 }
 
-func newSMTPClient(addr string) (*smtp.Client, error) {
-	if SMTPSSLEnabled || (SMTPPort == 465 && !SMTPStartTLSEnabled) {
-		conn, err := tls.Dial("tcp", addr, smtpTLSConfig())
+func newSMTPClient(tenantCtx context.Context, addr string) (*smtp.Client, error) {
+	if TenantState(tenantCtx).SMTPSSLEnabled || (TenantState(tenantCtx).SMTPPort == 465 && !TenantState(tenantCtx).SMTPStartTLSEnabled) {
+		conn, err := tls.Dial("tcp", addr, smtpTLSConfig(tenantCtx))
 		if err != nil {
 			return nil, err
 		}
-		client, err := smtp.NewClient(conn, SMTPServer)
+		client, err := smtp.NewClient(conn, TenantState(tenantCtx).SMTPServer)
 		if err != nil {
 			_ = conn.Close()
 			return nil, err
@@ -60,13 +62,13 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 		return nil, err
 	}
 
-	if SMTPStartTLSEnabled {
+	if TenantState(tenantCtx).SMTPStartTLSEnabled {
 		startTLSSupported, _ := client.Extension("STARTTLS")
 		if !startTLSSupported {
 			_ = client.Close()
 			return nil, fmt.Errorf("SMTP server does not support STARTTLS")
 		}
-		if err := client.StartTLS(smtpTLSConfig()); err != nil {
+		if err := client.StartTLS(smtpTLSConfig(tenantCtx)); err != nil {
 			_ = client.Close()
 			return nil, err
 		}
@@ -75,15 +77,19 @@ func newSMTPClient(addr string) (*smtp.Client, error) {
 	return client, nil
 }
 
-func SendEmail(subject string, receiver string, content string) error {
-	if SMTPFrom == "" { // for compatibility
-		SMTPFrom = SMTPAccount
+func SendEmail(tenantCtx context.Context, subject string, receiver string, content string) error {
+	if TenantState(tenantCtx).SMTPFrom == "" { // for compatibility
+		UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) {
+			if state.SMTPFrom == "" {
+				state.SMTPFrom = state.SMTPAccount
+			}
+		})
 	}
-	id, err2 := generateMessageID()
+	id, err2 := generateMessageID(tenantCtx)
 	if err2 != nil {
 		return err2
 	}
-	if SMTPServer == "" && SMTPAccount == "" {
+	if TenantState(tenantCtx).SMTPServer == "" && TenantState(tenantCtx).SMTPAccount == "" {
 		return fmt.Errorf("SMTP 服务器未配置")
 	}
 	encodedSubject := fmt.Sprintf("=?UTF-8?B?%s?=", base64.StdEncoding.EncodeToString([]byte(subject)))
@@ -93,22 +99,22 @@ func SendEmail(subject string, receiver string, content string) error {
 		"Date: %s\r\n"+
 		"Message-ID: %s\r\n"+ // 添加 Message-ID 头
 		"Content-Type: text/html; charset=UTF-8\r\n\r\n%s\r\n",
-		receiver, SystemName, SMTPFrom, encodedSubject, time.Now().Format(time.RFC1123Z), id, content))
-	auth := getSMTPAuth()
-	addr := fmt.Sprintf("%s:%d", SMTPServer, SMTPPort)
+		receiver, TenantState(tenantCtx).SystemName, TenantState(tenantCtx).SMTPFrom, encodedSubject, time.Now().Format(time.RFC1123Z), id, content))
+	auth := getSMTPAuth(tenantCtx)
+	addr := fmt.Sprintf("%s:%d", TenantState(tenantCtx).SMTPServer, TenantState(tenantCtx).SMTPPort)
 	to := strings.Split(receiver, ";")
 	var err error
-	client, err := newSMTPClient(addr)
+	client, err := newSMTPClient(tenantCtx, addr)
 	if err != nil {
 		return err
 	}
 	defer client.Close()
-	if shouldAuthenticateSMTP() {
+	if shouldAuthenticateSMTP(tenantCtx) {
 		if err = client.Auth(auth); err != nil {
 			return err
 		}
 	}
-	if err = client.Mail(SMTPFrom); err != nil {
+	if err = client.Mail(TenantState(tenantCtx).SMTPFrom); err != nil {
 		return err
 	}
 	for _, receiver := range to {

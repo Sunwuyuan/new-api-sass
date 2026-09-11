@@ -1,5 +1,7 @@
 package model_setting
 
+import context "context"
+
 import (
 	"strings"
 
@@ -36,13 +38,13 @@ func init() {
 }
 
 // GetQwenSettings
-func GetQwenSettings() *QwenSettings {
-	return &qwenSettings
+func GetQwenSettings(tenantCtx context.Context) *QwenSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("qwen").(*QwenSettings)
 }
 
 // IsSyncImageModel
-func IsSyncImageModel(model string) bool {
-	for _, m := range qwenSettings.SyncImageModels {
+func IsSyncImageModel(tenantCtx context.Context, model string) bool {
+	for _, m := range (*(config.GlobalConfig.ForTenant(tenantCtx).Get("qwen").(*QwenSettings))).SyncImageModels {
 		if strings.Contains(model, m) {
 			return true
 		}

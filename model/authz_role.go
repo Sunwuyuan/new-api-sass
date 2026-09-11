@@ -1,8 +1,9 @@
 package model
 
 type AuthzRole struct {
+	TenantID    int64  `json:"-" gorm:"not null;index;uniqueIndex:tenant_authz_role_key,priority:1"`
 	Id          uint   `json:"id" gorm:"primaryKey;autoIncrement"`
-	Key         string `json:"key" gorm:"size:64;uniqueIndex;not null"`
+	Key         string `json:"key" gorm:"size:64;uniqueIndex:tenant_authz_role_key;not null"`
 	Name        string `json:"name" gorm:"size:100;not null"`
 	Description string `json:"description" gorm:"type:text"`
 	BuiltIn     bool   `json:"built_in"`

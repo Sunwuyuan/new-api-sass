@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import (
 	"strings"
 
@@ -17,8 +19,8 @@ func init() {
 	config.GlobalConfig.Register("telegram", &telegramSettings)
 }
 
-func GetTelegramSettings() *TelegramSettings {
-	return &telegramSettings
+func GetTelegramSettings(tenantCtx context.Context) *TelegramSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("telegram").(*TelegramSettings)
 }
 
 func (s *TelegramSettings) IsConfigured() bool {

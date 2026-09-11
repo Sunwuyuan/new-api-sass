@@ -41,9 +41,9 @@ type proxyURLConfig struct {
 	cacheKey  string
 }
 
-func checkRedirect(req *http.Request, via []*http.Request) error {
+func checkRedirect(tenantCtx context.Context, req *http.Request, via []*http.Request) error {
 	urlStr := req.URL.String()
-	if err := validateURLWithCurrentFetchSetting(urlStr, true); err != nil {
+	if err := validateURLWithCurrentFetchSetting(tenantCtx, urlStr, true); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
 	}
 	if len(via) >= 10 {
@@ -52,9 +52,9 @@ func checkRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func checkProtectedFetchRedirect(req *http.Request, via []*http.Request) error {
+func checkProtectedFetchRedirect(tenantCtx context.Context, req *http.Request, via []*http.Request) error {
 	urlStr := req.URL.String()
-	if err := ValidateSSRFProtectedFetchURL(urlStr); err != nil {
+	if err := ValidateSSRFProtectedFetchURL(tenantCtx, urlStr); err != nil {
 		return fmt.Errorf("redirect to %s blocked: %v", urlStr, err)
 	}
 	if len(via) >= 10 {
@@ -63,13 +63,13 @@ func checkProtectedFetchRedirect(req *http.Request, via []*http.Request) error {
 	return nil
 }
 
-func validateURLWithCurrentFetchSetting(urlStr string, applyDomainIPFilter bool) error {
-	fetchSetting := system_setting.GetFetchSetting()
+func validateURLWithCurrentFetchSetting(tenantCtx context.Context, urlStr string, applyDomainIPFilter bool) error {
+	fetchSetting := system_setting.GetFetchSetting(tenantCtx)
 	return common.ValidateURLWithFetchSetting(urlStr, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, applyDomainIPFilter && fetchSetting.ApplyIPFilterForDomain)
 }
 
-func ValidateSSRFProtectedFetchURL(urlStr string) error {
-	return validateURLWithCurrentFetchSetting(urlStr, true)
+func ValidateSSRFProtectedFetchURL(tenantCtx context.Context, urlStr string) error {
+	return validateURLWithCurrentFetchSetting(tenantCtx, urlStr, true)
 }
 
 // maxTimeoutSeconds is the largest number of seconds that still converts to a
@@ -121,10 +121,10 @@ func newRelayHTTPTransport() *http.Transport {
 	return transport
 }
 
-func newRelayHTTPClient(transport http.RoundTripper) *http.Client {
+func newRelayHTTPClient(tenantCtx context.Context, transport http.RoundTripper) *http.Client {
 	client := &http.Client{
 		Transport:     transport,
-		CheckRedirect: checkRedirect,
+		CheckRedirect: func(arg0 *http.Request, arg1 []*http.Request) error { return checkRedirect(tenantCtx, arg0, arg1) },
 	}
 	if common.RelayTimeout != 0 {
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
@@ -136,11 +136,11 @@ func clientCacheKey(proxyCacheKey string, policy HTTPTransportPolicy) string {
 	return proxyCacheKey + "\x00" + policy.cacheKeyPart()
 }
 
-func InitHttpClient() {
+func InitHttpClient(tenantCtx context.Context) {
 	policy := defaultHTTPTransportPolicy()
-	httpClient = newDirectHTTPClient(policy, nil)
-	proxyClients.store(clientCacheKey("", policy), httpClient)
-	ssrfProtectedHTTPClient = newProtectedFetchHTTPClient()
+	TenantRuntime(tenantCtx).httpClient = newDirectHTTPClient(tenantCtx, policy, nil)
+	TenantRuntime(tenantCtx).proxyClients.store(clientCacheKey("", policy), TenantRuntime(tenantCtx).httpClient)
+	TenantRuntime(tenantCtx).ssrfProtectedHTTPClient = newProtectedFetchHTTPClient(tenantCtx)
 }
 
 // GetHttpClient returns the general outbound client used by relay/provider
@@ -150,17 +150,17 @@ func InitHttpClient() {
 // self-hosted services, or local proxies. Code paths that fetch arbitrary
 // user-controlled URLs must use GetSSRFProtectedHTTPClient or
 // ValidateSSRFProtectedFetchURL instead.
-func GetHttpClient() *http.Client {
-	return httpClient
+func GetHttpClient(tenantCtx context.Context) *http.Client {
+	return TenantRuntime(tenantCtx).httpClient
 }
 
 // GetSSRFProtectedHTTPClient 返回带拨号时 SSRF 校验的客户端。
 // ssrfProtectedHTTPClient 由 InitHttpClient 在启动时初始化，运行期只读。
-func GetSSRFProtectedHTTPClient() *http.Client {
-	if fetchSetting := system_setting.GetFetchSetting(); fetchSetting != nil && !fetchSetting.EnableSSRFProtection {
-		return GetHttpClient()
+func GetSSRFProtectedHTTPClient(tenantCtx context.Context) *http.Client {
+	if fetchSetting := system_setting.GetFetchSetting(tenantCtx); fetchSetting != nil && !fetchSetting.EnableSSRFProtection {
+		return GetHttpClient(tenantCtx)
 	}
-	return ssrfProtectedHTTPClient
+	return TenantRuntime(tenantCtx).ssrfProtectedHTTPClient
 }
 
 func newProxyURLConfig(parsedURL *url.URL) *proxyURLConfig {
@@ -170,12 +170,12 @@ func newProxyURLConfig(parsedURL *url.URL) *proxyURLConfig {
 	}
 }
 
-func warnLegacyProxyURLOnce(config *proxyURLConfig) {
-	if _, loaded := legacyProxyURLWarnings.LoadOrStore(config.cacheKey, struct{}{}); loaded {
+func warnLegacyProxyURLOnce(tenantCtx context.Context, config *proxyURLConfig) {
+	if _, loaded := TenantRuntime(tenantCtx).legacyProxyURLWarnings.LoadOrStore(config.cacheKey, struct{}{}); loaded {
 		return
 	}
 	logger.LogWarn(
-		context.Background(),
+		tenantCtx,
 		fmt.Sprintf(
 			"legacy proxy URL suffix ignored at runtime: scheme=%s host=%s; update the channel proxy setting",
 			config.parsedURL.Scheme,
@@ -185,7 +185,7 @@ func warnLegacyProxyURLOnce(config *proxyURLConfig) {
 }
 
 // NormalizeProxyURL validates a proxy URL using runtime-compatible rules and returns its canonical cache key.
-func NormalizeProxyURL(rawProxyURL string) (string, error) {
+func NormalizeProxyURL(tenantCtx context.Context, rawProxyURL string) (string, error) {
 	parsedURL, legacySuffixStripped, err := common.ParseProxyURLRuntime(rawProxyURL)
 	if err != nil {
 		return "", err
@@ -195,7 +195,7 @@ func NormalizeProxyURL(rawProxyURL string) (string, error) {
 	}
 	config := newProxyURLConfig(parsedURL)
 	if legacySuffixStripped {
-		warnLegacyProxyURLOnce(config)
+		warnLegacyProxyURLOnce(tenantCtx, config)
 	}
 	return config.cacheKey, nil
 }
@@ -332,69 +332,69 @@ func newTransportFactory(proxyURL *url.URL, tlsConfig *tls.Config) (func() *http
 	}, nil
 }
 
-func newHTTPClientFromPolicy(policy HTTPTransportPolicy, proxyURL *url.URL, tlsConfig *tls.Config) (*http.Client, error) {
+func newHTTPClientFromPolicy(tenantCtx context.Context, policy HTTPTransportPolicy, proxyURL *url.URL, tlsConfig *tls.Config) (*http.Client, error) {
 	factory, err := newTransportFactory(proxyURL, tlsConfig)
 	if err != nil {
 		return nil, err
 	}
-	return newHTTPClientFromTransportFactory(policy, factory), nil
+	return newHTTPClientFromTransportFactory(tenantCtx, policy, factory), nil
 }
 
-func newHTTPClientFromTransportFactory(policy HTTPTransportPolicy, factory func() *http.Transport) *http.Client {
+func newHTTPClientFromTransportFactory(tenantCtx context.Context, policy HTTPTransportPolicy, factory func() *http.Transport) *http.Client {
 	if policy.Shards < 1 {
 		policy.Shards = 1
 	}
 	if policy.Protocol == dto.HTTPProtocolHTTP1 || policy.Shards == 1 {
 		transport := factory()
 		applyHTTPTransportPolicy(transport, policy)
-		return newRelayHTTPClient(transport)
+		return newRelayHTTPClient(tenantCtx, transport)
 	}
 	shardedFactory := func() *http.Transport {
 		transport := factory()
 		applyHTTPTransportPolicy(transport, policy)
 		return transport
 	}
-	return newRelayHTTPClient(newShardedRoundTripper(policy, shardedFactory))
+	return newRelayHTTPClient(tenantCtx, newShardedRoundTripper(policy, shardedFactory))
 }
 
-func newDirectHTTPClient(policy HTTPTransportPolicy, tlsConfig *tls.Config) *http.Client {
-	client, err := newHTTPClientFromPolicy(policy, nil, tlsConfig)
+func newDirectHTTPClient(tenantCtx context.Context, policy HTTPTransportPolicy, tlsConfig *tls.Config) *http.Client {
+	client, err := newHTTPClientFromPolicy(tenantCtx, policy, nil, tlsConfig)
 	if err != nil {
 		// Direct clients cannot fail proxy configuration.
 		transport := newRelayHTTPTransport()
 		applyHTTPTransportPolicy(transport, policy)
-		return newRelayHTTPClient(transport)
+		return newRelayHTTPClient(tenantCtx, transport)
 	}
 	return client
 }
 
 // newHTTPClientWithPolicyAndTLS is a test seam that builds a never-used transport
 // stack with the given policy and TLS config (for httptest certificate trust).
-func newHTTPClientWithPolicyAndTLS(policy HTTPTransportPolicy, tlsConfig *tls.Config) *http.Client {
-	return newDirectHTTPClient(policy, tlsConfig)
+func newHTTPClientWithPolicyAndTLS(tenantCtx context.Context, policy HTTPTransportPolicy, tlsConfig *tls.Config) *http.Client {
+	return newDirectHTTPClient(tenantCtx, policy, tlsConfig)
 }
 
-func newProxyHTTPClient(proxyURL *url.URL) (*http.Client, error) {
-	return newHTTPClientFromPolicy(defaultHTTPTransportPolicy(), proxyURL, nil)
+func newProxyHTTPClient(tenantCtx context.Context, proxyURL *url.URL) (*http.Client, error) {
+	return newHTTPClientFromPolicy(tenantCtx, defaultHTTPTransportPolicy(), proxyURL, nil)
 }
 
 // GetHttpClientWithProxy returns the default client or a cached proxy-enabled client.
-func GetHttpClientWithProxy(rawProxyURL string) (*http.Client, error) {
-	return GetHttpClientWithProxySettings(rawProxyURL, dto.ChannelSettings{})
+func GetHttpClientWithProxy(tenantCtx context.Context, rawProxyURL string) (*http.Client, error) {
+	return GetHttpClientWithProxySettings(tenantCtx, rawProxyURL, dto.ChannelSettings{})
 }
 
 // GetHttpClientWithProxySettings returns a cached HTTP client for the proxy URL and
 // channel transport settings. Default auto + 1 shard shares the same client pool as
 // GetHttpClientWithProxy / GetHttpClient for the empty-proxy case.
-func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
+func GetHttpClientWithProxySettings(tenantCtx context.Context, rawProxyURL string, settings dto.ChannelSettings) (*http.Client, error) {
 	policy := NormalizeHTTPTransportPolicy(settings)
 	trimmedProxyURL := strings.TrimSpace(rawProxyURL)
 
 	if trimmedProxyURL == "" {
-		return getOrCreateDirectClient(policy)
+		return getOrCreateDirectClient(tenantCtx, policy)
 	}
 
-	if client, ok := proxyClients.get(trimmedProxyURL, policy); ok {
+	if client, ok := TenantRuntime(tenantCtx).proxyClients.get(trimmedProxyURL, policy); ok {
 		return client, nil
 	}
 
@@ -404,43 +404,43 @@ func GetHttpClientWithProxySettings(rawProxyURL string, settings dto.ChannelSett
 	}
 	config := newProxyURLConfig(parsedURL)
 	if legacySuffixStripped {
-		warnLegacyProxyURLOnce(config)
+		warnLegacyProxyURLOnce(tenantCtx, config)
 	}
-	return proxyClients.getOrCreate(trimmedProxyURL, config, policy, func() (*http.Client, error) {
-		return newHTTPClientFromPolicy(policy, config.parsedURL, nil)
+	return TenantRuntime(tenantCtx).proxyClients.getOrCreate(trimmedProxyURL, config, policy, func() (*http.Client, error) {
+		return newHTTPClientFromPolicy(tenantCtx, policy, config.parsedURL, nil)
 	})
 }
 
-func getOrCreateDirectClient(policy HTTPTransportPolicy) (*http.Client, error) {
+func getOrCreateDirectClient(tenantCtx context.Context, policy HTTPTransportPolicy) (*http.Client, error) {
 	defaultPolicy := defaultHTTPTransportPolicy()
 	if policy == defaultPolicy {
-		if client := GetHttpClient(); client != nil {
+		if client := GetHttpClient(tenantCtx); client != nil {
 			return client, nil
 		}
 		// Compatibility with pre-init callers: never assign httpClient outside InitHttpClient.
 		return http.DefaultClient, nil
 	}
 
-	if client, ok := proxyClients.get("", policy); ok {
+	if client, ok := TenantRuntime(tenantCtx).proxyClients.get("", policy); ok {
 		return client, nil
 	}
-	return proxyClients.getOrCreate("", nil, policy, func() (*http.Client, error) {
-		return newDirectHTTPClient(policy, nil), nil
+	return TenantRuntime(tenantCtx).proxyClients.getOrCreate("", nil, policy, func() (*http.Client, error) {
+		return newDirectHTTPClient(tenantCtx, policy, nil), nil
 	})
 }
 
 // InvalidateProxyClient removes every cached policy variant for one proxy and
 // closes their idle connections (including all HTTP/2 shards).
-func InvalidateProxyClient(rawProxyURL string) {
+func InvalidateProxyClient(tenantCtx context.Context, rawProxyURL string) {
 	parsedURL, legacySuffixStripped, err := common.ParseProxyURLRuntime(rawProxyURL)
 	if err != nil || parsedURL == nil {
 		return
 	}
 	config := newProxyURLConfig(parsedURL)
 	if legacySuffixStripped {
-		warnLegacyProxyURLOnce(config)
+		warnLegacyProxyURLOnce(tenantCtx, config)
 	}
-	for _, client := range proxyClients.removeProxy(config.cacheKey) {
+	for _, client := range TenantRuntime(tenantCtx).proxyClients.removeProxy(config.cacheKey) {
 		client.CloseIdleConnections()
 	}
 }
@@ -450,20 +450,20 @@ func InvalidateProxyClient(rawProxyURL string) {
 // httpClient pointer stays stable after InitHttpClient; it is only closed and
 // re-registered in the policy cache so concurrent GetHttpClient readers never race
 // a pointer replacement.
-func ResetProxyClientCache() {
-	defaultClient := httpClient
-	for _, client := range proxyClients.reset() {
+func ResetProxyClientCache(tenantCtx context.Context) {
+	defaultClient := TenantRuntime(tenantCtx).httpClient
+	for _, client := range TenantRuntime(tenantCtx).proxyClients.reset() {
 		client.CloseIdleConnections()
 	}
 	if defaultClient == nil {
 		return
 	}
 	defaultClient.CloseIdleConnections()
-	proxyClients.store(clientCacheKey("", defaultHTTPTransportPolicy()), defaultClient)
+	TenantRuntime(tenantCtx).proxyClients.store(clientCacheKey("", defaultHTTPTransportPolicy()), defaultClient)
 }
 
 // NewProxyHttpClient is kept for compatibility.
 // Deprecated: use GetHttpClientWithProxy.
-func NewProxyHttpClient(proxyURL string) (*http.Client, error) {
-	return GetHttpClientWithProxy(proxyURL)
+func NewProxyHttpClient(tenantCtx context.Context, proxyURL string) (*http.Client, error) {
+	return GetHttpClientWithProxy(tenantCtx, proxyURL)
 }

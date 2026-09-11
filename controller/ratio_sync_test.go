@@ -1,18 +1,18 @@
 package controller
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"net/http"
-	"net/http/httptest"
 )
 
 func TestPricingSyncExpressionPriority(t *testing.T) {
@@ -45,17 +45,17 @@ func TestPricingSyncExpressionPriority(t *testing.T) {
 }
 
 func TestRatioConfigExportsEffectiveExpressions(t *testing.T) {
-	before := config.GlobalConfig.ExportAllConfigs()
-	expose := ratio_setting.IsExposeRatioEnabled()
+	before := config.GlobalConfig.ForTenant(testtenant.Context()).ExportAllConfigs()
+	expose := ratio_setting.IsExposeRatioEnabled(testtenant.Context())
 	t.Cleanup(func() {
-		config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
-		ratio_setting.SetExposeRatioEnabled(expose)
+		config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
+		ratio_setting.SetExposeRatioEnabled(testtenant.Context(), expose)
 	})
-	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": `{"sync-export":"tiered_expr"}`, "billing_expr": `{"sync-export":"tier(\"base\", p * 2)"}`})
-	ratio_setting.SetExposeRatioEnabled(true)
+	config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": `{"sync-export":"tiered_expr"}`, "billing_expr": `{"sync-export":"tier(\"base\", p * 2)"}`})
+	ratio_setting.SetExposeRatioEnabled(testtenant.Context(), true)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/ratio_config", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/api/ratio_config", nil)
 	GetRatioConfig(c)
 	var response struct {
 		Success bool
@@ -68,19 +68,19 @@ func TestRatioConfigExportsEffectiveExpressions(t *testing.T) {
 }
 
 func TestPricingSyncCompleteSourcesAndArrayFormats(t *testing.T) {
-	before := config.GlobalConfig.ExportAllConfigs()
-	oldRatios, oldCompletion := ratio_setting.ModelRatio2JSONString(), ratio_setting.CompletionRatio2JSONString()
+	before := config.GlobalConfig.ForTenant(testtenant.Context()).ExportAllConfigs()
+	oldRatios, oldCompletion := ratio_setting.ModelRatio2JSONString(testtenant.Context()), ratio_setting.CompletionRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(oldRatios))
-		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(oldCompletion))
+		config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": before["billing_setting.billing_mode"], "billing_expr": before["billing_setting.billing_expr"]})
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), oldRatios))
+		require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(testtenant.Context(), oldCompletion))
 	})
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"sync-token":1}`))
-	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"sync-token":2}`))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{"sync-token":1}`))
+	require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(testtenant.Context(), `{"sync-token":2}`))
 	expression := `len <= 200000 ? tier("short", p * 2 + c * 8 + cr * 0) : tier("long", p * 4 + c * 12)`
 	expressions, err := common.Marshal(map[string]string{"sync-already": expression})
 	require.NoError(t, err)
-	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": `{"sync-already":"tiered_expr"}`, "billing_expr": string(expressions)})
+	config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": `{"sync-already":"tiered_expr"}`, "billing_expr": string(expressions)})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var data any
 		if r.URL.Path == "/ratio_config" {

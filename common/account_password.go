@@ -24,6 +24,7 @@ const (
 
 var (
 	ErrAccountPasswordLength = errors.New("Password must contain between 8 and 128 characters.")
+	ErrAccountPasswordCommon = errors.New("Choose a less common password.")
 	ErrAccountPasswordSame   = errors.New("New password must be different from current password")
 	ErrPasswordLegacyLimit   = errors.New("Long passwords are unavailable until the password storage upgrade is complete.")
 )
@@ -35,6 +36,9 @@ func ValidateNewAccountPassword(password string) error {
 	if !utf8.ValidString(password) || utf8.RuneCountInString(password) < MinAccountPasswordLength || utf8.RuneCountInString(password) > MaxAccountPasswordLength {
 		return ErrAccountPasswordLength
 	}
+	if isCommonPassword(password) {
+		return ErrAccountPasswordCommon
+	}
 	return nil
 }
 
@@ -42,8 +46,8 @@ func ValidateNewAccountPassword(password string) error {
 // temporary bcrypt mode permits rolling out dual-format readers to all nodes
 // before enabling Argon2id writes. Existing hashes are never rewritten in bulk.
 func HashAccountPassword(password string) (string, error) {
-	if err := ValidateNewAccountPassword(password); err != nil {
-		return "", err
+	if !utf8.ValidString(password) || utf8.RuneCountInString(password) < MinAccountPasswordLength || utf8.RuneCountInString(password) > MaxAccountPasswordLength {
+		return "", ErrAccountPasswordLength
 	}
 	switch os.Getenv("ACCOUNT_PASSWORD_HASH_ALGORITHM") {
 	case "bcrypt":

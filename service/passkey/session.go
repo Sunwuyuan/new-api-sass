@@ -1,5 +1,7 @@
 package passkey
 
+import context "context"
+
 import (
 	"errors"
 	"time"
@@ -27,7 +29,7 @@ type FlowSecurity struct {
 	LoginExpiresAt int64                        `json:"login_expires_at,omitempty"`
 }
 
-func CreateSessionDataFlow(purpose string, security FlowSecurity, data *webauthn.SessionData) (string, int64, error) {
+func CreateSessionDataFlow(tenantCtx context.Context, purpose string, security FlowSecurity, data *webauthn.SessionData) (string, int64, error) {
 	if data == nil {
 		return "", 0, errors.New("Passkey 会话数据不能为空")
 	}
@@ -49,7 +51,7 @@ func CreateSessionDataFlow(purpose string, security FlowSecurity, data *webauthn
 	if purpose == model.AuthFlowPurposeLoginPasskey && security.LoginExpiresAt < expiresAt.Unix() {
 		expiresAt = time.Unix(security.LoginExpiresAt, 0)
 	}
-	token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+	token, _, err := model.CreateAuthFlow(tenantCtx, model.AuthFlowCreate{
 		Purpose:   purpose,
 		UserId:    security.UserID,
 		SessionId: security.SessionID,
@@ -62,9 +64,9 @@ func CreateSessionDataFlow(purpose string, security FlowSecurity, data *webauthn
 	return token, expiresAt.Unix(), nil
 }
 
-func PopSessionDataFlow(token, purpose string, identity model.AuthSessionIdentity) (*webauthn.SessionData, *FlowSecurity, error) {
+func PopSessionDataFlow(tenantCtx context.Context, token, purpose string, identity model.AuthSessionIdentity) (*webauthn.SessionData, *FlowSecurity, error) {
 	var payload flowPayload
-	_, err := model.ConsumeAuthFlowWithAction(token, model.AuthFlowMatch{
+	_, err := model.ConsumeAuthFlowWithAction(tenantCtx, token, model.AuthFlowMatch{
 		Purpose:   purpose,
 		UserId:    identity.UserID,
 		SessionId: identity.SessionID,

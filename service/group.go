@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"strings"
 
@@ -11,10 +13,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func GetUserUsableGroups(userGroup string) map[string]string {
-	groupsCopy := setting.GetUserUsableGroupsCopy()
+func GetUserUsableGroups(tenantCtx context.Context, userGroup string) map[string]string {
+	groupsCopy := setting.GetUserUsableGroupsCopy(tenantCtx)
 	if userGroup != "" {
-		specialSettings, b := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.Get(userGroup)
+		specialSettings, b := ratio_setting.GetGroupRatioSetting(tenantCtx).GroupSpecialUsableGroup.Get(userGroup)
 		if b {
 			// 处理特殊可用分组
 			for specialGroup, desc := range specialSettings {
@@ -40,24 +42,24 @@ func GetUserUsableGroups(userGroup string) map[string]string {
 	return groupsCopy
 }
 
-func GroupInUserUsableGroups(userGroup, groupName string) bool {
-	_, ok := GetUserUsableGroups(userGroup)[groupName]
+func GroupInUserUsableGroups(tenantCtx context.Context, userGroup, groupName string) bool {
+	_, ok := GetUserUsableGroups(tenantCtx, userGroup)[groupName]
 	return ok
 }
 
-func IsUserSelectableGroup(userGroup, groupName string) bool {
+func IsUserSelectableGroup(tenantCtx context.Context, userGroup, groupName string) bool {
 	if groupName == "" || groupName == "auto" {
 		return false
 	}
-	return GroupInUserUsableGroups(userGroup, groupName) && ratio_setting.ContainsGroupRatio(groupName)
+	return GroupInUserUsableGroups(tenantCtx, userGroup, groupName) && ratio_setting.ContainsGroupRatio(tenantCtx, groupName)
 }
 
 // GetUserAutoGroup 根据用户分组获取自动分组设置
-func GetUserAutoGroup(userGroup string) []string {
+func GetUserAutoGroup(tenantCtx context.Context, userGroup string) []string {
 	autoGroups := make([]string, 0)
 	seen := make(map[string]struct{})
-	for _, group := range setting.GetAutoGroups() {
-		if !IsUserSelectableGroup(userGroup, group) {
+	for _, group := range setting.GetAutoGroups(tenantCtx) {
+		if !IsUserSelectableGroup(tenantCtx, userGroup, group) {
 			continue
 		}
 		if _, ok := seen[group]; ok {
@@ -71,12 +73,12 @@ func GetUserAutoGroup(userGroup string) []string {
 
 // FilterUserTokenAutoGroups applies current permissions before the current
 // per-token limit. It intentionally does not fall back to the global Auto list.
-func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
-	maxCount := setting.GetMaxTokenAutoGroups()
+func FilterUserTokenAutoGroups(tenantCtx context.Context, userGroup string, groups []string) []string {
+	maxCount := setting.GetMaxTokenAutoGroups(tenantCtx)
 	filtered := make([]string, 0, min(len(groups), maxCount))
 	seen := make(map[string]struct{})
 	for _, group := range groups {
-		if !IsUserSelectableGroup(userGroup, group) {
+		if !IsUserSelectableGroup(tenantCtx, userGroup, group) {
 			continue
 		}
 		if _, ok := seen[group]; ok {
@@ -97,21 +99,21 @@ func FilterUserTokenAutoGroups(userGroup string, groups []string) []string {
 func GetRequestAutoGroups(c *gin.Context, userGroup string) []string {
 	value, ok := common.GetContextKey(c, constant.ContextKeyTokenAutoGroups)
 	if !ok {
-		return GetUserAutoGroup(userGroup)
+		return GetUserAutoGroup(c.Request.Context(), userGroup)
 	}
 	groups, ok := value.([]string)
 	if !ok {
 		return []string{}
 	}
-	return FilterUserTokenAutoGroups(userGroup, groups)
+	return FilterUserTokenAutoGroups(c.Request.Context(), userGroup, groups)
 }
 
 // GetGroupsEnabledModels 按 groups 顺序获取各分组启用的模型并去重
-func GetGroupsEnabledModels(groups []string) []string {
+func GetGroupsEnabledModels(tenantCtx context.Context, groups []string) []string {
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
 	for _, group := range groups {
-		for _, modelName := range model.GetGroupEnabledModels(group) {
+		for _, modelName := range model.GetGroupEnabledModels(tenantCtx, group) {
 			if _, ok := seen[modelName]; !ok {
 				seen[modelName] = struct{}{}
 				models = append(models, modelName)
@@ -124,10 +126,10 @@ func GetGroupsEnabledModels(groups []string) []string {
 // GetUserGroupRatio 获取用户使用某个分组的倍率
 // userGroup 用户分组
 // group 需要获取倍率的分组
-func GetUserGroupRatio(userGroup, group string) float64 {
-	ratio, ok := ratio_setting.GetGroupGroupRatio(userGroup, group)
+func GetUserGroupRatio(tenantCtx context.Context, userGroup, group string) float64 {
+	ratio, ok := ratio_setting.GetGroupGroupRatio(tenantCtx, userGroup, group)
 	if ok {
 		return ratio
 	}
-	return ratio_setting.GetGroupRatio(group)
+	return ratio_setting.GetGroupRatio(tenantCtx, group)
 }

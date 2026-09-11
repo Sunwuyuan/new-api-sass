@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { tenantStorage } from '@/lib/tenant'
+
 /**
  * Utilities for managing authentication-related browser storage
  */
@@ -39,7 +41,7 @@ const STORAGE_KEYS = {
 export function getAffiliateCode(): string {
   if (typeof window === 'undefined') return ''
   try {
-    return window.localStorage.getItem(STORAGE_KEYS.AFFILIATE) ?? ''
+    return tenantStorage.getItem(STORAGE_KEYS.AFFILIATE) ?? ''
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to get affiliate code:', error)
@@ -53,7 +55,7 @@ export function getAffiliateCode(): string {
 export function saveAffiliateCode(code: string): void {
   if (typeof window === 'undefined') return
   try {
-    window.localStorage.setItem(STORAGE_KEYS.AFFILIATE, code)
+    tenantStorage.setItem(STORAGE_KEYS.AFFILIATE, code)
   } catch (error) {
     // eslint-disable-next-line no-console
     console.error('Failed to save affiliate code:', error)

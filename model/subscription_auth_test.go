@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/glebarez/sqlite"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -30,7 +31,7 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 		AuthVersion: 1,
 	}
 	require.NoError(t, DB.Create(&user).Error)
-	require.NoError(t, CreateUserSession(&UserSession{
+	require.NoError(t, CreateUserSession(testtenant.Context(), &UserSession{
 		SID:             "subscription-auth-session",
 		UserID:          user.Id,
 		Version:         1,
@@ -41,7 +42,7 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 		LastActiveAt:    now,
 		ExpiresAt:       now + 3600,
 	}))
-	require.NoError(t, populateUserCache(user))
+	require.NoError(t, populateUserCache(testtenant.Context(), user))
 	plan := &SubscriptionPlan{
 		Title:         "Upgraded",
 		DurationUnit:  SubscriptionDurationMonth,
@@ -55,7 +56,7 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 	subscription, err := CreateUserSubscriptionFromPlanTx(DB, user.Id, plan, "test")
 	require.NoError(t, err)
 	require.Equal(t, "default", subscription.PrevUserGroup)
-	require.NoError(t, RefreshUserGroupCache(user.Id))
+	require.NoError(t, RefreshUserGroupCache(testtenant.Context(), user.Id))
 
 	var updated User
 	require.NoError(t, DB.First(&updated, user.Id).Error)
@@ -64,7 +65,7 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 	var session UserSession
 	require.NoError(t, DB.First(&session, "sid = ?", "subscription-auth-session").Error)
 	assert.Equal(t, UserSessionStatusActive, session.Status)
-	cached, err := GetUserCache(user.Id)
+	cached, err := GetUserCache(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "pro", cached.Group)
 	assert.EqualValues(t, 1, cached.AuthVersion)
@@ -74,13 +75,13 @@ func TestSubscriptionGroupTransitionsPreserveAuthVersionAndSessions(t *testing.T
 		assert.Equal(t, "default", target)
 		return err
 	}))
-	require.NoError(t, RefreshUserGroupCache(user.Id))
+	require.NoError(t, RefreshUserGroupCache(testtenant.Context(), user.Id))
 	require.NoError(t, DB.First(&updated, user.Id).Error)
 	assert.Equal(t, "default", updated.Group)
 	assert.EqualValues(t, 1, updated.AuthVersion)
 	require.NoError(t, DB.First(&session, "sid = ?", "subscription-auth-session").Error)
 	assert.Equal(t, UserSessionStatusActive, session.Status)
-	cached, err = GetUserCache(user.Id)
+	cached, err = GetUserCache(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, "default", cached.Group)
 }
@@ -121,7 +122,7 @@ func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *tes
 		Enabled:       true,
 	}
 	require.NoError(t, DB.Create(plan).Error)
-	InvalidateSubscriptionPlanCache(plan.Id)
+	InvalidateSubscriptionPlanCache(testtenant.Context(), plan.Id)
 
 	oldRedisEnabled, oldRDB := common.RedisEnabled, common.RDB
 	common.RedisEnabled = true
@@ -136,7 +137,7 @@ func TestSubscriptionGroupCacheRefreshFailureDoesNotChangeCommittedResult(t *tes
 		common.RedisEnabled, common.RDB = oldRedisEnabled, oldRDB
 	})
 
-	message, err := AdminBindSubscription(user.Id, plan.Id, "test")
+	message, err := AdminBindSubscription(testtenant.Context(), user.Id, plan.Id, "test")
 	require.NoError(t, err)
 	assert.Contains(t, message, "pro")
 

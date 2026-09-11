@@ -6,8 +6,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/types"
@@ -50,7 +52,7 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 	snap.EstimatedQuotaBeforeGroup = quotaBeforeGroup
 	snap.EstimatedQuotaAfterGroup = billingexpr.QuotaRound(quotaBeforeGroup * groupRatio)
 	snap.EstimatedTier = trace.MatchedTier
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: snap,
 		FinalPreConsumedQuota: snap.EstimatedQuotaAfterGroup,
 	}
@@ -62,7 +64,7 @@ func makeRelayInfo(expr string, groupRatio float64, estPrompt, estCompletion int
 
 func TestTryTieredSettleUsesFrozenRequestInput(t *testing.T) {
 	exprStr := `param("service_tier") == "fast" ? tier("fast", p * 2) : tier("normal", p)`
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:               "tiered_expr",
 			ExprString:                exprStr,
@@ -92,7 +94,7 @@ func TestTryTieredSettleUsesFrozenRequestInput(t *testing.T) {
 }
 
 func TestTryTieredSettleFallsBackToFrozenPreConsumeOnExprError(t *testing.T) {
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		FinalPreConsumedQuota: 321,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:              "tiered_expr",
@@ -341,7 +343,7 @@ func (s *recordingBillingSettler) Reserve(targetQuota int) error {
 func TestPrepareTieredBillingForSelectedGroupUpdatesReservation(t *testing.T) {
 	const expr = `tier("base", p)`
 	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		Billing:               billing,
 		FinalPreConsumedQuota: 50_000,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
@@ -373,7 +375,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 	const userID = 700
 	seedUser(t, userID, 500_000)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          userID,
 		IsPlayground:    true,
 		ForcePreConsume: true,
@@ -394,7 +396,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 			GroupRatioInfo: types.GroupRatioInfo{GroupRatio: 0.20},
 		},
 	}
-	ctx, _ := gin.CreateTestContext(nil)
+	ctx, _ := testtenant.CreateTestContext(nil)
 
 	require.Nil(t, PrepareTieredBillingForSelectedGroup(ctx, relayInfo))
 	require.NotNil(t, relayInfo.Billing)
@@ -403,7 +405,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 	assert.Equal(t, 0.20, relayInfo.TieredBillingSnapshot.GroupRatio)
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
 
-	userQuota, err := model.GetUserQuota(userID, false)
+	userQuota, err := model.GetUserQuota(testtenant.Context(), userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 400_000, userQuota)
 }
@@ -411,7 +413,7 @@ func TestPrepareTieredBillingForSelectedGroupStartsBillingAfterFreeGroup(t *test
 func TestPrepareTieredBillingForSelectedGroupPaidToFreeKeepsFreeModelFalse(t *testing.T) {
 	const expr = `tier("base", p)`
 	billing := &recordingBillingSettler{preConsumedQuota: 50_000}
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		Billing:               billing,
 		FinalPreConsumedQuota: 50_000,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
@@ -448,7 +450,7 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	// settlement charges a positive delta unconditionally.
 	seedUser(t, userID, 20_000)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:                userID,
 		IsPlayground:          true,
 		FinalPreConsumedQuota: 50_000,
@@ -467,7 +469,7 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	}
 	session := &BillingSession{
 		relayInfo:        relayInfo,
-		funding:          &WalletFunding{userId: userID, consumed: 50_000},
+		funding:          &WalletFunding{ctx: testtenant.Context(), userId: userID, consumed: 50_000},
 		preConsumedQuota: 50_000,
 	}
 	relayInfo.Billing = session
@@ -478,14 +480,14 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	assert.Equal(t, 100_000, session.GetPreConsumedQuota())
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
 	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
-	userQuota, err := model.GetUserQuota(userID, false)
+	userQuota, err := model.GetUserQuota(testtenant.Context(), userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, -30_000, userQuota)
 
 	// Settlement still reconciles against the full reservation: actual 80k
 	// refunds the 20k over-reserve, landing at seed - (actual - initial) = -10k.
 	require.NoError(t, session.Settle(80_000))
-	userQuota, err = model.GetUserQuota(userID, false)
+	userQuota, err = model.GetUserQuota(testtenant.Context(), userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, -10_000, userQuota)
 }
@@ -496,13 +498,13 @@ func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
 	const userID = 702
 	seedUser(t, userID, 500_000)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:       userID,
 		IsPlayground: true,
 	}
 	session := &BillingSession{
 		relayInfo:        relayInfo,
-		funding:          &WalletFunding{userId: userID, consumed: 50_000},
+		funding:          &WalletFunding{ctx: testtenant.Context(), userId: userID, consumed: 50_000},
 		preConsumedQuota: 50_000,
 	}
 
@@ -510,7 +512,7 @@ func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {
 
 	assert.Equal(t, 100_000, session.GetPreConsumedQuota())
 	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
-	userQuota, err := model.GetUserQuota(userID, false)
+	userQuota, err := model.GetUserQuota(testtenant.Context(), userID, false)
 	require.NoError(t, err)
 	assert.Equal(t, 450_000, userQuota)
 }
@@ -528,7 +530,7 @@ func TestTryTieredSettleUsesFinalGroupAfterRetry(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			relayInfo := &relaycommon.RelayInfo{
+			relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				Billing:               &recordingBillingSettler{preConsumedQuota: 50_000},
 				FinalPreConsumedQuota: 50_000,
 				TieredBillingSnapshot: &billingexpr.BillingSnapshot{
@@ -587,7 +589,7 @@ func TestTryTieredSettle_GroupRatioZero(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTryTieredSettle_RatioMode_NilSnapshot(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: nil,
 	}
 
@@ -598,7 +600,7 @@ func TestTryTieredSettle_RatioMode_NilSnapshot(t *testing.T) {
 }
 
 func TestTryTieredSettle_RatioMode_WrongBillingMode(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode: "ratio",
 			ExprString:  flatExpr,
@@ -614,7 +616,7 @@ func TestTryTieredSettle_RatioMode_WrongBillingMode(t *testing.T) {
 }
 
 func TestTryTieredSettle_RatioMode_EmptyBillingMode(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode: "",
 			ExprString:  flatExpr,
@@ -634,7 +636,7 @@ func TestTryTieredSettle_RatioMode_EmptyBillingMode(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestTryTieredSettle_ErrorFallbackToEstimatedQuotaAfterGroup(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		FinalPreConsumedQuota: 0,
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:              "tiered_expr",

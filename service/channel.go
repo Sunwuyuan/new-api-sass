@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"fmt"
 	"strings"
@@ -16,7 +18,7 @@ func formatNotifyType(channelId int, status int) string {
 }
 
 // disable & notify
-func DisableChannel(channelError types.ChannelError, reason string) {
+func DisableChannel(tenantCtx context.Context, channelError types.ChannelError, reason string) {
 	common.SysLog(fmt.Sprintf("通道「%s」（#%d）发生错误，准备禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, common.LocalLogPreview(reason)))
 
 	// 检查是否启用自动禁用功能
@@ -25,25 +27,25 @@ func DisableChannel(channelError types.ChannelError, reason string) {
 		return
 	}
 
-	success := model.UpdateChannelStatus(channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
+	success := model.UpdateChannelStatus(tenantCtx, channelError.ChannelId, channelError.UsingKey, common.ChannelStatusAutoDisabled, reason)
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被禁用", channelError.ChannelName, channelError.ChannelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被禁用，原因：%s", channelError.ChannelName, channelError.ChannelId, reason)
-		NotifyRootUser(formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
+		NotifyRootUser(tenantCtx, formatNotifyType(channelError.ChannelId, common.ChannelStatusAutoDisabled), subject, content)
 	}
 }
 
-func EnableChannel(channelId int, usingKey string, channelName string) {
-	success := model.UpdateChannelStatus(channelId, usingKey, common.ChannelStatusEnabled, "")
+func EnableChannel(tenantCtx context.Context, channelId int, usingKey string, channelName string) {
+	success := model.UpdateChannelStatus(tenantCtx, channelId, usingKey, common.ChannelStatusEnabled, "")
 	if success {
 		subject := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
 		content := fmt.Sprintf("通道「%s」（#%d）已被启用", channelName, channelId)
-		NotifyRootUser(formatNotifyType(channelId, common.ChannelStatusEnabled), subject, content)
+		NotifyRootUser(tenantCtx, formatNotifyType(channelId, common.ChannelStatusEnabled), subject, content)
 	}
 }
 
-func ShouldDisableChannel(err *types.NewAPIError) bool {
-	if !common.AutomaticDisableChannelEnabled {
+func ShouldDisableChannel(tenantCtx context.Context, err *types.NewAPIError) bool {
+	if !common.TenantState(tenantCtx).AutomaticDisableChannelEnabled {
 		return false
 	}
 	if err == nil {
@@ -55,17 +57,17 @@ func ShouldDisableChannel(err *types.NewAPIError) bool {
 	if types.IsSkipRetryError(err) {
 		return false
 	}
-	if operation_setting.ShouldDisableByStatusCode(err.StatusCode) {
+	if operation_setting.ShouldDisableByStatusCode(tenantCtx, err.StatusCode) {
 		return true
 	}
 
 	lowerMessage := strings.ToLower(err.Error())
-	search, _ := AcSearch(lowerMessage, operation_setting.AutomaticDisableKeywords, true)
+	search, _ := AcSearch(lowerMessage, operation_setting.TenantState(tenantCtx).AutomaticDisableKeywords, true)
 	return search
 }
 
-func ShouldEnableChannel(newAPIError *types.NewAPIError, status int) bool {
-	if !common.AutomaticEnableChannelEnabled {
+func ShouldEnableChannel(tenantCtx context.Context, newAPIError *types.NewAPIError, status int) bool {
+	if !common.TenantState(tenantCtx).AutomaticEnableChannelEnabled {
 		return false
 	}
 	if newAPIError != nil {

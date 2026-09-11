@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -61,27 +62,27 @@ func setupTelegramOAuthTest(t *testing.T) *telegramOAuthFixture {
 	t.Helper()
 	user, identity := setupSecurityEnrollmentTest(t)
 	require.NoError(t, model.DB.AutoMigrate(&model.ExternalIdentityClaim{}, &model.Option{}))
-	previousEnabled := common.TelegramOAuthEnabled
-	previousSettings := *system_setting.GetTelegramSettings()
-	previousAddress := system_setting.ServerAddress
-	previousProvider := oauth.GetProvider("telegram")
-	common.OptionMapRWMutex.Lock()
-	previousOptions := common.OptionMap
-	common.OptionMap = make(map[string]string)
-	maps.Copy(common.OptionMap, previousOptions)
-	common.OptionMapRWMutex.Unlock()
-	common.TelegramOAuthEnabled = true
-	*system_setting.GetTelegramSettings() = system_setting.TelegramSettings{ClientID: "12345", ClientSecret: "telegram-client-secret"}
-	system_setting.ServerAddress = "https://example.com"
+	previousEnabled := common.TenantState(testtenant.Context()).TelegramOAuthEnabled
+	previousSettings := *system_setting.GetTelegramSettings(testtenant.Context())
+	previousAddress := system_setting.TenantState(testtenant.Context()).ServerAddress
+	previousProvider := oauth.GetProvider(testtenant.Context(), "telegram")
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+	previousOptions := common.TenantState(testtenant.Context()).OptionMap
+	common.TenantState(testtenant.Context()).OptionMap = make(map[string]string)
+	maps.Copy(common.TenantState(testtenant.Context()).OptionMap, previousOptions)
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
+	common.TenantState(testtenant.Context()).TelegramOAuthEnabled = true
+	*system_setting.GetTelegramSettings(testtenant.Context()) = system_setting.TelegramSettings{ClientID: "12345", ClientSecret: "telegram-client-secret"}
+	system_setting.TenantState(testtenant.Context()).ServerAddress = "https://example.com"
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = previousOptions
-		common.OptionMapRWMutex.Unlock()
-		common.TelegramOAuthEnabled = previousEnabled
-		*system_setting.GetTelegramSettings() = previousSettings
-		system_setting.ServerAddress = previousAddress
-		oauth.Register("telegram", previousProvider)
-		oauth.UnregisterCustomProvider("telegram")
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		common.TenantState(testtenant.Context()).OptionMap = previousOptions
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
+		common.TenantState(testtenant.Context()).TelegramOAuthEnabled = previousEnabled
+		*system_setting.GetTelegramSettings(testtenant.Context()) = previousSettings
+		system_setting.TenantState(testtenant.Context()).ServerAddress = previousAddress
+		oauth.Register(testtenant.Context(), "telegram", previousProvider)
+		oauth.UnregisterCustomProvider(testtenant.Context(), "telegram")
 	})
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	require.NoError(t, err)
@@ -147,7 +148,7 @@ func setupTelegramOAuthTest(t *testing.T) *telegramOAuthFixture {
 	target, err := url.Parse(server.URL)
 	require.NoError(t, err)
 	fixture.client = &http.Client{Transport: telegramTestTransport{target: target}, Timeout: 5 * time.Second}
-	oauth.Register("telegram", oauth.NewTelegramProvider(fixture.client))
+	oauth.Register(testtenant.Context(), "telegram", oauth.NewTelegramProvider(fixture.client))
 	return fixture
 }
 
@@ -203,8 +204,8 @@ func TestTelegramOAuthPreservesExistingAccountAndBinding(t *testing.T) {
 	fixture := setupTelegramOAuthTest(t)
 	const telegramID = "1234567890123456"
 	require.NoError(t, model.DB.Model(fixture.user).Update("telegram_id", telegramID).Error)
-	require.NoError(t, model.InitializeExternalIdentityClaims())
-	require.NoError(t, model.InitializeExternalIdentityClaims())
+	require.NoError(t, model.InitializeExternalIdentityClaims(testtenant.Context()))
+	require.NoError(t, model.InitializeExternalIdentityClaims(testtenant.Context()))
 	state, code := fixture.authorization(t, "login", service.AuthIdentity{}, "", telegramIdentityClaims(json.Number(telegramID)))
 	response := telegramOAuthCallback(state, code, service.AuthIdentity{})
 	var body securityEnrollmentResponse
@@ -217,7 +218,7 @@ func TestTelegramOAuthPreservesExistingAccountAndBinding(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(body.Data, &login))
 	assert.Equal(t, fixture.user.Id, login.User.ID)
-	stored, err := model.GetUserByTelegramID(telegramID)
+	stored, err := model.GetUserByTelegramID(testtenant.Context(), telegramID)
 	require.NoError(t, err)
 	assert.Equal(t, telegramID, stored.TelegramId)
 	var claim model.ExternalIdentityClaim
@@ -277,7 +278,7 @@ func TestTelegramOAuthRejectsInvalidTokens(t *testing.T) {
 	for _, endpoint := range []string{"token", "jwks"} {
 		t.Run(endpoint+" unavailable", func(t *testing.T) {
 			state, code := fixture.authorization(t, "login", service.AuthIdentity{}, "", telegramIdentityClaims(42))
-			oauth.Register("telegram", oauth.NewTelegramProvider(fixture.client))
+			oauth.Register(testtenant.Context(), "telegram", oauth.NewTelegramProvider(fixture.client))
 			if endpoint == "token" {
 				fixture.tokenStatus = 503
 			} else {
@@ -295,9 +296,9 @@ func TestTelegramOAuthBindingIsAtomicAndSessionBound(t *testing.T) {
 	// Older rows may predate the Telegram column and have a NULL binding.
 	require.NoError(t, model.DB.Model(fixture.user).Update("telegram_id", nil).Error)
 	state, code := fixture.authorization(t, "bind", fixture.identity, "", telegramIdentityClaims(42))
-	otherBundle, err := service.CreateLoginSession(fixture.user.Id, "password", "127.0.0.1", "other")
+	otherBundle, err := service.CreateLoginSession(testtenant.Context(), fixture.user.Id, "password", "127.0.0.1", "other")
 	require.NoError(t, err)
-	otherIdentity, err := service.ParseAccessToken(otherBundle.AccessToken)
+	otherIdentity, err := service.ParseAccessToken(testtenant.Context(), otherBundle.AccessToken)
 	require.NoError(t, err)
 	assert.Equal(t, http.StatusForbidden, telegramOAuthCallback(state, code, otherIdentity).Code)
 	failure := errors.New("private Telegram bind storage failure")
@@ -310,7 +311,7 @@ func TestTelegramOAuthBindingIsAtomicAndSessionBound(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, response.Code)
 	assert.NotContains(t, response.Body.String(), "private")
 	require.NoError(t, model.DB.Callback().Update().Remove("telegram_bind_failure"))
-	_, err = model.GetAuthFlow(state, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: "telegram"})
+	_, err = model.GetAuthFlow(testtenant.Context(), state, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: "telegram"})
 	require.NoError(t, err)
 	var claimCount int64
 	require.NoError(t, model.DB.Model(&model.ExternalIdentityClaim{}).Count(&claimCount).Error)
@@ -318,7 +319,7 @@ func TestTelegramOAuthBindingIsAtomicAndSessionBound(t *testing.T) {
 	state, code = fixture.authorization(t, "bind", fixture.identity, "", telegramIdentityClaims(42))
 	response = telegramOAuthCallback(state, code, fixture.identity)
 	assert.Contains(t, response.Body.String(), `"success":true`)
-	stored, err := model.GetUserById(fixture.user.Id, false)
+	stored, err := model.GetUserById(testtenant.Context(), fixture.user.Id, false)
 	require.NoError(t, err)
 	assert.Equal(t, "42", stored.TelegramId)
 	assert.Equal(t, fixture.user.Role, stored.Role)
@@ -334,7 +335,7 @@ func TestTelegramOAuthBindingRejectsChangedAccountsAndDuplicateOwnership(t *test
 			state, code := fixture.authorization(t, "bind", fixture.identity, "", telegramIdentityClaims(42))
 			switch change {
 			case "revoked":
-				_, err := model.RevokeAllUserSessions(fixture.user.Id, "test")
+				_, err := model.RevokeAllUserSessions(testtenant.Context(), fixture.user.Id, "test")
 				require.NoError(t, err)
 			case "disabled":
 				require.NoError(t, model.DB.Model(fixture.user).Update("status", common.UserStatusDisabled).Error)
@@ -342,11 +343,11 @@ func TestTelegramOAuthBindingRejectsChangedAccountsAndDuplicateOwnership(t *test
 				require.NoError(t, model.DB.Delete(fixture.user).Error)
 			case "already bound":
 				require.NoError(t, model.DB.Model(fixture.user).Update("telegram_id", "99").Error)
-				require.NoError(t, model.InitializeExternalIdentityClaims())
+				require.NoError(t, model.InitializeExternalIdentityClaims(testtenant.Context()))
 			case "owned by another user":
 				owner := &model.User{Username: "owner", AffCode: "owner", Status: common.UserStatusEnabled, AuthVersion: 1, TelegramId: "42"}
 				require.NoError(t, model.DB.Create(owner).Error)
-				require.NoError(t, model.InitializeExternalIdentityClaims())
+				require.NoError(t, model.InitializeExternalIdentityClaims(testtenant.Context()))
 			}
 			response := telegramOAuthCallback(state, code, fixture.identity)
 			assert.Contains(t, response.Body.String(), `"success":false`)
@@ -359,20 +360,20 @@ func TestTelegramOAuthBindingRejectsChangedAccountsAndDuplicateOwnership(t *test
 
 func TestTelegramOAuthConfigurationAndLegacyEndpoints(t *testing.T) {
 	fixture := setupTelegramOAuthTest(t)
-	previousBotToken := common.TelegramBotToken
-	t.Cleanup(func() { common.TelegramBotToken = previousBotToken })
-	require.NoError(t, model.UpdateOptionsBulk(map[string]string{
+	previousBotToken := common.TenantState(testtenant.Context()).TelegramBotToken
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).TelegramBotToken = previousBotToken })
+	require.NoError(t, model.UpdateOptionsBulk(testtenant.Context(), map[string]string{
 		"telegram.client_id": "12345", "telegram.client_secret": "telegram-client-secret",
 		"TelegramBotToken": "stored-legacy-token", "TelegramOAuthEnabled": "true",
 	}))
 	for range 2 {
-		*system_setting.GetTelegramSettings() = system_setting.TelegramSettings{}
-		common.TelegramOAuthEnabled = false
-		model.InitOptionMap()
-		assert.True(t, common.TelegramOAuthEnabled)
-		assert.True(t, system_setting.GetTelegramSettings().IsConfigured())
-		assert.Equal(t, "telegram-client-secret", system_setting.GetTelegramSettings().ClientSecret)
-		assert.Equal(t, "stored-legacy-token", common.TelegramBotToken)
+		*system_setting.GetTelegramSettings(testtenant.Context()) = system_setting.TelegramSettings{}
+		common.TenantState(testtenant.Context()).TelegramOAuthEnabled = false
+		model.InitOptionMap(testtenant.Context())
+		assert.True(t, common.TenantState(testtenant.Context()).TelegramOAuthEnabled)
+		assert.True(t, system_setting.GetTelegramSettings(testtenant.Context()).IsConfigured())
+		assert.Equal(t, "telegram-client-secret", system_setting.GetTelegramSettings(testtenant.Context()).ClientSecret)
+		assert.Equal(t, "stored-legacy-token", common.TenantState(testtenant.Context()).TelegramBotToken)
 	}
 	var stored model.Option
 	require.NoError(t, model.DB.Where(&model.Option{Key: "telegram.client_id"}).First(&stored).Error)
@@ -388,24 +389,24 @@ func TestTelegramOAuthConfigurationAndLegacyEndpoints(t *testing.T) {
 		t.Run(unavailable, func(t *testing.T) {
 			switch unavailable {
 			case "missing secret":
-				system_setting.GetTelegramSettings().ClientSecret = ""
+				system_setting.GetTelegramSettings(testtenant.Context()).ClientSecret = ""
 			case "disabled":
-				common.TelegramOAuthEnabled = false
+				common.TenantState(testtenant.Context()).TelegramOAuthEnabled = false
 			case "conflict":
-				require.Error(t, oauth.RegisterCustom("telegram", oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{Slug: "telegram"})))
+				require.Error(t, oauth.RegisterCustom(testtenant.Context(), "telegram", oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{Slug: "telegram"})))
 			}
 			response := securityEnrollmentRequest("POST", "/api/oauth/state", `{"provider":"telegram","intent":"login"}`, "", service.AuthIdentity{}, GenerateOAuthCode)
 			assert.Contains(t, response.Body.String(), `"success":false`)
 			assert.NotContains(t, response.Body.String(), "flow_token")
 			for _, scope := range []string{"2fa.setup", "passkey.register"} {
-				requirements, err := service.GetVerificationRequirements(fixture.identity, scope)
+				requirements, err := service.GetVerificationRequirements(testtenant.Context(), fixture.identity, scope)
 				require.NoError(t, err)
 				require.Len(t, requirements.Methods, 1)
 				assert.False(t, requirements.Methods[0].Available)
 				assert.Contains(t, requirements.Methods[0].Reason, "administrator")
-				_, err = service.VerifySecurityInput(fixture.identity, service.VerificationInput{Scope: scope, Method: "session"})
+				_, err = service.VerifySecurityInput(testtenant.Context(), fixture.identity, service.VerificationInput{Scope: scope, Method: "session"})
 				assert.Error(t, err)
-				_, err = service.StartOAuthVerification(fixture.identity, service.VerificationOperation{Scope: scope}, "telegram")
+				_, err = service.StartOAuthVerification(testtenant.Context(), fixture.identity, service.VerificationOperation{Scope: scope}, "telegram")
 				assert.Error(t, err)
 			}
 			for _, handler := range []gin.HandlerFunc{Setup2FA, PasskeyRegisterBegin} {
@@ -413,9 +414,9 @@ func TestTelegramOAuthConfigurationAndLegacyEndpoints(t *testing.T) {
 				assert.Contains(t, response.Body.String(), `"success":false`)
 				assert.NotContains(t, response.Body.String(), "flow_token")
 			}
-			common.TelegramOAuthEnabled = true
-			system_setting.GetTelegramSettings().ClientSecret = "telegram-client-secret"
-			oauth.UnregisterCustomProvider("telegram")
+			common.TenantState(testtenant.Context()).TelegramOAuthEnabled = true
+			system_setting.GetTelegramSettings(testtenant.Context()).ClientSecret = "telegram-client-secret"
+			oauth.UnregisterCustomProvider(testtenant.Context(), "telegram")
 		})
 	}
 	for _, endpoint := range []struct{ method, path string }{
@@ -433,9 +434,9 @@ func TestTelegramOAuthConcurrentBindingHasSingleOwner(t *testing.T) {
 	fixture := setupTelegramOAuthTest(t)
 	other := &model.User{Username: "other-owner", AffCode: "other-owner", Password: fixture.user.Password, Status: common.UserStatusEnabled, AuthVersion: 1}
 	require.NoError(t, model.DB.Create(other).Error)
-	bundle, err := service.CreateLoginSession(other.Id, "password", "127.0.0.1", "test")
+	bundle, err := service.CreateLoginSession(testtenant.Context(), other.Id, "password", "127.0.0.1", "test")
 	require.NoError(t, err)
-	otherIdentity, err := service.ParseAccessToken(bundle.AccessToken)
+	otherIdentity, err := service.ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
 	state, code := fixture.authorization(t, "bind", fixture.identity, "", telegramIdentityClaims(42))
 	otherState, otherCode := fixture.authorization(t, "bind", otherIdentity, "", telegramIdentityClaims(42))

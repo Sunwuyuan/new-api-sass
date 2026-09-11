@@ -1,9 +1,13 @@
 package model
 
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"context"
+
 	"errors"
 	"fmt"
+	"github.com/ClickHouse/clickhouse-go/v2"
 	"strings"
 	"time"
 
@@ -57,6 +61,7 @@ func sanitizeClickHouseLikePattern(input string) (string, error) {
 }
 
 type Log struct {
+	tenant.Row
 	Id                int    `json:"id" gorm:"index:idx_created_at_id,priority:2;index:idx_user_id_id,priority:2"`
 	UserId            int    `json:"user_id" gorm:"index;index:idx_user_id_id,priority:1"`
 	CreatedAt         int64  `json:"created_at" gorm:"bigint;index:idx_created_at_id,priority:1;index:idx_created_at_type"`
@@ -98,9 +103,9 @@ func ensureLogRequestId(log *Log) {
 	}
 }
 
-func createLog(log *Log) error {
+func createLog(tenantCtx context.Context, log *Log) error {
 	ensureLogRequestId(log)
-	return LOG_DB.Create(log).Error
+	return LOG_DB.WithContext(tenantCtx).Create(log).Error
 }
 
 func clickHouseLogOrder(prefix string) string {
@@ -137,21 +142,21 @@ func FormatRootLogs(logs []*Log) {
 	}
 }
 
-func GetLogByTokenId(tokenId int) (logs []*Log, err error) {
+func GetLogByTokenId(tenantCtx context.Context, tokenId int) (logs []*Log, err error) {
 	order := "id desc"
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		order = clickHouseLogOrder("")
 	}
-	err = LOG_DB.Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
+	err = LOG_DB.WithContext(tenantCtx).Model(&Log{}).Where("token_id = ?", tokenId).Order(order).Limit(common.MaxRecentItems).Find(&logs).Error
 	formatUserLogs(logs, 0)
 	return logs, err
 }
 
-func RecordLog(userId int, logType int, content string) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+func RecordLog(tenantCtx context.Context, userId int, logType int, content string) {
+	if logType == LogTypeConsume && !common.TenantState(tenantCtx).LogConsumeEnabled {
 		return
 	}
-	username, _ := GetUsernameById(userId, false)
+	username, _ := GetUsernameById(tenantCtx, userId, false)
 	log := &Log{
 		UserId:    userId,
 		Username:  username,
@@ -159,7 +164,7 @@ func RecordLog(userId int, logType int, content string) {
 		Type:      logType,
 		Content:   content,
 	}
-	err := createLog(log)
+	err := createLog(tenantCtx, log)
 	if err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
@@ -167,11 +172,11 @@ func RecordLog(userId int, logType int, content string) {
 
 // RecordLogWithAdminInfo stores operator metadata under other.admin_info and
 // an optional, user-visible operation descriptor under other.op for localization.
-func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo *AuditAdminInfo, operation *AuditOperation, request ...*gin.Context) {
-	if logType == LogTypeConsume && !common.LogConsumeEnabled {
+func RecordLogWithAdminInfo(tenantCtx context.Context, userId int, logType int, content string, adminInfo *AuditAdminInfo, operation *AuditOperation, request ...*gin.Context) {
+	if logType == LogTypeConsume && !common.TenantState(tenantCtx).LogConsumeEnabled {
 		return
 	}
-	username, _ := GetUsernameById(userId, false)
+	username, _ := GetUsernameById(tenantCtx, userId, false)
 	log := &Log{
 		UserId:    userId,
 		Username:  username,
@@ -202,7 +207,7 @@ func RecordLogWithAdminInfo(userId int, logType int, content string, adminInfo *
 		}
 		log.Other = string(data)
 	}
-	if err := createLog(log); err != nil {
+	if err := createLog(tenantCtx, log); err != nil {
 		common.SysLog("failed to record log: " + err.Error())
 	}
 }
@@ -226,8 +231,8 @@ func RecordLoginLog(userId, actorRole int, username string, content string, ip s
 // action+params 写入 Other.op，供前端本地化渲染（普通用户可见，不含敏感信息）。
 // adminInfo 存放操作者身份（写入 Other.admin_info，普通用户查询时剥离）；
 // auditInfo 存放路由/方法/结果等中间件兜底信息（写入 Other.audit_info，普通用户查询时剥离）。
-func RecordOperationAuditLog(logUserId, actorRole int, content string, ip string, action string, params map[string]any, adminInfo *AuditAdminInfo, auditInfo *AuditRequestInfo, request ...*gin.Context) {
-	username, _ := GetUsernameById(logUserId, false)
+func RecordOperationAuditLog(tenantCtx context.Context, logUserId, actorRole int, content string, ip string, action string, params map[string]any, adminInfo *AuditAdminInfo, auditInfo *AuditRequestInfo, request ...*gin.Context) {
+	username, _ := GetUsernameById(tenantCtx, logUserId, false)
 	other := AuditOther{
 		Op:        &AuditOperation{Action: action, Params: params},
 		AdminInfo: adminInfo,
@@ -249,8 +254,8 @@ func RecordOperationAuditLog(logUserId, actorRole int, content string, ip string
 	RecordAuditLog(c, AuditLog{UserId: logUserId, Username: username, ActorRole: actorRole, Category: category, Action: action, Content: content, Ip: ip, Status: status, Success: success, Other: other})
 }
 
-func RecordTopupLog(userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
-	username, _ := GetUsernameById(userId, false)
+func RecordTopupLog(tenantCtx context.Context, userId int, content string, callerIp string, paymentMethod string, callbackPaymentMethod string) {
+	username, _ := GetUsernameById(tenantCtx, userId, false)
 	other := NewLogOther()
 	other.MergeAdmin(map[string]any{
 		"server_ip":               common.GetIp(),
@@ -269,7 +274,7 @@ func RecordTopupLog(userId int, content string, callerIp string, paymentMethod s
 		Ip:        callerIp,
 		Other:     other.JSONString(),
 	}
-	err := createLog(log)
+	err := createLog(tenantCtx, log)
 	if err != nil {
 		common.SysLog("failed to record topup log: " + err.Error())
 	}
@@ -284,7 +289,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 	otherStr := other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
+	if settingMap, err := GetUserSetting(c.Request.Context(), userId, false); err == nil {
 		if settingMap.RecordIpLog {
 			needRecordIp = true
 		}
@@ -315,7 +320,7 @@ func RecordErrorLog(c *gin.Context, userId int, channelId int, modelName string,
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	err := createLog(c.Request.Context(), log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
@@ -337,7 +342,7 @@ type RecordConsumeLogParams struct {
 }
 
 func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams) {
-	if !common.LogConsumeEnabled {
+	if !common.TenantState(c.Request.Context()).LogConsumeEnabled {
 		return
 	}
 	logger.LogInfo(c, fmt.Sprintf("record consume log: userId=%d, params=%s", userId, common.GetJsonString(params)))
@@ -348,7 +353,7 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 	otherStr := params.Other.JSONString()
 	// 判断是否需要记录 IP
 	needRecordIp := false
-	if settingMap, err := GetUserSetting(userId, false); err == nil {
+	if settingMap, err := GetUserSetting(c.Request.Context(), userId, false); err == nil {
 		if settingMap.RecordIpLog {
 			needRecordIp = true
 		}
@@ -379,12 +384,12 @@ func RecordConsumeLog(c *gin.Context, userId int, params RecordConsumeLogParams)
 		UpstreamRequestId: upstreamRequestId,
 		Other:             otherStr,
 	}
-	err := createLog(log)
+	err := createLog(c.Request.Context(), log)
 	if err != nil {
 		logger.LogError(c, "failed to record log: "+err.Error())
 	}
-	if common.DataExportEnabled {
-		LogQuotaData(QuotaDataLogParams{
+	if common.TenantState(c.Request.Context()).DataExportEnabled {
+		LogQuotaData(c.Request.Context(), QuotaDataLogParams{
 			UserID:    userId,
 			Username:  username,
 			ModelName: params.ModelName,
@@ -412,14 +417,14 @@ type RecordTaskBillingLogParams struct {
 	NodeName  string // 任务发起节点；为空时回退当前节点
 }
 
-func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
-	if params.LogType == LogTypeConsume && !common.LogConsumeEnabled {
+func RecordTaskBillingLog(tenantCtx context.Context, params RecordTaskBillingLogParams) {
+	if params.LogType == LogTypeConsume && !common.TenantState(tenantCtx).LogConsumeEnabled {
 		return
 	}
-	username, _ := GetUsernameById(params.UserId, false)
+	username, _ := GetUsernameById(tenantCtx, params.UserId, false)
 	tokenName := ""
 	if params.TokenId > 0 {
-		if token, err := GetTokenById(params.TokenId); err == nil {
+		if token, err := GetTokenById(tenantCtx, params.TokenId); err == nil {
 			tokenName = token.Name
 		}
 	}
@@ -438,16 +443,16 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 		Group:     params.Group,
 		Other:     params.Other.JSONString(),
 	}
-	err := createLog(log)
+	err := createLog(tenantCtx, log)
 	if err != nil {
 		common.SysLog("failed to record task billing log: " + err.Error())
 	}
-	if params.LogType == LogTypeConsume && common.DataExportEnabled {
+	if params.LogType == LogTypeConsume && common.TenantState(tenantCtx).DataExportEnabled {
 		nodeName := params.NodeName
 		if nodeName == "" {
 			nodeName = common.NodeName
 		}
-		LogQuotaData(QuotaDataLogParams{
+		LogQuotaData(tenantCtx, QuotaDataLogParams{
 			UserID:    params.UserId,
 			Username:  username,
 			ModelName: params.ModelName,
@@ -461,12 +466,12 @@ func RecordTaskBillingLog(params RecordTaskBillingLogParams) {
 	}
 }
 
-func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetAllLogs(tenantCtx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, startIdx int, num int, channel int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB
+		tx = LOG_DB.WithContext(tenantCtx)
 	} else {
-		tx = LOG_DB.Where("logs.type = ?", logType)
+		tx = LOG_DB.WithContext(tenantCtx).Where("logs.type = ?", logType)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -527,7 +532,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 		if common.MemoryCacheEnabled {
 			// Cache get channel
 			for _, channelId := range channelIds.Items() {
-				if cacheChannel, err := CacheGetChannel(channelId); err == nil {
+				if cacheChannel, err := CacheGetChannel(tenantCtx, channelId); err == nil {
 					channels = append(channels, struct {
 						Id   int    `gorm:"column:id"`
 						Name string `gorm:"column:name"`
@@ -539,7 +544,7 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 			}
 		} else {
 			// Bulk query channels from DB
-			if err = DB.Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
+			if err = DB.WithContext(tenantCtx).Table("channels").Select("id, name").Where("id IN ?", channelIds.Items()).Find(&channels).Error; err != nil {
 				return logs, total, err
 			}
 		}
@@ -557,12 +562,12 @@ func GetAllLogs(logType int, startTimestamp int64, endTimestamp int64, modelName
 
 const logSearchCountLimit = 10000
 
-func GetUserLogs(userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
+func GetUserLogs(tenantCtx context.Context, userId int, logType int, startTimestamp int64, endTimestamp int64, modelName string, tokenName string, startIdx int, num int, group string, requestId string, upstreamRequestId string) (logs []*Log, total int64, err error) {
 	var tx *gorm.DB
 	if logType == LogTypeUnknown {
-		tx = LOG_DB.Where("logs.user_id = ?", userId)
+		tx = LOG_DB.WithContext(tenantCtx).Where("logs.user_id = ?", userId)
 	} else {
-		tx = LOG_DB.Where("logs.user_id = ? and logs.type = ?", userId, logType)
+		tx = LOG_DB.WithContext(tenantCtx).Where("logs.user_id = ? and logs.type = ?", userId, logType)
 	}
 
 	if tx, err = applyExplicitLogTextFilter(tx, "logs.model_name", modelName); err != nil {
@@ -611,11 +616,11 @@ type Stat struct {
 	Tpm   int `json:"tpm"`
 }
 
-func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(quota), 0) quota")
+func SumUsedQuota(tenantCtx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string, channel int, group string) (stat Stat, err error) {
+	tx := LOG_DB.WithContext(tenantCtx).Table("logs").Select("COALESCE(sum(quota), 0) quota")
 
 	// 为rpm和tpm创建单独的查询
-	rpmTpmQuery := LOG_DB.Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
+	rpmTpmQuery := LOG_DB.WithContext(tenantCtx).Table("logs").Select("count(*) rpm, COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0) tpm")
 
 	if tx, err = applyExplicitLogTextFilter(tx, "username", username); err != nil {
 		return stat, err
@@ -673,8 +678,8 @@ func SumUsedQuota(logType int, startTimestamp int64, endTimestamp int64, modelNa
 	return stat, nil
 }
 
-func SumUsedToken(logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
-	tx := LOG_DB.Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
+func SumUsedToken(tenantCtx context.Context, logType int, startTimestamp int64, endTimestamp int64, modelName string, username string, tokenName string) (token int) {
+	tx := LOG_DB.WithContext(tenantCtx).Table("logs").Select("COALESCE(sum(prompt_tokens), 0) + COALESCE(sum(completion_tokens), 0)")
 	if username != "" {
 		tx = tx.Where("username = ?", username)
 	}
@@ -722,10 +727,8 @@ func DeleteOldLogBatch(ctx context.Context, targetTimestamp int64, limit int) (i
 		if total == 0 {
 			return 0, nil
 		}
-		if err := LOG_DB.WithContext(ctx).Exec(
-			"ALTER TABLE logs DELETE WHERE created_at < ? SETTINGS mutations_sync = 1",
-			targetTimestamp,
-		).Error; err != nil {
+		mutationCtx := clickhouse.Context(ctx, clickhouse.WithSettings(clickhouse.Settings{"mutations_sync": 1}))
+		if err := LOG_DB.WithContext(mutationCtx).Where("created_at < ?", targetTimestamp).Delete(&Log{}).Error; err != nil {
 			return 0, err
 		}
 		return total, nil

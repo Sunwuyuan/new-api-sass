@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -51,7 +53,7 @@ type TaskArtifactStoreConfig struct {
 
 // LoadTaskArtifactStoreConfig reads and validates startup-only configuration.
 // S3 mode is deliberately disabled until a storage implementation is shipped.
-func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
+func LoadTaskArtifactStoreConfig(tenantCtx context.Context) TaskArtifactStoreConfig {
 	config := TaskArtifactStoreConfig{
 		Mode:                common.GetEnvOrDefaultString(TaskArtifactStoreModeEnv, TaskArtifactStoreModeUpstream),
 		S3Endpoint:          common.GetEnvOrDefaultString(TaskArtifactStoreS3EndpointEnv, ""),
@@ -62,7 +64,7 @@ func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 		S3Prefix:            common.GetEnvOrDefaultString(TaskArtifactStoreS3PrefixEnv, ""),
 		S3PresignTTLSeconds: common.GetEnvOrDefault(TaskArtifactStoreS3PresignTTLEnv, DefaultTaskArtifactStorePresignTTLSeconds),
 	}
-	if err := ValidateTaskArtifactStoreConfig(config); err != nil {
+	if err := ValidateTaskArtifactStoreConfig(tenantCtx, config); err != nil {
 		common.SysError("invalid task artifact store configuration: " + err.Error() + "; using upstream mode")
 		config.Mode = TaskArtifactStoreModeUpstream
 		return config
@@ -76,7 +78,7 @@ func LoadTaskArtifactStoreConfig() TaskArtifactStoreConfig {
 
 // ValidateTaskArtifactStoreConfig performs syntax checks only. It never
 // resolves hosts, contacts an endpoint, or verifies credentials.
-func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
+func ValidateTaskArtifactStoreConfig(tenantCtx context.Context, config TaskArtifactStoreConfig) error {
 	if config.Mode != TaskArtifactStoreModeUpstream && config.Mode != TaskArtifactStoreModeS3 {
 		return fmt.Errorf("unsupported mode %q", config.Mode)
 	}
@@ -108,7 +110,7 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 		return errors.New("S3 bucket is required")
 	}
 	if config.S3Bucket != "" {
-		if !taskArtifactStoreBucketPattern.MatchString(config.S3Bucket) ||
+		if !TenantState(tenantCtx).taskArtifactStoreBucketPattern.MatchString(config.S3Bucket) ||
 			strings.Contains(config.S3Bucket, "..") || net.ParseIP(config.S3Bucket) != nil {
 			return errors.New("S3 bucket syntax is invalid")
 		}
@@ -117,7 +119,7 @@ func ValidateTaskArtifactStoreConfig(config TaskArtifactStoreConfig) error {
 	if requireS3Fields && config.S3Region == "" {
 		return errors.New("S3 region is required")
 	}
-	if config.S3Region != "" && !taskArtifactStoreRegionPattern.MatchString(config.S3Region) {
+	if config.S3Region != "" && !TenantState(tenantCtx).taskArtifactStoreRegionPattern.MatchString(config.S3Region) {
 		return errors.New("S3 region syntax is invalid")
 	}
 	if err := validateTaskArtifactStoreCredential("access key", config.S3AccessKey, 256, requireS3Fields); err != nil {

@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/samber/lo"
@@ -15,7 +18,7 @@ import (
 
 func TestGetRequestURLAlphaSearch(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    constant.ChannelTypeCodex,
 			ChannelBaseUrl: "https://chatgpt.com",
@@ -32,7 +35,7 @@ func TestGetRequestURLAlphaSearch(t *testing.T) {
 // than forwarding what the client sent.
 func TestConvertOpenAIResponsesRequestDropsPenalties(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{ChannelType: constant.ChannelTypeCodex},
 		RelayMode:   relayconstant.RelayModeResponses,
 	}

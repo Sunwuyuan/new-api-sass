@@ -1,7 +1,6 @@
 package controller
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -13,8 +12,7 @@ import (
 	"testing"
 	"time"
 
-	sqlmysql "github.com/go-sql-driver/mysql"
-	"gorm.io/driver/clickhouse"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
@@ -23,8 +21,10 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
+	sqlmysql "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/driver/clickhouse"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -43,7 +43,7 @@ func setupAccessTokenAudit(t *testing.T) (*model.User, string) {
 	common.RedisEnabled = false
 	previousMaster := common.IsMasterNode
 	common.IsMasterNode = true
-	require.NoError(t, authz.Init(db))
+	require.NoError(t, authz.Init(db.WithContext(testtenant.Context())))
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.IsMasterNode = previousMaster
@@ -57,7 +57,7 @@ func setupAccessTokenAudit(t *testing.T) (*model.User, string) {
 }
 
 func auditRequest(router http.Handler, method, path, token string) *httptest.ResponseRecorder {
-	request := httptest.NewRequest(method, path, strings.NewReader(`{"secret":"body-must-not-be-logged"}`))
+	request := testtenant.NewRequest(method, path, strings.NewReader(`{"secret":"body-must-not-be-logged"}`))
 	request.Header.Set("Authorization", "Bearer "+token)
 	request.Header.Set("User-Agent", "audit-test-client")
 	request.RemoteAddr = "192.0.2.8:4567"
@@ -68,7 +68,7 @@ func auditRequest(router http.Handler, method, path, token string) *httptest.Res
 
 func TestAccessTokenLifecycleAndLateRequests(t *testing.T) {
 	user, old := setupAccessTokenAudit(t)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.GET("/api/user/token/status", middleware.UserAuth(), GetAccessTokenStatus)
 	router.GET("/api/user/token", middleware.UserAuth(), GenerateAccessToken)
@@ -76,17 +76,17 @@ func TestAccessTokenLifecycleAndLateRequests(t *testing.T) {
 	router.DELETE("/api/user/token", middleware.UserAuth(), RevokeAccessToken)
 	// Rotate during the handler, after authentication has captured the old PAT.
 	router.POST("/rotate-in-flight", middleware.UserAuth(), func(c *gin.Context) {
-		require.NoError(t, model.UpdateUserAccessToken(user.Id, "new-token"))
+		require.NoError(t, model.UpdateUserAccessToken(testtenant.Context(), user.Id, "new-token"))
 		c.JSON(200, gin.H{"success": true})
 	})
-	status, err := model.GetUserAccessTokenStatus(user.Id)
+	status, err := model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.True(t, status.Exists)
 	assert.Nil(t, status.CreatedAt)
 	assert.Nil(t, status.LastUsedAt)
 	assert.NotContains(t, auditRequest(router, "GET", "/api/user/token/status", old).Body.String(), old)
 	require.Equal(t, 200, auditRequest(router, "POST", "/rotate-in-flight", old).Code)
-	status, err = model.GetUserAccessTokenStatus(user.Id)
+	status, err = model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, model.AccessTokenFingerprint("new-token"), status.TokenRef)
 	assert.NotNil(t, status.CreatedAt)
@@ -96,17 +96,17 @@ func TestAccessTokenLifecycleAndLateRequests(t *testing.T) {
 		response := auditRequest(router, method, "/api/user/token", "new-token")
 		assert.Equal(t, http.StatusForbidden, response.Code)
 		assert.Contains(t, response.Body.String(), `"code":"SECURITY_PROOF_INVALID"`)
-		stored, err := model.GetUserById(user.Id, true)
+		stored, err := model.GetUserById(testtenant.Context(), user.Id, true)
 		require.NoError(t, err)
 		assert.Equal(t, "new-token", stored.GetAccessToken(), "a PAT cannot manage itself without a dashboard verification")
 	}
-	_, err = model.RevokeUserAccessToken(user.Id)
+	_, err = model.RevokeUserAccessToken(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 401, auditRequest(router, "GET", "/api/user/token/status", "new-token").Code)
-	ref, err := model.RevokeUserAccessToken(user.Id)
+	ref, err := model.RevokeUserAccessToken(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Empty(t, ref, "repeated revocation is idempotent")
-	status, err = model.GetUserAccessTokenStatus(user.Id)
+	status, err = model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.False(t, status.Exists)
 	assert.Nil(t, status.CreatedAt)
@@ -122,7 +122,7 @@ func TestAccessTokenLifecycleAndLateRequests(t *testing.T) {
 
 func TestAccessTokenAuditsResultsAndExcludesBrowserSessions(t *testing.T) {
 	user, pat := setupAccessTokenAudit(t)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.NoRoute(func(c *gin.Context) { c.JSON(404, gin.H{"success": false}) })
 	router.GET("/public", func(c *gin.Context) { c.JSON(200, gin.H{"success": true}) })
@@ -156,12 +156,12 @@ func TestAccessTokenAuditsResultsAndExcludesBrowserSessions(t *testing.T) {
 	assert.EqualValues(t, 2, operationCount, "manual operation must not be duplicated by fallback")
 	now := time.Now().Unix()
 	session := &model.UserSession{SID: "audit-session", UserID: user.Id, Version: 1, UserAuthVersion: 1, Status: model.UserSessionStatusActive, RefreshHash: "refresh-placeholder", LoginMethod: "password", LastActiveAt: now, ExpiresAt: now + 3600}
-	require.NoError(t, model.CreateUserSession(session))
-	jwt, _, err := service.IssueAccessToken(service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+	require.NoError(t, model.CreateUserSession(testtenant.Context(), session))
+	jwt, _, err := service.IssueAccessToken(testtenant.Context(), service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
 	require.NoError(t, err)
 	assert.Equal(t, 200, auditRequest(router, "GET", "/read/123", jwt).Code)
 	assert.Equal(t, 401, auditRequest(router, "GET", "/read/123", "unknown-token").Code)
-	entries, total, err := model.GetAuditLogs(model.AuditLogFilter{Category: model.AuditCategoryAccessToken}, 0, 20, common.RoleRootUser)
+	entries, total, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{Category: model.AuditCategoryAccessToken}, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	assert.EqualValues(t, 7, total)
 	encoded, err := common.Marshal(entries)
@@ -179,9 +179,9 @@ func TestAuditIsolationVisibilityAndFailureContracts(t *testing.T) {
 		RootInfo:  model.AuditFields{"private": "root-only"},
 	}
 	for _, owner := range []int{user.Id, user.Id + 1} {
-		model.RecordAuditLog(nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: owner, Username: fmt.Sprint(owner), Category: model.AuditCategorySecurity, Success: false, Other: metadata})
+		model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: owner, Username: fmt.Sprint(owner), Category: model.AuditCategorySecurity, Success: false, Other: metadata})
 	}
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.GET("/api/audit/self", middleware.UserAuth(), GetAuditLogs)
 	router.GET("/api/audit", middleware.AdminAuth(), middleware.RequirePermission(authz.AuditRead), GetAuditLogs)
@@ -210,7 +210,7 @@ func TestAuditIsolationVisibilityAndFailureContracts(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload), "audit metadata must be a JSON object, not an encoded string")
 	require.Len(t, payload.Data.Items, 1)
 	assert.Contains(t, payload.Data.Items[0].Other, "op")
-	require.NoError(t, authz.SetUserPermissions(user.Id, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: true}}))
+	require.NoError(t, authz.SetUserPermissions(testtenant.Context(), user.Id, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: true}}))
 	response = auditRequest(router, "GET", "/api/audit?category=security", pat)
 	assert.Contains(t, response.Body.String(), "admin_info")
 	assert.NotContains(t, response.Body.String(), "root-only")
@@ -222,15 +222,15 @@ func TestAuditIsolationVisibilityAndFailureContracts(t *testing.T) {
 			tx.AddError(errors.New("audit store unavailable"))
 		}
 	}))
-	_, err := model.GetUserAccessTokenStatus(user.Id)
+	_, err := model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.Error(t, err, "audit query failure must not look like never used")
 	model.LOG_DB.Callback().Query().Remove("audit:fail")
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("audit:write-fail", func(tx *gorm.DB) { tx.AddError(errors.New("write unavailable")) }))
-	require.Error(t, model.UpdateUserAccessToken(user.Id, "replacement"))
-	_, err = model.RevokeUserAccessToken(user.Id)
+	require.Error(t, model.UpdateUserAccessToken(testtenant.Context(), user.Id, "replacement"))
+	_, err = model.RevokeUserAccessToken(testtenant.Context(), user.Id)
 	require.Error(t, err)
 	model.DB.Callback().Update().Remove("audit:write-fail")
-	status, err := model.GetUserAccessTokenStatus(user.Id)
+	status, err := model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, model.AccessTokenFingerprint(pat), status.TokenRef)
 }
@@ -245,25 +245,25 @@ func TestAuditRoleVisibilityAndPermissions(t *testing.T) {
 		RootInfo:  model.AuditFields{"private": "root-only"},
 	}
 	for i, role := range []int{1, 10, 100, 0, -1, 99} {
-		model.RecordAuditLog(nil, model.AuditLog{ActorRole: role, UserId: admin.Id, Username: admin.Username, Category: model.AuditCategorySecurity, RequestId: fmt.Sprintf("role-%d", role), CreatedAt: int64(100 + i), Other: metadata})
+		model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: role, UserId: admin.Id, Username: admin.Username, Category: model.AuditCategorySecurity, RequestId: fmt.Sprintf("role-%d", role), CreatedAt: int64(100 + i), Other: metadata})
 	}
-	model.RecordAuditLog(nil, model.AuditLog{ActorRole: 100, UserId: root.Id, Username: root.Username, Category: model.AuditCategorySecurity, RequestId: "root-owned", Other: metadata})
-	router := gin.New()
+	model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: 100, UserId: root.Id, Username: root.Username, Category: model.AuditCategorySecurity, RequestId: "root-owned", Other: metadata})
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.GET("/api/audit", middleware.AdminAuth(), middleware.RequirePermission(authz.AuditRead), GetAuditLogs)
 	router.GET("/api/audit/self", middleware.UserAuth(), GetAuditLogs)
 	now := time.Now().Unix()
 	session := &model.UserSession{SID: "audit-permissions-session", UserID: admin.Id, Version: 1, UserAuthVersion: 1, Status: model.UserSessionStatusActive, RefreshHash: "placeholder", LoginMethod: "password", LastActiveAt: now, ExpiresAt: now + 3600}
-	require.NoError(t, model.CreateUserSession(session))
-	jwt, _, err := service.IssueAccessToken(service.AuthIdentity{UserID: admin.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+	require.NoError(t, model.CreateUserSession(testtenant.Context(), session))
+	jwt, _, err := service.IssueAccessToken(testtenant.Context(), service.AuthIdentity{UserID: admin.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
 	require.NoError(t, err)
 	for _, credential := range []string{pat, jwt} {
 		assert.Equal(t, http.StatusForbidden, auditRequest(router, "GET", "/api/audit", credential).Code)
 	}
-	require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+	require.NoError(t, model.DB.WithContext(testtenant.Context()).Transaction(func(tx *gorm.DB) error {
 		return authz.SetUserPermissionsInTx(tx, admin.Id, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: true}})
 	}))
-	require.NoError(t, authz.ReloadPolicy())
+	require.NoError(t, authz.ReloadPolicy(testtenant.Context()))
 	for _, credential := range []string{pat, jwt} {
 		for _, endpoint := range []string{"/api/audit", "/api/audit/self"} {
 			response := auditRequest(router, "GET", endpoint+"?category=security&page_size=1", credential)
@@ -295,7 +295,7 @@ func TestAuditRoleVisibilityAndPermissions(t *testing.T) {
 	rootAll := auditRequest(router, "GET", "/api/audit?category=security", rootToken)
 	assert.Contains(t, rootAll.Body.String(), `"total":7`)
 	assert.Contains(t, rootAll.Body.String(), "root-only")
-	require.NoError(t, authz.SetUserPermissions(admin.Id, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: false}}))
+	require.NoError(t, authz.SetUserPermissions(testtenant.Context(), admin.Id, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: false}}))
 	for _, credential := range []string{pat, jwt} {
 		assert.Equal(t, http.StatusForbidden, auditRequest(router, "GET", "/api/audit", credential).Code)
 		assert.Equal(t, http.StatusOK, auditRequest(router, "GET", "/api/audit/self", credential).Code)
@@ -306,7 +306,7 @@ func TestAuditRoleSnapshotSurvivesActorChanges(t *testing.T) {
 	user, pat := setupAccessTokenAudit(t)
 	user.Role = common.RoleRootUser
 	require.NoError(t, model.DB.Model(user).Update("role", user.Role).Error)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.POST("/change-role", middleware.UserAuth(), func(c *gin.Context) {
 		recordLoginAudit(user, c)
@@ -316,15 +316,15 @@ func TestAuditRoleSnapshotSurvivesActorChanges(t *testing.T) {
 		c.Status(200)
 	})
 	require.Equal(t, http.StatusOK, auditRequest(router, "POST", "/change-role", pat).Code)
-	entries, total, err := model.GetAuditLogs(model.AuditLogFilter{}, 0, 20, common.RoleAdminUser)
+	entries, total, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{}, 0, 20, common.RoleAdminUser)
 	require.NoError(t, err)
 	assert.Zero(t, total)
 	assert.Empty(t, entries)
-	status, err := model.GetUserAccessTokenStatus(user.Id)
+	status, err := model.GetUserAccessTokenStatus(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Nil(t, status.LastUsedAt, "a root request must not leak through the last-use summary after demotion")
 	require.NoError(t, model.DB.Unscoped().Delete(user).Error)
-	entries, total, err = model.GetAuditLogs(model.AuditLogFilter{}, 0, 20, common.RoleRootUser)
+	entries, total, err = model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{}, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	assert.EqualValues(t, 4, total)
 	for _, entry := range entries {
@@ -334,8 +334,8 @@ func TestAuditRoleSnapshotSurvivesActorChanges(t *testing.T) {
 
 func TestSecurityAndOperationEventsUseAuditTable(t *testing.T) {
 	user, _ := setupAccessTokenAudit(t)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/event", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest("POST", "/event", nil)
 	c.Set("id", user.Id)
 	c.Set("username", user.Username)
 	c.Set("role", user.Role)
@@ -347,7 +347,7 @@ func TestSecurityAndOperationEventsUseAuditTable(t *testing.T) {
 	recordManageAudit(c, "option.update", map[string]any{"key": "safe"})
 	recordSubscriptionResetUserLogs(c, &model.SubscriptionResetResult{ResetCount: 1, PlanId: 1, PlanTitle: "Plan", AffectedUserIds: []int{user.Id}}, &model.AuditAdminInfo{AdminID: user.Id})
 	for _, typ := range []int{model.LogTypeTopup, model.LogTypeConsume, model.LogTypeRefund, model.LogTypeSystem} {
-		model.RecordLog(user.Id, typ, "business entry")
+		model.RecordLog(testtenant.Context(), user.Id, typ, "business entry")
 	}
 	var audits []model.AuditLog
 	require.NoError(t, model.LOG_DB.Find(&audits).Error)
@@ -359,7 +359,7 @@ func TestSecurityAndOperationEventsUseAuditTable(t *testing.T) {
 	var logs []model.Log
 	require.NoError(t, model.LOG_DB.Find(&logs).Error)
 	assert.Len(t, logs, 4)
-	_, err := model.DeleteOldLogBatch(context.Background(), time.Now().Unix()+1, 100)
+	_, err := model.DeleteOldLogBatch(testtenant.Context(), time.Now().Unix()+1, 100)
 	require.NoError(t, err)
 	var count int64
 	require.NoError(t, model.LOG_DB.Model(&model.AuditLog{}).Count(&count).Error)
@@ -497,25 +497,25 @@ func newAuditTestDatabase(t *testing.T, kind, dsn string) (*gorm.DB, string) {
 func verifyAuditRoleStorage(t *testing.T) {
 	t.Helper()
 	for i, role := range []int{1, 10, 100, 0, 99} {
-		model.RecordAuditLog(nil, model.AuditLog{ActorRole: role, UserId: 1, Username: "role-owner", CreatedAt: int64(200 + i), Category: model.AuditCategoryOperation, RequestId: fmt.Sprintf("matrix-role-%d", role)})
+		model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: role, UserId: 1, Username: "role-owner", CreatedAt: int64(200 + i), Category: model.AuditCategoryOperation, RequestId: fmt.Sprintf("matrix-role-%d", role)})
 	}
 	filter := model.AuditLogFilter{Category: model.AuditCategoryOperation}
-	visible, total, err := model.GetAuditLogs(filter, 0, 1, common.RoleAdminUser)
+	visible, total, err := model.GetAuditLogs(testtenant.Context(), filter, 0, 1, common.RoleAdminUser)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, total)
 	require.Len(t, visible, 1)
 	assert.Equal(t, common.RoleAdminUser, visible[0].ActorRole)
-	visible, total, err = model.GetAuditLogs(filter, 1, 1, common.RoleCommonUser)
+	visible, total, err = model.GetAuditLogs(testtenant.Context(), filter, 1, 1, common.RoleCommonUser)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, total)
 	require.Len(t, visible, 1)
 	assert.Equal(t, common.RoleCommonUser, visible[0].ActorRole)
 	filter.RequestId = "matrix-role-100"
-	visible, total, err = model.GetAuditLogs(filter, 0, 20, common.RoleAdminUser)
+	visible, total, err = model.GetAuditLogs(testtenant.Context(), filter, 0, 20, common.RoleAdminUser)
 	require.NoError(t, err)
 	assert.Zero(t, total)
 	assert.Empty(t, visible)
-	visible, total, err = model.GetAuditLogs(filter, 0, 20, common.RoleRootUser)
+	visible, total, err = model.GetAuditLogs(testtenant.Context(), filter, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	assert.EqualValues(t, 1, total)
 	require.Len(t, visible, 1)
@@ -543,9 +543,9 @@ func verifyAuditJSONStorage(t *testing.T) {
 		AuditInfo: &model.AuditRequestInfo{Method: "PUT", Route: "/api/channel/", Path: "/api/channel/", Status: 200, Success: false},
 		RootInfo:  model.AuditFields{"private": "root-only"},
 	}
-	model.RecordAuditLog(nil, model.AuditLog{ActorRole: common.RoleCommonUser, UserId: 1, Username: "json-owner", Category: model.AuditCategorySecurity, RequestId: "matrix-json", Other: metadata})
+	model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: common.RoleCommonUser, UserId: 1, Username: "json-owner", Category: model.AuditCategorySecurity, RequestId: "matrix-json", Other: metadata})
 	filter := model.AuditLogFilter{RequestId: "matrix-json"}
-	entries, total, err := model.GetAuditLogs(filter, 0, 20, common.RoleRootUser)
+	entries, total, err := model.GetAuditLogs(testtenant.Context(), filter, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, entries, 1)
@@ -568,7 +568,7 @@ func verifyAuditJSONStorage(t *testing.T) {
 	require.NoError(t, common.Unmarshal(stored, &details))
 	assert.EqualValues(t, 9007199254740993, details.Op.Params.LargeId, "JSON numbers must retain their type and precision")
 	for _, role := range []int{common.RoleCommonUser, common.RoleAdminUser} {
-		entries, _, err = model.GetAuditLogs(filter, 0, 20, role)
+		entries, _, err = model.GetAuditLogs(testtenant.Context(), filter, 0, 20, role)
 		require.NoError(t, err)
 		require.Len(t, entries, 1)
 		assert.Nil(t, entries[0].Other.RootInfo)
@@ -580,8 +580,8 @@ func verifyAuditJSONStorage(t *testing.T) {
 			assert.NotNil(t, entries[0].Other.AuditInfo)
 		}
 	}
-	model.RecordAuditLog(nil, model.AuditLog{ActorRole: common.RoleCommonUser, UserId: 1, Username: "json-owner", RequestId: "matrix-json-empty", Other: model.AuditOther{}})
-	entries, _, err = model.GetAuditLogs(model.AuditLogFilter{RequestId: "matrix-json-empty"}, 0, 20, common.RoleRootUser)
+	model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: common.RoleCommonUser, UserId: 1, Username: "json-owner", RequestId: "matrix-json-empty", Other: model.AuditOther{}})
+	entries, _, err = model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{RequestId: "matrix-json-empty"}, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	require.Len(t, entries, 1)
 	empty, err := common.Marshal(entries[0].Other)
@@ -590,7 +590,7 @@ func verifyAuditJSONStorage(t *testing.T) {
 	for range 2 {
 		require.NoError(t, model.InitLogDB())
 	}
-	entries, total, err = model.GetAuditLogs(filter, 0, 20, common.RoleRootUser)
+	entries, total, err = model.GetAuditLogs(testtenant.Context(), filter, 0, 20, common.RoleRootUser)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, total)
 	require.Len(t, entries, 1)
@@ -687,13 +687,13 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 					if !upgrade {
 						require.NoError(t, db.Create(&model.User{Username: "fresh-owner", Password: "placeholder", AffCode: "fresh-aff"}).Error)
 					}
-					status, err := model.GetUserAccessTokenStatus(1)
+					status, err := model.GetUserAccessTokenStatus(testtenant.Context(), 1)
 					require.NoError(t, err)
 					assert.Equal(t, upgrade, status.Exists)
 					assert.Nil(t, status.CreatedAt)
 					if upgrade {
 						assert.Equal(t, model.AccessTokenFingerprint("released-token"), status.TokenRef)
-						legacyUser, validationErr := model.ValidateAccessToken("released-token")
+						legacyUser, validationErr := model.ValidateAccessToken(testtenant.Context(), "released-token")
 						require.NoError(t, validationErr)
 						require.NotNil(t, legacyUser)
 						var user model.User
@@ -703,55 +703,57 @@ func TestAuditDatabaseMatrix(t *testing.T) {
 						require.NoError(t, db.First(&old).Error)
 						assert.Equal(t, "historical login", old.Content)
 					}
-					require.NoError(t, model.UpdateUserAccessToken(1, "matrix-token"))
-					require.Error(t, db.Create(&model.User{Username: "duplicate", Password: "placeholder", AffCode: "duplicate-aff", AccessToken: common.GetPointer("matrix-token")}).Error, "PAT uniqueness must survive upgrade")
+					require.NoError(t, model.UpdateUserAccessToken(testtenant.Context(), 1, "matrix-token"))
+					var existingOwner model.User
+					require.NoError(t, db.First(&existingOwner, 1).Error)
+					require.Error(t, db.Create(&model.User{TenantID: existingOwner.TenantID, Username: "duplicate", Password: "placeholder", AffCode: "duplicate-aff", AccessToken: common.GetPointer("matrix-token")}).Error, "PAT uniqueness must survive upgrade")
 					for _, timestamp := range []int64{101, 102, 103} {
-						model.RecordAuditLog(nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: 1, Username: "owner", CreatedAt: timestamp, Category: model.AuditCategoryAccessToken, TokenRef: model.AccessTokenFingerprint("matrix-token"), Ip: "192.0.2.1", Success: timestamp != 102})
+						model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: 1, Username: "owner", CreatedAt: timestamp, Category: model.AuditCategoryAccessToken, TokenRef: model.AccessTokenFingerprint("matrix-token"), Ip: "192.0.2.1", Success: timestamp != 102})
 					}
-					first, total, err := model.GetAuditLogs(model.AuditLogFilter{UserId: 1}, 0, 2, common.RoleCommonUser)
+					first, total, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1}, 0, 2, common.RoleCommonUser)
 					require.NoError(t, err)
 					assert.EqualValues(t, 3, total)
 					require.Len(t, first, 2)
 					assert.EqualValues(t, 103, first[0].CreatedAt)
-					second, _, err := model.GetAuditLogs(model.AuditLogFilter{UserId: 1}, 2, 2, common.RoleCommonUser)
+					second, _, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1}, 2, 2, common.RoleCommonUser)
 					require.NoError(t, err)
 					require.Len(t, second, 1)
 					assert.EqualValues(t, 101, second[0].CreatedAt)
 					failure := false
-					failed, _, err := model.GetAuditLogs(model.AuditLogFilter{UserId: 1, Success: &failure}, 0, 10, 1)
+					failed, _, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1, Success: &failure}, 0, 10, 1)
 					require.NoError(t, err)
 					require.Len(t, failed, 1)
 					assert.EqualValues(t, 102, failed[0].CreatedAt)
-					status, err = model.GetUserAccessTokenStatus(1)
+					status, err = model.GetUserAccessTokenStatus(testtenant.Context(), 1)
 					require.NoError(t, err)
 					require.NotNil(t, status.LastUsedAt)
 					assert.EqualValues(t, 103, *status.LastUsedAt)
-					_, err = model.RevokeUserAccessToken(1)
+					_, err = model.RevokeUserAccessToken(testtenant.Context(), 1)
 					require.NoError(t, err)
-					_, err = model.RevokeUserAccessToken(1)
+					_, err = model.RevokeUserAccessToken(testtenant.Context(), 1)
 					require.NoError(t, err)
-					require.NoError(t, model.MigrateAuditLogs())
-					_, total, err = model.GetAuditLogs(model.AuditLogFilter{UserId: 1}, 0, 10, 1)
+					require.NoError(t, model.MigrateAuditLogs(testtenant.Context()))
+					_, total, err = model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1}, 0, 10, 1)
 					require.NoError(t, err)
 					assert.EqualValues(t, 3, total)
 					verifyAuditRoleStorage(t)
 					verifyAuditJSONStorage(t)
-					require.NoError(t, authz.Init(model.DB))
-					assert.False(t, authz.Can(1, common.RoleAdminUser, authz.AuditRead))
-					require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+					require.NoError(t, authz.Init(model.DB.WithContext(testtenant.Context())))
+					assert.False(t, authz.Can(testtenant.Context(), 1, common.RoleAdminUser, authz.AuditRead))
+					require.NoError(t, model.DB.WithContext(testtenant.Context()).Transaction(func(tx *gorm.DB) error {
 						return authz.SetUserPermissionsInTx(tx, 1, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: true}})
 					}))
-					require.NoError(t, authz.ReloadPolicy())
-					assert.True(t, authz.Can(1, common.RoleAdminUser, authz.AuditRead))
-					require.NoError(t, authz.Init(model.DB))
-					require.NoError(t, authz.Init(model.DB))
-					assert.True(t, authz.Can(1, common.RoleAdminUser, authz.AuditRead))
-					require.NoError(t, model.DB.Transaction(func(tx *gorm.DB) error {
+					require.NoError(t, authz.ReloadPolicy(testtenant.Context()))
+					assert.True(t, authz.Can(testtenant.Context(), 1, common.RoleAdminUser, authz.AuditRead))
+					require.NoError(t, authz.Init(model.DB.WithContext(testtenant.Context())))
+					require.NoError(t, authz.Init(model.DB.WithContext(testtenant.Context())))
+					assert.True(t, authz.Can(testtenant.Context(), 1, common.RoleAdminUser, authz.AuditRead))
+					require.NoError(t, model.DB.WithContext(testtenant.Context()).Transaction(func(tx *gorm.DB) error {
 						return authz.SetUserPermissionsInTx(tx, 1, authz.PermissionsMap{authz.ResourceAudit: {authz.ActionRead: false}})
 					}))
-					require.NoError(t, authz.ReloadPolicy())
-					assert.False(t, authz.Can(1, common.RoleAdminUser, authz.AuditRead))
-					assert.True(t, authz.Can(1, common.RoleRootUser, authz.AuditRead))
+					require.NoError(t, authz.ReloadPolicy(testtenant.Context()))
+					assert.False(t, authz.Can(testtenant.Context(), 1, common.RoleAdminUser, authz.AuditRead))
+					assert.True(t, authz.Can(testtenant.Context(), 1, common.RoleRootUser, authz.AuditRead))
 				})
 			}
 		})
@@ -788,21 +790,21 @@ func TestIndependentAuditLogStores(t *testing.T) {
 					require.NoError(t, model.LOG_DB.Where("request_id = ?", "legacy-split-request").Take(&old).Error)
 					assert.Equal(t, "retained historical login", old.Content)
 				}
-				require.NoError(t, model.UpdateUserAccessToken(1, "independent-pat"))
-				model.RecordAuditLog(nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: 1, Username: "independent", Category: model.AuditCategoryAccessToken, TokenRef: model.AccessTokenFingerprint("independent-pat"), Ip: "192.0.2.8", Success: false, Status: 403})
-				entries, total, err := model.GetAuditLogs(model.AuditLogFilter{UserId: 1}, 0, 20, common.RoleAdminUser)
+				require.NoError(t, model.UpdateUserAccessToken(testtenant.Context(), 1, "independent-pat"))
+				model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{ActorRole: common.RoleAdminUser, UserId: 1, Username: "independent", Category: model.AuditCategoryAccessToken, TokenRef: model.AccessTokenFingerprint("independent-pat"), Ip: "192.0.2.8", Success: false, Status: 403})
+				entries, total, err := model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1}, 0, 20, common.RoleAdminUser)
 				require.NoError(t, err)
 				assert.EqualValues(t, 1, total)
 				require.Len(t, entries, 1)
 				assert.False(t, entries[0].Success)
-				status, err := model.GetUserAccessTokenStatus(1)
+				status, err := model.GetUserAccessTokenStatus(testtenant.Context(), 1)
 				require.NoError(t, err)
 				require.NotNil(t, status.LastUsedAt)
 				assert.Equal(t, "192.0.2.8", status.LastUsedIp)
-				model.RecordLog(1, model.LogTypeTopup, "independent business")
-				_, err = model.DeleteOldLogBatch(context.Background(), time.Now().Unix()+1, 100)
+				model.RecordLog(testtenant.Context(), 1, model.LogTypeTopup, "independent business")
+				_, err = model.DeleteOldLogBatch(testtenant.Context(), time.Now().Unix()+1, 100)
 				require.NoError(t, err)
-				_, total, err = model.GetAuditLogs(model.AuditLogFilter{UserId: 1}, 0, 20, 1)
+				_, total, err = model.GetAuditLogs(testtenant.Context(), model.AuditLogFilter{UserId: 1}, 0, 20, 1)
 				require.NoError(t, err)
 				assert.EqualValues(t, 1, total)
 				var mainCount int64

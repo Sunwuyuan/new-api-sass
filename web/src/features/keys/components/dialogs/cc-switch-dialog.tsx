@@ -28,6 +28,7 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { getUserModels } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { tenantBasePath, tenantStorage } from '@/lib/tenant'
 
 const APP_CONFIGS = {
   claude: {
@@ -56,7 +57,7 @@ type AppType = keyof typeof APP_CONFIGS
 
 function getServerAddress(): string {
   try {
-    const raw = localStorage.getItem('status')
+    const raw = tenantStorage.getItem('status')
     if (raw) {
       const status = JSON.parse(raw)
       if (status.server_address) return status.server_address
@@ -64,7 +65,7 @@ function getServerAddress(): string {
   } catch {
     /* empty */
   }
-  return window.location.origin
+  return window.location.origin + tenantBasePath
 }
 
 function buildCCSwitchURL(

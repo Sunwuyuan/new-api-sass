@@ -18,15 +18,18 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClientProvider } from '@tanstack/react-query'
 import { RouterProvider, createRouter } from '@tanstack/react-router'
-import { StrictMode } from 'react'
+import { StrictMode, Suspense } from 'react'
 import ReactDOM from 'react-dom/client'
 
+import { LoadingState } from '@/components/loading-state'
+import { PlatformEntry } from '@/features/platform/entry'
 import { installBuildMetadata } from '@/lib/build-metadata'
 import { applyFaviconToDom } from '@/lib/dom-utils'
-import '@/lib/dayjs'
 import { initializeFrontendCache } from '@/lib/frontend-cache'
+import '@/lib/dayjs'
 import { createAppQueryClient } from '@/lib/query-client'
 import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
+import { tenantBasePath } from '@/lib/tenant'
 
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
@@ -50,6 +53,7 @@ const queryClient = createAppQueryClient(() => {
 // Create a new router instance
 const router = createRouter({
   routeTree,
+  basepath: tenantBasePath || '/',
   context: { queryClient },
   defaultPreload: 'intent',
   defaultPreloadStaleTime: 0,
@@ -70,7 +74,13 @@ if (!rootElement) {
 // Set document.title and favicon from cached status, then refresh from network
 ;(function initSystemBranding() {
   try {
-    if (typeof window === 'undefined' || typeof document === 'undefined') return
+    if (
+      !tenantBasePath ||
+      typeof window === 'undefined' ||
+      typeof document === 'undefined'
+    ) {
+      return
+    }
     const apply = (name: string) => {
       document.title = name
       const metaTitle = document.querySelector(
@@ -108,7 +118,11 @@ if (!rootElement.innerHTML) {
         <ThemeProvider>
           <FontProvider>
             <DirectionProvider>
-              <RouterProvider router={router} />
+              <Suspense fallback={<LoadingState />}>
+                <PlatformEntry>
+                  <RouterProvider router={router} />
+                </PlatformEntry>
+              </Suspense>
             </DirectionProvider>
           </FontProvider>
         </ThemeProvider>

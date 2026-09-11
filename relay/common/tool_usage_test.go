@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/assert"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestCountBillableToolCallWebSearchPrefersDeclaredWebSearch(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1",
 		ResponsesUsageInfo: &ResponsesUsageInfo{
 			BuiltInTools: map[string]*BuildInToolInfo{
@@ -27,7 +28,7 @@ func TestCountBillableToolCallWebSearchPrefersDeclaredWebSearch(t *testing.T) {
 }
 
 func TestCountBillableToolCallWebSearchDefaultsToPreview(t *testing.T) {
-	info := &RelayInfo{OriginModelName: "gpt-5.1"}
+	info := &RelayInfo{Context: testtenant.Context(), OriginModelName: "gpt-5.1"}
 
 	info.CountBillableToolCall(dto.BuildInCallWebSearchCall, "")
 	require.NotNil(t, info.ResponsesUsageInfo)
@@ -36,12 +37,12 @@ func TestCountBillableToolCallWebSearchDefaultsToPreview(t *testing.T) {
 }
 
 func TestCountBillableToolCallFunctionCallRequiresPrice(t *testing.T) {
-	operation_setting.SetToolPriceForTest("my_priced_fn", 5.0)
+	operation_setting.SetToolPriceForTest(testtenant.Context(), "my_priced_fn", 5.0)
 	t.Cleanup(func() {
-		operation_setting.DeleteToolPriceForTest("my_priced_fn")
+		operation_setting.DeleteToolPriceForTest(testtenant.Context(), "my_priced_fn")
 	})
 
-	info := &RelayInfo{OriginModelName: "gpt-5.1"}
+	info := &RelayInfo{Context: testtenant.Context(), OriginModelName: "gpt-5.1"}
 	info.CountBillableToolCall(dto.BuildInCallFunctionCall, "my_priced_fn")
 	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, "my_priced_fn")
 	assert.Equal(t, 1, info.ResponsesUsageInfo.BuiltInTools["my_priced_fn"].CallCount)
@@ -51,7 +52,7 @@ func TestCountBillableToolCallFunctionCallRequiresPrice(t *testing.T) {
 }
 
 func TestCountBillableToolCallFunctionCallSkipsReservedNames(t *testing.T) {
-	info := &RelayInfo{OriginModelName: "gpt-5.1"}
+	info := &RelayInfo{Context: testtenant.Context(), OriginModelName: "gpt-5.1"}
 
 	info.CountBillableToolCall(dto.BuildInCallFunctionCall, dto.BuildInToolWebSearchPreview)
 	info.CountBillableToolCall(dto.BuildInCallFunctionCall, dto.BuildInToolFileSearch)
@@ -313,7 +314,7 @@ func TestImageGenerationCallCounterCommitCapsAtMaxImageN(t *testing.T) {
 	}
 	require.Equal(t, dto.MaxImageN+3, counter.Count())
 
-	info := &RelayInfo{}
+	info := &RelayInfo{Context: testtenant.Context()}
 	counter.Commit(info)
 	require.Contains(t, info.ResponsesUsageInfo.BuiltInTools, dto.BuildInToolImageGeneration)
 	assert.Equal(t, dto.MaxImageN, info.ResponsesUsageInfo.BuiltInTools[dto.BuildInToolImageGeneration].CallCount)
@@ -322,7 +323,7 @@ func TestImageGenerationCallCounterCommitCapsAtMaxImageN(t *testing.T) {
 func TestImageGenerationCallCounterCommitDoesNotBillDeclarationsAlone(t *testing.T) {
 	t.Parallel()
 
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ResponsesUsageInfo: &ResponsesUsageInfo{
 			BuiltInTools: map[string]*BuildInToolInfo{
 				dto.BuildInToolImageGeneration: {

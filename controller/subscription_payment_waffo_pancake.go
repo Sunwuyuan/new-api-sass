@@ -31,7 +31,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		return
 	}
 
-	plan, err := model.GetSubscriptionPlanById(req.PlanId)
+	plan, err := model.GetSubscriptionPlanById(c.Request.Context(), req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -46,14 +46,14 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	}
 	// Plan targets its own Pancake product, so we only require credentials
 	// here — not the gateway-level WaffoPancakeProductID.
-	if strings.TrimSpace(setting.WaffoPancakeMerchantID) == "" ||
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) == "" {
+	if strings.TrimSpace(setting.TenantState(c.Request.Context()).WaffoPancakeMerchantID) == "" ||
+		strings.TrimSpace(setting.TenantState(c.Request.Context()).WaffoPancakePrivateKey) == "" {
 		common.ApiErrorMsg(c, "Waffo Pancake 未配置或密钥无效")
 		return
 	}
 
 	userId := c.GetInt("id")
-	user, err := model.GetUserById(userId, false)
+	user, err := model.GetUserById(c.Request.Context(), userId, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -64,7 +64,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountUserSubscriptionsByPlan(c.Request.Context(), userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -89,7 +89,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	if err := order.Insert(); err != nil {
+	if err := order.Insert(c.Request.Context()); err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅订单创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
@@ -110,7 +110,7 @@ func SubscriptionRequestWaffoPancakePay(c *gin.Context) {
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Waffo Pancake 订阅结账会话创建失败 user_id=%d plan_id=%d trade_no=%s error=%q", userId, plan.Id, tradeNo, err.Error()))
 		order.Status = common.TopUpStatusFailed
-		_ = order.Update()
+		_ = order.Update(c.Request.Context())
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
 		return
 	}

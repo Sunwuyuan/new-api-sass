@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import (
 	"strings"
 
@@ -25,8 +27,8 @@ func init() {
 	config.GlobalConfig.Register("oidc", &defaultOIDCSettings)
 }
 
-func GetOIDCSettings() *OIDCSettings {
-	return &defaultOIDCSettings
+func GetOIDCSettings(tenantCtx context.Context) *OIDCSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("oidc").(*OIDCSettings)
 }
 
 // GetEffectiveDisplayName returns the admin-configured display name, or the

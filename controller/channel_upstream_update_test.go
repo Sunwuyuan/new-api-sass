@@ -10,9 +10,9 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -97,7 +97,7 @@ func TestFetchAdvancedCustomModelsAppliesHeaderOverrideAfterRouteAuth(t *testing
 	}`
 	channel.HeaderOverride = &headerOverride
 
-	models, err := fetchChannelUpstreamModelIDs(channel)
+	models, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-4.1"}, models)
 
@@ -125,7 +125,7 @@ func TestFetchAdvancedCustomModelsUsesEnabledSavedMultiKey(t *testing.T) {
 		},
 	}
 
-	models, err := fetchChannelUpstreamModelIDs(channel)
+	models, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-4.1-mini"}, models)
 	require.Equal(t, "Bearer enabled-key", <-authorization)
@@ -139,7 +139,7 @@ func TestFetchAdvancedCustomModelsRejectsNonOKResponse(t *testing.T) {
 	defer server.Close()
 
 	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/v1/models", nil)
-	models, err := fetchChannelUpstreamModelIDs(channel)
+	models, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 	require.ErrorContains(t, err, "status code: 502")
 	require.Nil(t, models)
 }
@@ -156,7 +156,7 @@ func TestFetchAdvancedCustomModelsRedactsQueryKeyFromTransportErrors(t *testing.
 		Value: "prefix-{api_key}",
 	})
 
-	_, err := fetchChannelUpstreamModelIDs(channel)
+	_, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), secret)
 	require.NotContains(t, err.Error(), "custom-token")
@@ -191,7 +191,7 @@ func TestFetchOrdinaryOpenAIModelsKeepsExistingEmptyDataBehavior(t *testing.T) {
 		Key:     "ordinary-key",
 		BaseURL: &baseURL,
 	}
-	models, err := fetchChannelUpstreamModelIDs(channel)
+	models, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 	require.NoError(t, err)
 	require.Empty(t, models)
 }
@@ -225,8 +225,8 @@ func TestFetchModelsAdvancedCustomCreatePreview(t *testing.T) {
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	FetchModels(ctx)
 
@@ -265,11 +265,11 @@ func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *te
 	savedChannel.SetSetting(dto.ChannelSettings{Proxy: "http://127.0.0.1:1"})
 	require.NoError(t, db.Create(savedChannel).Error)
 
-	preserved, err := buildAdvancedCustomModelPreviewChannel(fetchModelsRequest{ChannelID: savedChannel.Id})
+	preserved, err := buildAdvancedCustomModelPreviewChannel(testtenant.Context(), fetchModelsRequest{ChannelID: savedChannel.Id})
 	require.NoError(t, err)
 	require.Equal(t, "http://127.0.0.1:1", preserved.GetBaseURL())
 	require.Equal(t, savedHeaderOverride, *preserved.HeaderOverride)
-	require.Equal(t, "http://127.0.0.1:1", preserved.GetSetting().Proxy)
+	require.Equal(t, "http://127.0.0.1:1", preserved.GetSetting(testtenant.Context()).Proxy)
 
 	previewConfig := dto.AdvancedCustomConfig{Routes: []dto.AdvancedCustomRoute{{
 		IncomingPath: dto.AdvancedCustomModelListPath,
@@ -290,7 +290,7 @@ func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *te
 		HeaderOverride: &explicitEmpty,
 		Proxy:          &explicitEmpty,
 	}
-	cleared, err := buildAdvancedCustomModelPreviewChannel(fetchModelsRequest{
+	cleared, err := buildAdvancedCustomModelPreviewChannel(testtenant.Context(), fetchModelsRequest{
 		ChannelID:      savedChannel.Id,
 		BaseURL:        &explicitEmpty,
 		AdvancedCustom: &rawConfig,
@@ -302,14 +302,14 @@ func TestFetchModelsAdvancedCustomEditPreviewUsesSavedKeyAndExplicitClears(t *te
 	require.Empty(t, *cleared.BaseURL)
 	require.NotNil(t, cleared.HeaderOverride)
 	require.Empty(t, *cleared.HeaderOverride)
-	require.Empty(t, cleared.GetSetting().Proxy)
+	require.Empty(t, cleared.GetSetting(testtenant.Context()).Proxy)
 
 	body, err := common.Marshal(req)
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 	FetchModels(ctx)
 
@@ -339,22 +339,22 @@ func TestFailedAdvancedCustomDetectionDoesNotStageFullRemoval(t *testing.T) {
 	channel := newAdvancedCustomModelListChannel(server.URL, "secret-key", "/v1/models", nil)
 	channel.Name = "empty discovery response"
 	channel.Models = "gpt-4.1,o3"
-	settings := channel.GetOtherSettings()
+	settings := channel.GetOtherSettings(testtenant.Context())
 	settings.UpstreamModelUpdateCheckEnabled = true
 	settings.UpstreamModelUpdateAutoSyncEnabled = true
 	channel.SetOtherSettings(settings)
 	require.NoError(t, db.Create(channel).Error)
 
-	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(channel, &settings, true, true)
+	modelsChanged, autoAdded, err := checkAndPersistChannelUpstreamModelUpdates(testtenant.Context(), channel, &settings, true, true)
 	require.ErrorContains(t, err, "no valid model IDs")
 	require.False(t, modelsChanged)
 	require.Zero(t, autoAdded)
 	require.Empty(t, settings.UpstreamModelUpdateLastDetectedModels)
 	require.Empty(t, settings.UpstreamModelUpdateLastRemovedModels)
 
-	reloaded, err := model.GetChannelById(channel.Id, true)
+	reloaded, err := model.GetChannelById(testtenant.Context(), channel.Id, true)
 	require.NoError(t, err)
-	persistedSettings := reloaded.GetOtherSettings()
+	persistedSettings := reloaded.GetOtherSettings(testtenant.Context())
 	require.Empty(t, persistedSettings.UpstreamModelUpdateLastDetectedModels)
 	require.Empty(t, persistedSettings.UpstreamModelUpdateLastRemovedModels)
 	require.Equal(t, "gpt-4.1,o3", reloaded.Models)
@@ -384,8 +384,8 @@ func TestFetchModelsUsesSharedChannelFetchBehavior(t *testing.T) {
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/fetch_models", bytes.NewReader(body))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	FetchModels(ctx)
@@ -411,7 +411,7 @@ func TestFetchNewAPIModelsUsesOpenAIContract(t *testing.T) {
 		BaseURL: &baseURL,
 	}
 
-	models, err := fetchChannelUpstreamModelIDs(channel)
+	models, err := fetchChannelUpstreamModelIDs(testtenant.Context(), channel)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-5", "gpt-5-mini"}, models)
@@ -568,35 +568,35 @@ func TestBuildUpstreamModelUpdateTaskNotificationContent_OmitOverflowDetails(t *
 }
 
 func TestShouldSendUpstreamModelUpdateNotification(t *testing.T) {
-	channelUpstreamModelUpdateNotifyState.Lock()
-	channelUpstreamModelUpdateNotifyState.lastNotifiedAt = 0
-	channelUpstreamModelUpdateNotifyState.lastChangedChannels = 0
-	channelUpstreamModelUpdateNotifyState.lastFailedChannels = 0
-	channelUpstreamModelUpdateNotifyState.Unlock()
+	tenantUpstreamNotificationState(testtenant.Context()).Lock()
+	tenantUpstreamNotificationState(testtenant.Context()).lastNotifiedAt = 0
+	tenantUpstreamNotificationState(testtenant.Context()).lastChangedChannels = 0
+	tenantUpstreamNotificationState(testtenant.Context()).lastFailedChannels = 0
+	tenantUpstreamNotificationState(testtenant.Context()).Unlock()
 
 	baseTime := int64(2000000)
 
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime, 6, 0))
-	require.False(t, shouldSendUpstreamModelUpdateNotification(baseTime+3600, 6, 0))
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+3600, 7, 0))
-	require.False(t, shouldSendUpstreamModelUpdateNotification(baseTime+7200, 7, 0))
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+8000, 0, 3))
-	require.False(t, shouldSendUpstreamModelUpdateNotification(baseTime+9000, 0, 3))
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+10000, 0, 4))
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+90000, 7, 0))
-	require.True(t, shouldSendUpstreamModelUpdateNotification(baseTime+90001, 0, 0))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime, 6, 0))
+	require.False(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+3600, 6, 0))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+3600, 7, 0))
+	require.False(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+7200, 7, 0))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+8000, 0, 3))
+	require.False(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+9000, 0, 3))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+10000, 0, 4))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+90000, 7, 0))
+	require.True(t, shouldSendUpstreamModelUpdateNotification(testtenant.Context(), baseTime+90001, 0, 0))
 }
 
 func TestDetectAllChannelUpstreamModelUpdatesRejectsExistingActiveTask(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}))
 
-	existing, err := model.CreateSystemTask(model.SystemTaskTypeModelUpdate, nil, nil)
+	existing, err := model.CreateSystemTask(testtenant.Context(), model.SystemTaskTypeModelUpdate, nil, nil)
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/upstream-models/detect-all", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/upstream-models/detect-all", nil)
 
 	DetectAllChannelUpstreamModelUpdates(ctx)
 

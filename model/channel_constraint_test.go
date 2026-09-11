@@ -6,6 +6,8 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	kitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,9 +149,9 @@ func TestFilterCandidateIDs(t *testing.T) {
 		},
 	}
 
-	channelSyncLock.Lock()
-	previous := channelsIDM
-	channelsIDM = map[int]*Channel{
+	TenantState(testtenant.Context()).channelSyncLock.Lock()
+	previous := TenantState(testtenant.Context()).channelsIDM
+	TenantState(testtenant.Context()).channelsIDM = map[int]*Channel{
 		900001: alpha,
 		900002: beta,
 		900003: ordinary,
@@ -159,13 +161,13 @@ func TestFilterCandidateIDs(t *testing.T) {
 		900011: otherCustom,
 	}
 	t.Cleanup(func() {
-		channelsIDM = previous
-		channelSyncLock.Unlock()
+		TenantState(testtenant.Context()).channelsIDM = previous
+		TenantState(testtenant.Context()).channelSyncLock.Unlock()
 	})
 
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			kept, emptiedBy := filterCandidateIDs(testCase.ids, testCase.modelName, testCase.filters)
+			kept, emptiedBy := filterCandidateIDs(testtenant.Context(), testCase.ids, testCase.modelName, testCase.filters)
 			if testCase.wantKept == nil {
 				assert.Nil(t, kept)
 			} else {
@@ -190,26 +192,26 @@ func TestChannelSatisfiesFilters(t *testing.T) {
 		},
 	})
 
-	ok, kind := ChannelSatisfiesFilters(nil, "gpt-4", nil)
+	ok, kind := ChannelSatisfiesFilters(testtenant.Context(), nil, "gpt-4", nil)
 	assert.False(t, ok)
 	assert.Equal(t, dto.ChannelFilterKind(""), kind)
 
-	ok, kind = ChannelSatisfiesFilters(alpha, "shared", identityFilters("alpha", nil))
+	ok, kind = ChannelSatisfiesFilters(testtenant.Context(), alpha, "shared", identityFilters("alpha", nil))
 	require.True(t, ok)
 	assert.Equal(t, dto.ChannelFilterKind(""), kind)
 
-	ok, kind = ChannelSatisfiesFilters(alpha, "shared", identityFilters("beta", nil))
+	ok, kind = ChannelSatisfiesFilters(testtenant.Context(), alpha, "shared", identityFilters("beta", nil))
 	assert.False(t, ok)
 	assert.Equal(t, dto.FilterTaskPluginIdentity, kind)
 
-	ok, kind = ChannelSatisfiesFilters(ordinary, "gpt-4", []dto.ChannelFilter{{
+	ok, kind = ChannelSatisfiesFilters(testtenant.Context(), ordinary, "gpt-4", []dto.ChannelFilter{{
 		Kind:        dto.FilterRequestPath,
 		RequestPath: "/v1/chat/completions",
 	}})
 	require.True(t, ok)
 	assert.Equal(t, dto.ChannelFilterKind(""), kind)
 
-	ok, kind = ChannelSatisfiesFilters(custom, "gpt-4", []dto.ChannelFilter{{
+	ok, kind = ChannelSatisfiesFilters(testtenant.Context(), custom, "gpt-4", []dto.ChannelFilter{{
 		Kind:        dto.FilterRequestPath,
 		RequestPath: "/v1/responses",
 	}})

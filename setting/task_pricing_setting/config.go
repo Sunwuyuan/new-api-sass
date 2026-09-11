@@ -1,5 +1,7 @@
 package task_pricing_setting
 
+import context "context"
+
 import (
 	"strings"
 
@@ -28,20 +30,20 @@ func init() {
 	config.GlobalConfig.Register("task_pricing_setting", &taskPricingSetting)
 }
 
-func SoraSizeRatio(size string) float64 {
-	if ratio, ok := taskPricingSetting.SoraSizeRatio[size]; ok && ratio > 0 {
+func SoraSizeRatio(tenantCtx context.Context, size string) float64 {
+	if ratio, ok := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("task_pricing_setting").(*TaskPricingSetting))).SoraSizeRatio[size]; ok && ratio > 0 {
 		return ratio
 	}
 	return 1
 }
 
-func VertexResolutionRatio(model, resolution string) float64 {
+func VertexResolutionRatio(tenantCtx context.Context, model, resolution string) float64 {
 	if !strings.EqualFold(resolution, "4k") {
 		return 1
 	}
 	matchedPattern := ""
 	matchedRatio := 1.0
-	for pattern, ratio := range taskPricingSetting.VertexResolution4K {
+	for pattern, ratio := range (*(config.GlobalConfig.ForTenant(tenantCtx).Get("task_pricing_setting").(*TaskPricingSetting))).VertexResolution4K {
 		if !strings.Contains(model, pattern) || ratio <= 0 {
 			continue
 		}
@@ -53,9 +55,9 @@ func VertexResolutionRatio(model, resolution string) float64 {
 	return matchedRatio
 }
 
-func GetCopy() TaskPricingSetting {
+func GetCopy(tenantCtx context.Context) TaskPricingSetting {
 	return TaskPricingSetting{
-		SoraSizeRatio:      lo.Assign(taskPricingSetting.SoraSizeRatio),
-		VertexResolution4K: lo.Assign(taskPricingSetting.VertexResolution4K),
+		SoraSizeRatio:      lo.Assign((*(config.GlobalConfig.ForTenant(tenantCtx).Get("task_pricing_setting").(*TaskPricingSetting))).SoraSizeRatio),
+		VertexResolution4K: lo.Assign((*(config.GlobalConfig.ForTenant(tenantCtx).Get("task_pricing_setting").(*TaskPricingSetting))).VertexResolution4K),
 	}
 }

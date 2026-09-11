@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"net/http"
 	"sort"
@@ -42,16 +44,20 @@ func listModelsMeta(c *gin.Context, keyword, vendor string) {
 		// enriched candidate set before counting and paginating the results.
 		offset, limit = 0, -1
 	}
-	search := model.SearchModels
+	search := func(arg0 string, arg1 string, arg2 string, arg3 string, arg4 int, arg5 int) ([]*model.Model, int64, error) {
+		return model.SearchModels(c.Request.Context(), arg0, arg1, arg2, arg3, arg4, arg5)
+	}
 	if c.Query("include_channel_models") == "true" {
-		search = model.SearchModelsWithChannels
+		search = func(arg0 string, arg1 string, arg2 string, arg3 string, arg4 int, arg5 int) ([]*model.Model, int64, error) {
+			return model.SearchModelsWithChannels(c.Request.Context(), arg0, arg1, arg2, arg3, arg4, arg5)
+		}
 	}
 	modelsMeta, total, err := search(keyword, vendor, c.Query("status"), c.Query("sync_official"), offset, limit)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := enrichModels(modelsMeta); err != nil {
+	if err := enrichModels(c.Request.Context(), modelsMeta); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -71,7 +77,7 @@ func listModelsMeta(c *gin.Context, keyword, vendor string) {
 		modelsMeta = filtered[start:end]
 	}
 
-	vendorCounts, _ := model.GetVendorModelCounts()
+	vendorCounts, _ := model.GetVendorModelCounts(c.Request.Context())
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(modelsMeta)
 	common.ApiSuccess(c, gin.H{
@@ -92,11 +98,11 @@ func GetModelMeta(c *gin.Context) {
 		return
 	}
 	var m model.Model
-	if err := model.DB.First(&m, id).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).First(&m, id).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	if err := enrichModels([]*model.Model{&m}); err != nil {
+	if err := enrichModels(c.Request.Context(), []*model.Model{&m}); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -119,7 +125,7 @@ func CreateModelMeta(c *gin.Context) {
 		return
 	}
 	// 名称冲突检查
-	if dup, err := model.IsModelNameDuplicated(0, m.ModelName); err != nil {
+	if dup, err := model.IsModelNameDuplicated(c.Request.Context(), 0, m.ModelName); err != nil {
 		common.ApiError(c, err)
 		return
 	} else if dup {
@@ -127,11 +133,11 @@ func CreateModelMeta(c *gin.Context) {
 		return
 	}
 
-	if err := m.Insert(); err != nil {
+	if err := m.Insert(c.Request.Context()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	model.RefreshPricing()
+	model.RefreshPricing(c.Request.Context())
 	m.HasMetadata = m.Id > 0
 	common.ApiSuccess(c, &m)
 }
@@ -156,7 +162,7 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 		// 只更新状态，防止误清空其他字段
-		if err := model.DB.Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
+		if err := model.DB.WithContext(c.Request.Context()).Model(&model.Model{}).Where("id = ?", m.Id).Update("status", m.Status).Error; err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -170,7 +176,7 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 		// 名称冲突检查
-		if dup, err := model.IsModelNameDuplicated(m.Id, m.ModelName); err != nil {
+		if dup, err := model.IsModelNameDuplicated(c.Request.Context(), m.Id, m.ModelName); err != nil {
 			common.ApiError(c, err)
 			return
 		} else if dup {
@@ -178,12 +184,12 @@ func UpdateModelMeta(c *gin.Context) {
 			return
 		}
 
-		if err := m.Update(); err != nil {
+		if err := m.Update(c.Request.Context()); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	model.RefreshPricing()
+	model.RefreshPricing(c.Request.Context())
 	m.HasMetadata = m.Id > 0
 	common.ApiSuccess(c, &m)
 }
@@ -210,7 +216,7 @@ func DeleteModelMeta(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
 		return
 	}
-	result, err := model.DeleteModelMetadata([]int{id}, removeFromChannels, removePricing)
+	result, err := model.DeleteModelMetadata(c.Request.Context(), []int{id}, removeFromChannels, removePricing)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -233,7 +239,7 @@ func BatchDeleteModelMeta(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "Model pricing is managed by a super administrator."})
 		return
 	}
-	result, err := model.DeleteModelMetadata(request.ModelIDs, request.RemoveFromChannels, request.RemovePricing)
+	result, err := model.DeleteModelMetadata(c.Request.Context(), request.ModelIDs, request.RemoveFromChannels, request.RemovePricing)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -244,11 +250,11 @@ func BatchDeleteModelMeta(c *gin.Context) {
 
 // enrichModels keeps configured endpoints intact and derives connections from
 // enabled routes, including hidden or unpriced models absent from the catalog.
-func enrichModels(models []*model.Model) error {
+func enrichModels(tenantCtx context.Context, models []*model.Model) error {
 	if len(models) == 0 {
 		return nil
 	}
-	configured, err := model.GetConfiguredModelChannels()
+	configured, err := model.GetConfiguredModelChannels(tenantCtx)
 	if err != nil {
 		return err
 	}
@@ -267,11 +273,11 @@ func enrichModels(models []*model.Model) error {
 		}
 		metadata.ConfiguredChannelCount = len(channelIDs)
 	}
-	connections, err := model.GetModelConnections()
+	connections, err := model.GetModelConnections(tenantCtx)
 	if err != nil {
 		return err
 	}
-	if err := model.FillModelSquareStates(models, configured, connections); err != nil {
+	if err := model.FillModelSquareStates(tenantCtx, models, configured, connections); err != nil {
 		return err
 	}
 	for _, metadata := range models {
@@ -291,10 +297,10 @@ func enrichModels(models []*model.Model) error {
 			names[name] = true
 			groups[connection.Group] = true
 			channels[connection.ChannelId] = model.BoundChannel{Name: connection.ChannelName, Type: connection.ChannelType}
-			for _, endpoint := range model.GetModelSupportEndpointTypes(name) {
+			for _, endpoint := range model.GetModelSupportEndpointTypes(tenantCtx, name) {
 				endpoints[string(endpoint)] = true
 			}
-			for _, quota := range model.GetModelQuotaTypes(name) {
+			for _, quota := range model.GetModelQuotaTypes(tenantCtx, name) {
 				quotas[quota] = true
 			}
 		}

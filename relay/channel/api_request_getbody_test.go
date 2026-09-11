@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -28,13 +30,13 @@ func TestApplyUpstreamBodyMetadataSetsReplayableMetadata(t *testing.T) {
 
 	payload := []byte(`{"model":"test-model","messages":[{"role":"user","content":"hi"}]}`)
 
-	body, closer, err := relaycommon.NewOutboundJSONBody(payload)
+	body, closer, err := relaycommon.NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
 	// NewRequest hides the body's dynamic type behind req.Body, so metadata
 	// extraction must use the original body passed to NewRequest.
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
 	require.NoError(t, err)
 	assert.Nil(t, req.GetBody)
 	assert.Zero(t, req.ContentLength)
@@ -70,11 +72,11 @@ func TestApplyUpstreamBodyMetadataHidesRawBodyStorageCloser(t *testing.T) {
 	t.Parallel()
 
 	payload := []byte(`{"model":"test-model","input":"raw storage"}`)
-	storage, err := common.CreateBodyStorage(payload)
+	storage, err := common.CreateBodyStorage(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer storage.Close()
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", storage)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com/v1/chat/completions", storage)
 	require.NoError(t, err)
 	_, exposesStorageBeforeApply := req.Body.(common.BodyStorage)
 	require.True(t, exposesStorageBeforeApply)
@@ -114,7 +116,7 @@ func TestApplyUpstreamBodyMetadataKeepsNativeMetadataForNonReplayableBody(t *tes
 			t.Parallel()
 
 			body := test.body()
-			req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
+			req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
 			require.NoError(t, err)
 			require.NotNil(t, req.GetBody, "net/http must derive GetBody for the concrete reader")
 
@@ -135,11 +137,11 @@ func TestApplyUpstreamBodyMetadataKeepsExistingGetBody(t *testing.T) {
 	t.Parallel()
 
 	payload := []byte(`{"model":"test-model"}`)
-	body, closer, err := relaycommon.NewOutboundJSONBody(payload)
+	body, closer, err := relaycommon.NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
 	require.NoError(t, err)
 	req.ContentLength = 99
 	req.GetBody = func() (io.ReadCloser, error) {
@@ -160,12 +162,12 @@ func TestApplyUpstreamBodyMetadataKeepsExistingGetBody(t *testing.T) {
 func TestApplyUpstreamBodyMetadataEmptyStorageRemainsReplayable(t *testing.T) {
 	t.Parallel()
 
-	storage, err := common.CreateBodyStorage(nil)
+	storage, err := common.CreateBodyStorage(testtenant.Context(), nil)
 	require.NoError(t, err)
 	defer storage.Close()
 	body := common.NewReplayableBodyReader(storage)
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com/v1/chat/completions", body)
 	require.NoError(t, err)
 	ApplyUpstreamBodyMetadata(req, body)
 
@@ -201,7 +203,7 @@ func (s *stubTaskAdaptor) BuildRequestHeader(c *gin.Context, req *http.Request, 
 // body. net/http derives a correct snapshot-based GetBody from the
 // *bytes.Reader bodies the task adaptors pass in, and it must be left intact.
 func TestDoTaskApiRequest_KeepsReplayableGetBody(t *testing.T) {
-	service.InitHttpClient()
+	service.InitHttpClient(testtenant.Context())
 
 	payload := []byte(`{"model":"test-model","prompt":"hello"}`)
 
@@ -219,10 +221,10 @@ func TestDoTaskApiRequest_KeepsReplayableGetBody(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewReader(payload))
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/video/generations", bytes.NewReader(payload))
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
 
@@ -448,7 +450,7 @@ func newH2PriorKnowledgeClient(ln net.Listener) (*http.Client, *http2.Transport)
 
 func newPassThroughBody(t *testing.T, payload []byte) (common.ReplayableBody, common.BodyStorage) {
 	t.Helper()
-	storage, err := common.CreateBodyStorage(payload)
+	storage, err := common.CreateBodyStorage(testtenant.Context(), payload)
 	require.NoError(t, err)
 	return common.NewReplayableBodyReader(storage), storage
 }
@@ -471,11 +473,11 @@ func TestUpstreamGetBody_HTTP2RetryAfterUpstreamStreamReset(t *testing.T) {
 
 	// Build the upstream request exactly the way DoApiRequest does: pass the
 	// original replayable body to the metadata helper after NewRequest.
-	body, closer, err := relaycommon.NewOutboundJSONBody(payload)
+	body, closer, err := relaycommon.NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
-	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
 	require.NoError(t, err)
 	ApplyUpstreamBodyMetadata(req, body)
 	require.NotNil(t, req.GetBody)
@@ -506,7 +508,7 @@ func TestUpstreamGetBody_HTTP2RetryAfterUpstreamStreamReset_PassThrough(t *testi
 
 	body, storage := newPassThroughBody(t, payload)
 	defer storage.Close()
-	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
 	require.NoError(t, err)
 	ApplyUpstreamBodyMetadata(req, body)
 	require.NotNil(t, req.GetBody)
@@ -538,7 +540,7 @@ func TestUpstreamGetBody_HTTP2RetryAfterGracefulGoAway_PassThrough(t *testing.T)
 
 	body, storage := newPassThroughBody(t, payload)
 	defer storage.Close()
-	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
 	require.NoError(t, err)
 	ApplyUpstreamBodyMetadata(req, body)
 	require.NotNil(t, req.GetBody)
@@ -570,11 +572,11 @@ func TestUpstreamGetBody_HTTP2CannotRetryWithoutGetBody(t *testing.T) {
 	client, transport := newH2PriorKnowledgeClient(ln)
 	defer transport.CloseIdleConnections()
 
-	body, closer, err := relaycommon.NewOutboundJSONBody(payload)
+	body, closer, err := relaycommon.NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
-	req, err := http.NewRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "http://upstream.test/v1/chat/completions", body)
 	require.NoError(t, err)
 	req.ContentLength = body.Size()
 	assert.Nil(t, req.GetBody)

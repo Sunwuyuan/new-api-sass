@@ -18,6 +18,8 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { describe, expect, test } from 'vitest'
 
+import { tenantKey } from '@/lib/tenant'
+
 import {
   getOAuthSessionStorage,
   markOAuthPopup,
@@ -158,6 +160,31 @@ describe('resolveOAuthCallbackMode', () => {
 })
 
 describe('OAuth bind popup storage', () => {
+  test('popup markers use the current workspace namespace and ignore unscoped markers', () => {
+    const raw = fakeStorage({
+      'oauth_popup_flow:oidc': JSON.stringify({
+        state: bindState,
+        intent: 'bind',
+      }),
+    })
+    const storage = getOAuthSessionStorage({ sessionStorage: raw })
+    expect(
+      resolveOAuthCallbackMode('oidc', bindState, {
+        opener: openOpener,
+        storage,
+      })
+    ).toBe('login')
+    expect(markOAuthPopup(storage, 'oidc', bindState, 'bind')).toBe(true)
+    expect(raw.getItem(tenantKey('oauth_popup_flow:oidc'))).toBe(
+      JSON.stringify({ state: bindState, intent: 'bind' })
+    )
+    expect(
+      resolveOAuthCallbackMode('oidc', bindState, {
+        opener: openOpener,
+        storage,
+      })
+    ).toBe('bind')
+  })
   test('blocked sessionStorage getter is contained', () => {
     const owner = {
       get sessionStorage(): OAuthModeStorage {

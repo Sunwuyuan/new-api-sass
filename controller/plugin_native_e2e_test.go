@@ -11,10 +11,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -41,7 +44,7 @@ func (b *nativeRouteBilling) Settle(int) error {
 func (b *nativeRouteBilling) Refund(*gin.Context) {
 	b.events = append(b.events, "refund")
 	if !b.settled && b.preConsumed > 0 {
-		_ = model.IncreaseUserQuota(b.userID, b.preConsumed, true)
+		_ = model.IncreaseUserQuota(testtenant.Context(), b.userID, b.preConsumed, true)
 		b.preConsumed = 0
 	}
 }
@@ -56,7 +59,7 @@ func (b *nativeRouteBilling) GetPreConsumedQuota() int {
 
 func (b *nativeRouteBilling) Reserve(quota int) error {
 	b.events = append(b.events, "reserve")
-	if err := model.DecreaseUserQuota(b.userID, quota, true); err != nil {
+	if err := model.DecreaseUserQuota(testtenant.Context(), b.userID, quota, true); err != nil {
 		return err
 	}
 	b.preConsumed = quota
@@ -65,13 +68,13 @@ func (b *nativeRouteBilling) Reserve(quota int) error {
 
 func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	service.InitHttpClient()
+	service.InitHttpClient(testtenant.Context())
 
 	previousDB := model.DB
 	previousLogDB := model.LOG_DB
 	previousMemoryCache := common.MemoryCacheEnabled
 	previousBatchUpdate := common.BatchUpdateEnabled
-	previousLogConsume := common.LogConsumeEnabled
+	previousLogConsume := common.TenantState(testtenant.Context()).LogConsumeEnabled
 	previousRedisEnabled := common.RedisEnabled
 	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
@@ -80,18 +83,18 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	model.LOG_DB = database
 	common.MemoryCacheEnabled = false
 	common.BatchUpdateEnabled = false
-	common.LogConsumeEnabled = false
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = false
 	common.RedisEnabled = false
-	previousModelRatios := ratio_setting.ModelRatio2JSONString()
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"kling-v1":1}`))
+	previousModelRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{"kling-v1":1}`))
 	t.Cleanup(func() {
 		model.DB = previousDB
 		model.LOG_DB = previousLogDB
 		common.MemoryCacheEnabled = previousMemoryCache
 		common.BatchUpdateEnabled = previousBatchUpdate
-		common.LogConsumeEnabled = previousLogConsume
+		common.TenantState(testtenant.Context()).LogConsumeEnabled = previousLogConsume
 		common.RedisEnabled = previousRedisEnabled
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousModelRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), previousModelRatios))
 	})
 	require.NoError(t, database.Create(&model.User{
 		Id:       7,
@@ -134,15 +137,15 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	}
 	require.NoError(t, database.Create(&channel).Error)
 
-	generation := pluginruntime.DefaultRegistry.Generation()
+	generation := pluginruntime.TenantState(testtenant.Context()).DefaultRegistry.Generation()
 	require.NotNil(t, generation)
 	submitBinding, found := generation.LookupDeclaredRoute(http.MethodPost, "/kling/v1/videos/text2video")
 	require.True(t, found)
 	require.Equal(t, "kling", submitBinding.Plugin.Meta.Key)
 
 	submitRecorder := httptest.NewRecorder()
-	submitContext, _ := gin.CreateTestContext(submitRecorder)
-	submitContext.Request = httptest.NewRequest(
+	submitContext, _ := testtenant.CreateTestContext(submitRecorder)
+	submitContext.Request = testtenant.NewRequest(
 		http.MethodPost,
 		"/kling/v1/videos/text2video",
 		bytes.NewBufferString(`{"model_name":"kling-v1","prompt":"a lighthouse"}`),
@@ -166,7 +169,7 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	require.Nil(t, middleware.SetupContextForSelectedChannel(submitContext, &channel, "kling-v1"))
 
 	billing := &nativeRouteBilling{userID: 7}
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          7,
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -200,12 +203,12 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	assert.Equal(t, model.TaskStatus(model.TaskStatusNotStart), persisted.Status)
 
 	previousAdaptorFactory := service.GetTaskAdaptorFunc
-	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		return relay.GetTaskAdaptor(platform)
+	service.GetTaskAdaptorFunc = func(_ context.Context, platform constant.TaskPlatform) service.TaskPollingAdaptor {
+		return relay.GetTaskAdaptor(testtenant.Context(), platform)
 	}
 	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousAdaptorFactory })
 	service.DispatchPlatformUpdate(
-		context.Background(),
+		testtenant.Context(),
 		persisted.Platform,
 		map[int][]string{channel.Id: {"kling-private-1"}},
 		map[string]*model.Task{"kling-private-1": &persisted},
@@ -223,8 +226,8 @@ func TestKlingNativeRouteSubmitPollSettleAndQuery(t *testing.T) {
 	queryBinding, found := generation.LookupDeclaredRoute(http.MethodGet, "/kling/v1/videos/text2video/:task_id")
 	require.True(t, found)
 	queryRecorder := httptest.NewRecorder()
-	queryContext, _ := gin.CreateTestContext(queryRecorder)
-	queryContext.Request = httptest.NewRequest(http.MethodGet, "/kling/v1/videos/text2video/task_kling_public", nil)
+	queryContext, _ := testtenant.CreateTestContext(queryRecorder)
+	queryContext.Request = testtenant.NewRequest(http.MethodGet, "/kling/v1/videos/text2video/task_kling_public", nil)
 	queryContext.Params = gin.Params{{Key: "task_id", Value: "task_kling_public"}}
 	queryContext.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{
 		Generation: generation,

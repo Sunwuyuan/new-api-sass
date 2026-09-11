@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "strings"
 
 var DemoSiteEnabled = false
@@ -15,18 +17,19 @@ var AutomaticDisableKeywords = []string{
 	"Your account is not authorized",
 }
 
-func AutomaticDisableKeywordsToString() string {
-	return strings.Join(AutomaticDisableKeywords, "\n")
+func AutomaticDisableKeywordsToString(tenantCtx context.Context) string {
+	return strings.Join(TenantState(tenantCtx).AutomaticDisableKeywords, "\n")
 }
 
-func AutomaticDisableKeywordsFromString(s string) {
-	AutomaticDisableKeywords = []string{}
+func AutomaticDisableKeywordsFromString(tenantCtx context.Context, s string) {
+	keywords := []string{}
 	ak := strings.SplitSeq(s, "\n")
 	for k := range ak {
 		k = strings.TrimSpace(k)
 		k = strings.ToLower(k)
 		if k != "" {
-			AutomaticDisableKeywords = append(AutomaticDisableKeywords, k)
+			keywords = append(keywords, k)
 		}
 	}
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.AutomaticDisableKeywords = keywords })
 }

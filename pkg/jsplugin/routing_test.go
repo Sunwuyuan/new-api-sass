@@ -1,13 +1,13 @@
 package jsplugin
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -426,14 +426,14 @@ export function parseTaskResult() { return {}; }
 	nodeBV2 := compileVersion("2.0.0")
 	require.NoError(t, nodeB.ReplaceOverrides([]*LoadedPlugin{nodeBV2}))
 
-	oldResult, err := pinned.Plugin.Engine.Call(context.Background(), "buildSubmitRequest")
+	oldResult, err := pinned.Plugin.Engine.Call(testtenant.Context(), "buildSubmitRequest")
 	require.NoError(t, err)
 	oldObject, ok := oldResult.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "1.0.0", oldObject["version"])
 	current, ok := nodeB.Get("adjacent-node")
 	require.True(t, ok)
-	newResult, err := current.Engine.Call(context.Background(), "buildSubmitRequest")
+	newResult, err := current.Engine.Call(testtenant.Context(), "buildSubmitRequest")
 	require.NoError(t, err)
 	newObject, ok := newResult.(map[string]any)
 	require.True(t, ok)

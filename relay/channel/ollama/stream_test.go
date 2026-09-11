@@ -9,9 +9,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,7 +63,7 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(w)
+			c, _ := testtenant.CreateTestContext(w)
 
 			resp := &http.Response{
 				StatusCode: http.StatusOK,
@@ -70,7 +71,7 @@ func TestOllamaChatHandlerNonStreamToolCalls(t *testing.T) {
 				Body:       io.NopCloser(strings.NewReader(tt.raw)),
 			}
 
-			usage, apiErr := ollamaChatHandler(c, &relaycommon.RelayInfo{
+			usage, apiErr := ollamaChatHandler(c, &relaycommon.RelayInfo{Context: testtenant.Context(),
 				ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "fallback-model"},
 			}, resp)
 			require.Nil(t, apiErr)

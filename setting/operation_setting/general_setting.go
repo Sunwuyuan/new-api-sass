@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 // 额度展示类型
@@ -37,35 +39,35 @@ func init() {
 	config.GlobalConfig.Register("general_setting", &generalSetting)
 }
 
-func GetGeneralSetting() *GeneralSetting {
-	return &generalSetting
+func GetGeneralSetting(tenantCtx context.Context) *GeneralSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting)
 }
 
 // IsCurrencyDisplay 是否以货币形式展示（美元或人民币）
-func IsCurrencyDisplay() bool {
-	return generalSetting.QuotaDisplayType != QuotaDisplayTypeTokens
+func IsCurrencyDisplay(tenantCtx context.Context) bool {
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).QuotaDisplayType != QuotaDisplayTypeTokens
 }
 
 // IsCNYDisplay 是否以人民币展示
-func IsCNYDisplay() bool {
-	return generalSetting.QuotaDisplayType == QuotaDisplayTypeCNY
+func IsCNYDisplay(tenantCtx context.Context) bool {
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).QuotaDisplayType == QuotaDisplayTypeCNY
 }
 
 // GetQuotaDisplayType 返回额度展示类型
-func GetQuotaDisplayType() string {
-	return generalSetting.QuotaDisplayType
+func GetQuotaDisplayType(tenantCtx context.Context) string {
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).QuotaDisplayType
 }
 
 // GetCurrencySymbol 返回当前展示类型对应符号
-func GetCurrencySymbol() string {
-	switch generalSetting.QuotaDisplayType {
+func GetCurrencySymbol(tenantCtx context.Context) string {
+	switch (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).QuotaDisplayType {
 	case QuotaDisplayTypeUSD:
 		return "$"
 	case QuotaDisplayTypeCNY:
 		return "¥"
 	case QuotaDisplayTypeCustom:
-		if generalSetting.CustomCurrencySymbol != "" {
-			return generalSetting.CustomCurrencySymbol
+		if (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).CustomCurrencySymbol != "" {
+			return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).CustomCurrencySymbol
 		}
 		return "¤"
 	default:
@@ -74,15 +76,15 @@ func GetCurrencySymbol() string {
 }
 
 // GetUsdToCurrencyRate 返回 1 USD = X <currency> 的 X（TOKENS 不适用）
-func GetUsdToCurrencyRate(usdToCny float64) float64 {
-	switch generalSetting.QuotaDisplayType {
+func GetUsdToCurrencyRate(tenantCtx context.Context, usdToCny float64) float64 {
+	switch (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).QuotaDisplayType {
 	case QuotaDisplayTypeUSD:
 		return 1
 	case QuotaDisplayTypeCNY:
 		return usdToCny
 	case QuotaDisplayTypeCustom:
-		if generalSetting.CustomCurrencyExchangeRate > 0 {
-			return generalSetting.CustomCurrencyExchangeRate
+		if (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).CustomCurrencyExchangeRate > 0 {
+			return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("general_setting").(*GeneralSetting))).CustomCurrencyExchangeRate
 		}
 		return 1
 	default:

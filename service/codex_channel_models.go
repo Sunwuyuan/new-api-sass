@@ -11,7 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 )
 
-func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
+func FetchCodexChannelModels(tenantCtx context.Context, channel *model.Channel) ([]string, error) {
 	if channel == nil || channel.Type != constant.ChannelTypeCodex {
 		return nil, fmt.Errorf("channel type is not Codex")
 	}
@@ -19,11 +19,11 @@ func FetchCodexChannelModels(channel *model.Channel) ([]string, error) {
 		return nil, fmt.Errorf("codex channel does not support multi-key model discovery")
 	}
 
-	client, err := NewProxyHttpClient(channel.GetSetting().Proxy)
+	client, err := NewProxyHttpClient(tenantCtx, channel.GetSetting(tenantCtx).Proxy)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(tenantCtx, 20*time.Second)
 	defer cancel()
 
 	clientVersion, err := GetLatestCodexClientVersion(ctx, client)

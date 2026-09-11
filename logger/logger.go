@@ -122,18 +122,18 @@ func logHelper(ctx context.Context, level string, msg string) {
 	}
 }
 
-func LogQuota(quota int) string {
+func LogQuota(tenantCtx context.Context, quota int) string {
 	// 新逻辑：根据额度展示类型输出
 	q := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
+	switch operation_setting.GetQuotaDisplayType(tenantCtx) {
 	case operation_setting.QuotaDisplayTypeCNY:
-		usd := q / common.QuotaPerUnit
-		cny := usd * operation_setting.USDExchangeRate
+		usd := q / common.TenantState(tenantCtx).QuotaPerUnit
+		cny := usd * operation_setting.TenantState(tenantCtx).USDExchangeRate
 		return fmt.Sprintf("¥%.6f 额度", cny)
 	case operation_setting.QuotaDisplayTypeCustom:
-		usd := q / common.QuotaPerUnit
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
+		usd := q / common.TenantState(tenantCtx).QuotaPerUnit
+		rate := operation_setting.GetGeneralSetting(tenantCtx).CustomCurrencyExchangeRate
+		symbol := operation_setting.GetGeneralSetting(tenantCtx).CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
@@ -145,21 +145,21 @@ func LogQuota(quota int) string {
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d 点额度", quota)
 	default: // USD
-		return fmt.Sprintf("＄%.6f 额度", q/common.QuotaPerUnit)
+		return fmt.Sprintf("＄%.6f 额度", q/common.TenantState(tenantCtx).QuotaPerUnit)
 	}
 }
 
-func FormatQuota(quota int) string {
+func FormatQuota(tenantCtx context.Context, quota int) string {
 	q := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
+	switch operation_setting.GetQuotaDisplayType(tenantCtx) {
 	case operation_setting.QuotaDisplayTypeCNY:
-		usd := q / common.QuotaPerUnit
-		cny := usd * operation_setting.USDExchangeRate
+		usd := q / common.TenantState(tenantCtx).QuotaPerUnit
+		cny := usd * operation_setting.TenantState(tenantCtx).USDExchangeRate
 		return fmt.Sprintf("¥%.6f", cny)
 	case operation_setting.QuotaDisplayTypeCustom:
-		usd := q / common.QuotaPerUnit
-		rate := operation_setting.GetGeneralSetting().CustomCurrencyExchangeRate
-		symbol := operation_setting.GetGeneralSetting().CustomCurrencySymbol
+		usd := q / common.TenantState(tenantCtx).QuotaPerUnit
+		rate := operation_setting.GetGeneralSetting(tenantCtx).CustomCurrencyExchangeRate
+		symbol := operation_setting.GetGeneralSetting(tenantCtx).CustomCurrencySymbol
 		if symbol == "" {
 			symbol = "¤"
 		}
@@ -171,7 +171,7 @@ func FormatQuota(quota int) string {
 	case operation_setting.QuotaDisplayTypeTokens:
 		return fmt.Sprintf("%d", quota)
 	default:
-		return fmt.Sprintf("＄%.6f", q/common.QuotaPerUnit)
+		return fmt.Sprintf("＄%.6f", q/common.TenantState(tenantCtx).QuotaPerUnit)
 	}
 }
 

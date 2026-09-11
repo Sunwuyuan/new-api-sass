@@ -22,7 +22,7 @@ func RefreshAuth(c *gin.Context) {
 		writeAuthSessionError(c, service.ErrRefreshTokenInvalid)
 		return
 	}
-	bundle, user, err := service.RefreshLoginSession(rawRefreshToken, c.GetHeader("X-Auth-Session"), c.ClientIP(), c.Request.UserAgent())
+	bundle, user, err := service.RefreshLoginSession(c.Request.Context(), rawRefreshToken, c.GetHeader("X-Auth-Session"), c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		if errors.Is(err, service.ErrRefreshTokenInvalid) || errors.Is(err, service.ErrLoginSessionRevoked) {
 			service.ClearRefreshCookie(c)
@@ -38,7 +38,7 @@ func RefreshAuth(c *gin.Context) {
 			"access_token":      bundle.AccessToken,
 			"token_type":        bundle.TokenType,
 			"access_expires_at": bundle.AccessExpiresAt,
-			"user":              buildSelfUserData(user),
+			"user":              buildSelfUserData(c.Request.Context(), user),
 			"session":           bundle.Session,
 		},
 	})
@@ -55,18 +55,18 @@ func AuthLogout(c *gin.Context) {
 	}
 
 	if rawAccessToken, ok := dashboardBearer(c.GetHeader("Authorization")); ok {
-		if identity, err := service.ParseAccessToken(rawAccessToken); err == nil {
+		if identity, err := service.ParseAccessToken(c.Request.Context(), rawAccessToken); err == nil {
 			if expectedSID != "" && expectedSID != identity.SessionID {
 				writeAuthSessionError(c, service.ErrLoginSessionMismatch)
 				return
 			}
-			if _, err := model.RevokeUserSession(identity.UserID, identity.SessionID, "logout"); err != nil {
+			if _, err := model.RevokeUserSession(c.Request.Context(), identity.UserID, identity.SessionID, "logout"); err != nil {
 				writeAuthSessionError(c, err)
 				return
 			}
 			cookieCleared := false
 			if cookieErr == nil && hasCookieSID && cookieSID == identity.SessionID {
-				if err := service.RevokeByRefreshToken(rawRefreshToken, identity.SessionID, "logout"); err != nil {
+				if err := service.RevokeByRefreshToken(c.Request.Context(), rawRefreshToken, identity.SessionID, "logout"); err != nil {
 					writeAuthSessionError(c, err)
 					return
 				}
@@ -86,7 +86,7 @@ func AuthLogout(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 		return
 	}
-	if err := service.RevokeByRefreshToken(rawRefreshToken, expectedSID, "logout"); err != nil {
+	if err := service.RevokeByRefreshToken(c.Request.Context(), rawRefreshToken, expectedSID, "logout"); err != nil {
 		writeAuthSessionError(c, err)
 		return
 	}
@@ -99,7 +99,7 @@ func GetLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	sessions, err := service.ListLoginSessions(identity.UserID, identity.SessionID)
+	sessions, err := service.ListLoginSessions(c.Request.Context(), identity.UserID, identity.SessionID)
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -117,7 +117,7 @@ func DeleteLoginSession(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "code": "AUTH_SESSION_ID_REQUIRED", "message": "session id is required"})
 		return
 	}
-	revoked, err := model.RevokeUserSession(identity.UserID, sid, "user_revoked")
+	revoked, err := model.RevokeUserSession(c.Request.Context(), identity.UserID, sid, "user_revoked")
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
@@ -140,7 +140,7 @@ func RevokeOtherLoginSessions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	count, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, "user_revoked_others")
+	count, err := model.RevokeOtherUserSessions(c.Request.Context(), identity.UserID, identity.SessionID, "user_revoked_others")
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return

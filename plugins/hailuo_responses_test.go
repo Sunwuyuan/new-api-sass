@@ -5,11 +5,15 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/relay/channel"
+
 	taskplugin "github.com/QuantumNous/new-api/relay/channel/task/jsplugin"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -47,8 +51,8 @@ func TestHailuoArtifactContentProxy(t *testing.T) {
 	require.NoError(t, err)
 	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "hailuo"})
 	require.NoError(t, err)
-	adaptor := taskplugin.New(plugin)
-	adaptor.Init(&relaycommon.RelayInfo{
+	adaptor := taskplugin.New(testtenant.Context(), plugin)
+	adaptor.Init(&relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ApiKey:         "test-ak",
 			ChannelBaseUrl: "https://api.minimax.example",
@@ -453,7 +457,7 @@ func TestHailuoH3CompletionUsageFacts(t *testing.T) {
 	}
 
 	t.Run("polling adaptor carries actual facts into task settlement", func(t *testing.T) {
-		adaptor := taskplugin.New(plugin)
+		adaptor := taskplugin.New(testtenant.Context(), plugin)
 		result, err := adaptor.ParseTaskResult(&model.Task{}, &http.Response{StatusCode: http.StatusOK, Header: make(http.Header)}, []byte(
 			`{"task":{"id":"1","status":"succeeded","resolution":"2K","usage":{"output_seconds":5,"input_seconds":7.5,"input_image_count":6}}}`,
 		))
@@ -471,8 +475,8 @@ func TestHailuoH3ArtifactContentProxy(t *testing.T) {
 	require.NoError(t, err)
 	plugin, err := jsplugin.NewRegistry().RegisterFactory(source, jsplugin.Options{Key: "hailuo"})
 	require.NoError(t, err)
-	adaptor := taskplugin.New(plugin)
-	adaptor.Init(&relaycommon.RelayInfo{
+	adaptor := taskplugin.New(testtenant.Context(), plugin)
+	adaptor.Init(&relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{ApiKey: "test-ak", ChannelBaseUrl: "https://api.minimax.example"},
 	})
 	task := &model.Task{

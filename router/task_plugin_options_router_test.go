@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -26,7 +27,7 @@ func TestGetTaskPluginOptionsAdminForbiddenRootAllowed(t *testing.T) {
 	require.NoError(t, err)
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
-	require.NoError(t, authz.Init(db))
+	require.NoError(t, authz.Init(db.WithContext(testtenant.Context())))
 	t.Cleanup(func() { common.IsMasterNode = wasMaster })
 
 	gin.SetMode(gin.TestMode)
@@ -41,8 +42,8 @@ func TestGetTaskPluginOptionsAdminForbiddenRootAllowed(t *testing.T) {
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
 			context.Set("id", testCase.id)
 			context.Set("role", testCase.role)
 			middleware.RequirePermission(authz.TaskPluginBind)(context)

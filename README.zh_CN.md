@@ -108,6 +108,60 @@
 
 ## 🚀 快速开始
 
+### 本分支：New API SaaS
+
+本分支基于 QuantumNous/new-api，入口是平台控制台 `/platform` 和空间 `/t/{slug}/`。一个 Go 进程服务所有空间，共享数据库；平台账号与空间内的 New API 账号分别登录。完整规格和验收进度见 [SAAS_SPEC.md](docs/SAAS_SPEC.md)、[SAAS_STATUS.md](docs/SAAS_STATUS.md)。
+
+使用 Docker Compose v2，从本分支构建包含前端的镜像。下面的命令在本机生成随机凭据；`.env` 已被 Git 和 Docker 构建上下文排除。首次启动前在本机保存管理员密码。
+
+```bash
+git clone -b feat/saas-multitenant https://github.com/Sunwuyuan/new-api-sass.git
+cd new-api-sass
+umask 077
+read -r -p '平台管理员邮箱: ' saas_admin_email
+cat > .env <<EOF
+PLATFORM_ORIGIN=http://localhost:3000
+PLATFORM_ADMIN_EMAIL=${saas_admin_email}
+PLATFORM_ADMIN_PASSWORD=$(openssl rand -hex 24)
+SESSION_SECRET=$(openssl rand -hex 32)
+CRYPTO_SECRET=$(openssl rand -hex 32)
+DB_PASSWORD=$(openssl rand -hex 32)
+REDIS_PASSWORD=$(openssl rand -hex 32)
+EOF
+docker compose up -d --build
+```
+
+Compose 在本机构建此分支，沿用 `calciumion/new-api:latest` 本地标签；`pull_policy: build` 保证应用源码来自当前工作目录。PostgreSQL 与 Redis 仅在容器网络内访问，数据库保存在 `pg_data`，应用文件和日志分别在 `data/`、`logs/`。上线时把 `PLATFORM_ORIGIN` 改为实际 HTTPS Origin（例如 `https://gateway.example.com`，不要包含路径），在反向代理中原样转发 `/platform`、`/t/` 和静态资源，并按实际代理网段配置 `TRUSTED_PROXIES`。健康检查使用 `/platform/api/plans`。
+
+1. 访问 `http://localhost:3000/platform`，用 `.env` 中的管理员账号登录。普通用户可在同一页面注册平台账号。
+2. 创建空间时填写名称和 slug；新空间默认 Lite，自动创建空间 root。立即保存页面提供的一次性激活链接，在 30 分钟内设置 root 密码，再从 `/t/{slug}/sign-in` 登录。平台密码与 root 密码独立。
+3. 进入空间后按原 New API 流程配置自己的渠道、用户、令牌和额度。新 root 的钱包初始额度为 0，使用网关前需在空间用户管理中分配额度；托管套餐不包含上游模型费用。客户端 API Base URL 为 `https://gateway.example.com/t/{slug}/v1`。
+4. 平台管理员可在空间卡片中人工开通 Lite / Pro（1–36 个月）、停用或恢复空间。第一版托管套餐不接在线支付。到期或停用后空间请求会被拒绝；管理员续期开通后恢复。
+5. Lite 每个 UTC 自然月最多 1,000 次成功或计费请求、5 个用户（含 root）、20 个令牌和 3 个渠道，强制显示平台页脚。Pro 为 100,000 次、1,000 个用户、10,000 个令牌、100 个渠道，可修改平台页脚。未收费的失败请求释放预留次数；月上限返回 HTTP 429 / `tenant_monthly_limit_exceeded`，人工升级后立即恢复。
+
+平台管理员首次创建后可从部署环境移除 `PLATFORM_ADMIN_EMAIL` 和 `PLATFORM_ADMIN_PASSWORD`；两项必须一起移除。已有管理员不会因启动变量重新设置密码，日常改密使用平台的「修改密码」，并撤销其全部会话。`SESSION_SECRET`、`CRYPTO_SECRET` 必须长期保存，所有应用副本使用相同值。
+
+也可用 Go 直接启动（Go 版本以 `go.mod` 为准，前端用 Bun）。先设置上述平台与密钥环境变量，再执行：
+
+```bash
+cd web
+bun install --frozen-lockfile
+bun run build:check
+cd ..
+go build -o /tmp/new-api-saas .
+# SQLite 示例；数据库目录必须已存在并可写
+mkdir -p data
+SQL_DSN=local SQLITE_PATH="$PWD/data/saas.db" /tmp/new-api-saas
+```
+
+MySQL 使用 `SQL_DSN='用户:密码@tcp(主机:3306)/数据库?charset=utf8mb4&parseTime=true'`，PostgreSQL 使用 `SQL_DSN='postgres://用户:密码@主机:5432/数据库?sslmode=require'`；凭据从部署环境提供。可单独设置 `LOG_SQL_DSN` 为 SQLite/MySQL/PostgreSQL 或 `clickhouse://用户:密码@主机:9000/日志库`，未设置时日志使用主库。连接字符串中的特殊字符须按相应驱动规则编码；Compose 示例生成十六进制密码以免产生 URI 转义问题。
+
+升级独立 New API 数据库前，停止旧服务并备份主库、独立日志库和文件目录。首次启动会迁移业务表的 `tenant_id`、复合唯一键与日志，将旧数据归入 `/t/imported/`，保留原空间账号和密码，并将其关联到首个平台管理员。旧站点地址会更新到新路径，OAuth 与支付回调需在外部服务同步调整；旧浏览器会话需重新登录。迁移期间只启动一个实例；遇到未知自定义唯一索引会拒绝自动迁移，须先显式补齐该索引的租户维度。迁移成功后再次启动验证幂等，再加入其他副本。Lite 会显示强制平台页脚，旧自定义页脚数据保留，开通 Pro 后按能力矩阵使用。
+
+水平扩容时，各副本共享数据库、Redis、密钥与公共 Origin；文件制品使用共享文件目录或配置对象存储。每个副本仍是服务全部租户的单进程，不需要为单个空间启动服务。设置和缓存通过共享调度器定期同步，套餐与用量限制由数据库原子检查。新旧数据库迁移及隔离验收命令、实际版本见 [SAAS_STATUS.md](docs/SAAS_STATUS.md)。
+
+以下保留上游 New API 的部署和功能资料；本分支的 SaaS 启动与平台管理按上节执行。
+
 ### 使用 Docker Compose（推荐）
 
 ```bash

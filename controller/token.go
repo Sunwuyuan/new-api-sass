@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"fmt"
 	"net/http"
@@ -42,9 +44,9 @@ type tokenResponse struct {
 	AutoGroups []string `json:"auto_groups"`
 }
 
-func maxTokenQuota() int {
+func maxTokenQuota(tenantCtx context.Context) int {
 	quota, err := common.WalletQuotaFromDecimalStrict(
-		decimal.NewFromInt(1_000_000_000).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+		decimal.NewFromInt(1_000_000_000).Mul(decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)),
 	)
 	if err != nil {
 		return common.MaxWalletQuota
@@ -84,7 +86,7 @@ func getTokenRequestUserGroup(c *gin.Context) (string, error) {
 	if userGroup := c.GetString("group"); userGroup != "" {
 		return userGroup, nil
 	}
-	return model.GetUserGroup(c.GetInt("id"), false)
+	return model.GetUserGroup(c.Request.Context(), c.GetInt("id"), false)
 }
 
 func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) bool {
@@ -96,7 +98,7 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 		return true
 	}
 
-	maxCount := setting.GetMaxTokenAutoGroups()
+	maxCount := setting.GetMaxTokenAutoGroups(c.Request.Context())
 	if len(groups) > maxCount {
 		common.ApiErrorI18n(c, i18n.MsgTokenAutoGroupsTooMany, map[string]any{"Max": maxCount})
 		return false
@@ -114,7 +116,7 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 			return false
 		}
 		seen[group] = struct{}{}
-		if !service.IsUserSelectableGroup(userGroup, group) {
+		if !service.IsUserSelectableGroup(c.Request.Context(), userGroup, group) {
 			common.ApiErrorI18n(c, i18n.MsgTokenAutoGroupsInvalid, map[string]any{"Group": group})
 			return false
 		}
@@ -130,12 +132,12 @@ func setTokenAutoGroups(c *gin.Context, token *model.Token, groups []string) boo
 func GetAllTokens(c *gin.Context) {
 	userId := c.GetInt("id")
 	pageInfo := common.GetPageQuery(c)
-	tokens, err := model.GetAllUserTokens(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	tokens, err := model.GetAllUserTokens(c.Request.Context(), userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	total, _ := model.CountUserTokens(userId)
+	total, _ := model.CountUserTokens(c.Request.Context(), userId)
 	pageInfo.SetTotal(int(total))
 	pageInfo.SetItems(buildMaskedTokenResponses(tokens))
 	common.ApiSuccess(c, pageInfo)
@@ -148,7 +150,7 @@ func SearchTokens(c *gin.Context) {
 
 	pageInfo := common.GetPageQuery(c)
 
-	tokens, total, err := model.SearchUserTokens(userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	tokens, total, err := model.SearchUserTokens(c.Request.Context(), userId, keyword, token, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -165,7 +167,7 @@ func GetToken(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token, err := model.GetTokenByIds(id, userId)
+	token, err := model.GetTokenByIds(c.Request.Context(), id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -180,8 +182,8 @@ func GetTokenAutoGroups(c *gin.Context) {
 		return
 	}
 	common.ApiSuccess(c, gin.H{
-		"groups":    service.GetUserAutoGroup(userGroup),
-		"max_count": setting.GetMaxTokenAutoGroups(),
+		"groups":    service.GetUserAutoGroup(c.Request.Context(), userGroup),
+		"max_count": setting.GetMaxTokenAutoGroups(c.Request.Context()),
 	})
 }
 
@@ -192,7 +194,7 @@ func GetTokenKey(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	token, err := model.GetTokenByIds(id, userId)
+	token, err := model.GetTokenByIds(c.Request.Context(), id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -208,7 +210,7 @@ func GetTokenKey(c *gin.Context) {
 func GetTokenStatus(c *gin.Context) {
 	tokenId := c.GetInt("token_id")
 	userId := c.GetInt("id")
-	token, err := model.GetTokenByIds(tokenId, userId)
+	token, err := model.GetTokenByIds(c.Request.Context(), tokenId, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -246,7 +248,7 @@ func GetTokenUsage(c *gin.Context) {
 	}
 	tokenKey := parts[1]
 
-	token, err := model.GetTokenByKey(strings.TrimPrefix(tokenKey, "sk-"), false)
+	token, err := model.GetTokenByKey(c.Request.Context(), strings.TrimPrefix(tokenKey, "sk-"), false)
 	if err != nil {
 		common.SysError("failed to get token by key: " + err.Error())
 		common.ApiErrorI18n(c, i18n.MsgTokenGetInfoFailed)
@@ -295,15 +297,15 @@ func AddToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := maxTokenQuota()
+		maxQuotaValue := maxTokenQuota(c.Request.Context())
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return
 		}
 	}
 	// 检查用户令牌数量是否已达上限
-	maxTokens := operation_setting.GetMaxUserTokens()
-	count, err := model.CountUserTokens(c.GetInt("id"))
+	maxTokens := operation_setting.GetMaxUserTokens(c.Request.Context())
+	count, err := model.CountUserTokens(c.Request.Context(), c.GetInt("id"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -345,7 +347,7 @@ func AddToken(c *gin.Context) {
 		CrossGroupRetry:    token.CrossGroupRetry,
 		AutoGroups:         token.AutoGroups,
 	}
-	err = cleanToken.Insert()
+	err = cleanToken.Insert(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -361,14 +363,14 @@ func AddToken(c *gin.Context) {
 func DeleteToken(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
 	userId := c.GetInt("id")
-	token, err := model.GetTokenByIds(id, userId)
+	token, err := model.GetTokenByIds(c.Request.Context(), id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	params := tokenAuditParams(c)
 	params["id"], params["name"] = token.Id, token.Name
-	err = token.Delete()
+	err = token.Delete(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -403,13 +405,13 @@ func UpdateToken(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaNegative)
 			return
 		}
-		maxQuotaValue := maxTokenQuota()
+		maxQuotaValue := maxTokenQuota(c.Request.Context())
 		if token.RemainQuota > maxQuotaValue {
 			common.ApiErrorI18n(c, i18n.MsgTokenQuotaExceedMax, map[string]any{"Max": maxQuotaValue})
 			return
 		}
 	}
-	cleanToken, err := model.GetTokenByIds(token.Id, userId)
+	cleanToken, err := model.GetTokenByIds(c.Request.Context(), token.Id, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -448,7 +450,7 @@ func UpdateToken(c *gin.Context) {
 			}
 		}
 	}
-	err = cleanToken.Update()
+	err = cleanToken.Update(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -504,7 +506,7 @@ func DeleteTokenBatch(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
-	count, err := model.BatchDeleteTokens(tokenBatch.Ids, userId)
+	count, err := model.BatchDeleteTokens(c.Request.Context(), tokenBatch.Ids, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -534,7 +536,7 @@ func GetTokenKeysBatch(c *gin.Context) {
 		return
 	}
 	userId := c.GetInt("id")
-	tokens, err := model.GetTokenKeysByIds(tokenBatch.Ids, userId)
+	tokens, err := model.GetTokenKeysByIds(c.Request.Context(), tokenBatch.Ids, userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/rand"
 	"encoding/base64"
@@ -43,8 +45,9 @@ var (
 // AuthFlow stores one-time, short-lived state for authentication ceremonies.
 // TokenHash is an HMAC of the opaque token; the token itself is never persisted.
 type AuthFlow struct {
+	TenantID   int64      `json:"-" gorm:"not null;index;uniqueIndex:tenant_auth_flow_token_hash,priority:1"`
 	Id         int64      `json:"id" gorm:"primaryKey"`
-	TokenHash  string     `json:"-" gorm:"type:char(64);not null;uniqueIndex"`
+	TokenHash  string     `json:"-" gorm:"type:char(64);not null;uniqueIndex:tenant_auth_flow_token_hash"`
 	Purpose    string     `json:"purpose" gorm:"type:varchar(32);not null;index:idx_auth_flow_purpose_expiry"`
 	Provider   string     `json:"provider,omitempty" gorm:"type:varchar(64)"`
 	Intent     string     `json:"intent,omitempty" gorm:"type:varchar(16)"`
@@ -140,8 +143,8 @@ func authFlowTokenHash(token string) string {
 	return common.GenerateHMACWithKey([]byte("auth-flow-v1:"+common.SessionSecret), token)
 }
 
-func CreateAuthFlow(input AuthFlowCreate) (string, *AuthFlow, error) {
-	return createAuthFlowWithTx(DB, input)
+func CreateAuthFlow(tenantCtx context.Context, input AuthFlowCreate) (string, *AuthFlow, error) {
+	return createAuthFlowWithTx(DB.WithContext(tenantCtx), input)
 }
 
 func createAuthFlowWithTx(tx *gorm.DB, input AuthFlowCreate) (string, *AuthFlow, error) {
@@ -172,8 +175,8 @@ func createAuthFlowWithTx(tx *gorm.DB, input AuthFlowCreate) (string, *AuthFlow,
 // ClaimExternalAuthAssertion records a signed provider assertion as consumed.
 // The assertion is HMACed before storage and the unique token_hash index makes
 // replay rejection atomic on SQLite, MySQL and PostgreSQL.
-func ClaimExternalAuthAssertion(purpose, assertion string, expiresAt time.Time) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
+func ClaimExternalAuthAssertion(tenantCtx context.Context, purpose, assertion string, expiresAt time.Time) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		return ClaimExternalAuthAssertionWithTx(tx, purpose, assertion, expiresAt)
 	})
 }
@@ -195,7 +198,7 @@ func ClaimExternalAuthAssertionWithTx(tx *gorm.DB, purpose, assertion string, ex
 		ConsumedAt: &now,
 	}
 	result := tx.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "token_hash"}},
+		Columns:   []clause.Column{{Name: "tenant_id"}, {Name: "token_hash"}},
 		DoNothing: true,
 	}).Create(&flow)
 	if result.Error != nil {
@@ -209,12 +212,12 @@ func ClaimExternalAuthAssertionWithTx(tx *gorm.DB, purpose, assertion string, ex
 
 // GetAuthFlow validates a flow without consuming it. Callers must still use
 // ConsumeAuthFlow with all identity-bound fields before performing the action.
-func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
+func GetAuthFlow(tenantCtx context.Context, token string, match AuthFlowMatch) (*AuthFlow, error) {
 	if token == "" || match.Purpose == "" {
 		return nil, ErrAuthFlowInvalid
 	}
 	var flow AuthFlow
-	if err := applyAuthFlowMatch(DB, token, match).First(&flow).Error; err != nil {
+	if err := applyAuthFlowMatch(DB.WithContext(tenantCtx), token, match).First(&flow).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrAuthFlowInvalid
 		}
@@ -231,18 +234,18 @@ func GetAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
 
 // ConsumeAuthFlow atomically validates and consumes a flow. Optional match
 // fields are enforced when non-zero so tokens cannot cross purposes or users.
-func ConsumeAuthFlow(token string, match AuthFlowMatch) (*AuthFlow, error) {
-	return ConsumeAuthFlowWithAction(token, match, nil)
+func ConsumeAuthFlow(tenantCtx context.Context, token string, match AuthFlowMatch) (*AuthFlow, error) {
+	return ConsumeAuthFlowWithAction(tenantCtx, token, match, nil)
 }
 
 // ConsumeAuthFlowWithAction consumes a flow and runs action in the same
 // database transaction. An action failure rolls the consumption back.
-func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx *gorm.DB, flow *AuthFlow) error) (*AuthFlow, error) {
+func ConsumeAuthFlowWithAction(tenantCtx context.Context, token string, match AuthFlowMatch, action func(tx *gorm.DB, flow *AuthFlow) error) (*AuthFlow, error) {
 	if token == "" || match.Purpose == "" {
 		return nil, ErrAuthFlowInvalid
 	}
 	var consumed AuthFlow
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		// Claim with the first write, rather than upgrading a prior read lock.
 		// SQLite cannot reliably upgrade two concurrent deferred read transactions.
 		now := time.Now()
@@ -281,8 +284,8 @@ func ConsumeAuthFlowWithAction(token string, match AuthFlowMatch, action func(tx
 	return &consumed, nil
 }
 
-func DeleteExpiredAuthFlows(now time.Time) error {
+func DeleteExpiredAuthFlows(tenantCtx context.Context, now time.Time) error {
 	cutoff := now.Add(-AuthFlowDefaultCleanupRetention)
-	return DB.Where("expires_at < ? OR (consumed_at IS NOT NULL AND consumed_at < ?)", cutoff, cutoff).
+	return DB.WithContext(tenantCtx).Where("expires_at < ? OR (consumed_at IS NOT NULL AND consumed_at < ?)", cutoff, cutoff).
 		Delete(&AuthFlow{}).Error
 }

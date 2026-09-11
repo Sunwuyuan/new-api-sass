@@ -3,6 +3,7 @@ package controller
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/stretchr/testify/require"
@@ -10,7 +11,7 @@ import (
 
 func confirmPaymentComplianceForTest(t *testing.T) {
 	t.Helper()
-	paymentSetting := operation_setting.GetPaymentSetting()
+	paymentSetting := operation_setting.GetPaymentSetting(testtenant.Context())
 	originalConfirmed := paymentSetting.ComplianceConfirmed
 	originalTermsVersion := paymentSetting.ComplianceTermsVersion
 	t.Cleanup(func() {
@@ -23,147 +24,147 @@ func confirmPaymentComplianceForTest(t *testing.T) {
 
 func TestStripeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
-	originalAPISecret := setting.StripeApiSecret
-	originalWebhookSecret := setting.StripeWebhookSecret
-	originalPriceID := setting.StripePriceId
+	originalAPISecret := setting.TenantState(testtenant.Context()).StripeApiSecret
+	originalWebhookSecret := setting.TenantState(testtenant.Context()).StripeWebhookSecret
+	originalPriceID := setting.TenantState(testtenant.Context()).StripePriceId
 	t.Cleanup(func() {
-		setting.StripeApiSecret = originalAPISecret
-		setting.StripeWebhookSecret = originalWebhookSecret
-		setting.StripePriceId = originalPriceID
+		setting.TenantState(testtenant.Context()).StripeApiSecret = originalAPISecret
+		setting.TenantState(testtenant.Context()).StripeWebhookSecret = originalWebhookSecret
+		setting.TenantState(testtenant.Context()).StripePriceId = originalPriceID
 	})
 
-	setting.StripeWebhookSecret = ""
-	setting.StripeApiSecret = "sk_test_123"
-	setting.StripePriceId = "price_123"
-	require.False(t, isStripeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).StripeWebhookSecret = ""
+	setting.TenantState(testtenant.Context()).StripeApiSecret = "sk_test_123"
+	setting.TenantState(testtenant.Context()).StripePriceId = "price_123"
+	require.False(t, isStripeWebhookEnabled(testtenant.Context()))
 
-	setting.StripeWebhookSecret = "whsec_test"
-	require.True(t, isStripeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).StripeWebhookSecret = "whsec_test"
+	require.True(t, isStripeWebhookEnabled(testtenant.Context()))
 
-	setting.StripePriceId = ""
-	require.False(t, isStripeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).StripePriceId = ""
+	require.False(t, isStripeWebhookEnabled(testtenant.Context()))
 }
 
 func TestCreemWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
-	originalAPIKey := setting.CreemApiKey
-	originalProducts := setting.CreemProducts
-	originalWebhookSecret := setting.CreemWebhookSecret
+	originalAPIKey := setting.TenantState(testtenant.Context()).CreemApiKey
+	originalProducts := setting.TenantState(testtenant.Context()).CreemProducts
+	originalWebhookSecret := setting.TenantState(testtenant.Context()).CreemWebhookSecret
 	t.Cleanup(func() {
-		setting.CreemApiKey = originalAPIKey
-		setting.CreemProducts = originalProducts
-		setting.CreemWebhookSecret = originalWebhookSecret
+		setting.TenantState(testtenant.Context()).CreemApiKey = originalAPIKey
+		setting.TenantState(testtenant.Context()).CreemProducts = originalProducts
+		setting.TenantState(testtenant.Context()).CreemWebhookSecret = originalWebhookSecret
 	})
 
-	setting.CreemWebhookSecret = ""
-	setting.CreemApiKey = "creem_api_key"
-	setting.CreemProducts = `[{"productId":"prod_123"}]`
-	require.False(t, isCreemWebhookEnabled())
+	setting.TenantState(testtenant.Context()).CreemWebhookSecret = ""
+	setting.TenantState(testtenant.Context()).CreemApiKey = "creem_api_key"
+	setting.TenantState(testtenant.Context()).CreemProducts = `[{"productId":"prod_123"}]`
+	require.False(t, isCreemWebhookEnabled(testtenant.Context()))
 
-	setting.CreemWebhookSecret = "creem_secret"
-	require.True(t, isCreemWebhookEnabled())
+	setting.TenantState(testtenant.Context()).CreemWebhookSecret = "creem_secret"
+	require.True(t, isCreemWebhookEnabled(testtenant.Context()))
 
-	setting.CreemProducts = "[]"
-	require.False(t, isCreemWebhookEnabled())
+	setting.TenantState(testtenant.Context()).CreemProducts = "[]"
+	require.False(t, isCreemWebhookEnabled(testtenant.Context()))
 }
 
 func TestWaffoWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
-	originalEnabled := setting.WaffoEnabled
-	originalSandbox := setting.WaffoSandbox
-	originalAPIKey := setting.WaffoApiKey
-	originalPrivateKey := setting.WaffoPrivateKey
-	originalPublicCert := setting.WaffoPublicCert
-	originalSandboxAPIKey := setting.WaffoSandboxApiKey
-	originalSandboxPrivateKey := setting.WaffoSandboxPrivateKey
-	originalSandboxPublicCert := setting.WaffoSandboxPublicCert
+	originalEnabled := setting.TenantState(testtenant.Context()).WaffoEnabled
+	originalSandbox := setting.TenantState(testtenant.Context()).WaffoSandbox
+	originalAPIKey := setting.TenantState(testtenant.Context()).WaffoApiKey
+	originalPrivateKey := setting.TenantState(testtenant.Context()).WaffoPrivateKey
+	originalPublicCert := setting.TenantState(testtenant.Context()).WaffoPublicCert
+	originalSandboxAPIKey := setting.TenantState(testtenant.Context()).WaffoSandboxApiKey
+	originalSandboxPrivateKey := setting.TenantState(testtenant.Context()).WaffoSandboxPrivateKey
+	originalSandboxPublicCert := setting.TenantState(testtenant.Context()).WaffoSandboxPublicCert
 	t.Cleanup(func() {
-		setting.WaffoEnabled = originalEnabled
-		setting.WaffoSandbox = originalSandbox
-		setting.WaffoApiKey = originalAPIKey
-		setting.WaffoPrivateKey = originalPrivateKey
-		setting.WaffoPublicCert = originalPublicCert
-		setting.WaffoSandboxApiKey = originalSandboxAPIKey
-		setting.WaffoSandboxPrivateKey = originalSandboxPrivateKey
-		setting.WaffoSandboxPublicCert = originalSandboxPublicCert
+		setting.TenantState(testtenant.Context()).WaffoEnabled = originalEnabled
+		setting.TenantState(testtenant.Context()).WaffoSandbox = originalSandbox
+		setting.TenantState(testtenant.Context()).WaffoApiKey = originalAPIKey
+		setting.TenantState(testtenant.Context()).WaffoPrivateKey = originalPrivateKey
+		setting.TenantState(testtenant.Context()).WaffoPublicCert = originalPublicCert
+		setting.TenantState(testtenant.Context()).WaffoSandboxApiKey = originalSandboxAPIKey
+		setting.TenantState(testtenant.Context()).WaffoSandboxPrivateKey = originalSandboxPrivateKey
+		setting.TenantState(testtenant.Context()).WaffoSandboxPublicCert = originalSandboxPublicCert
 	})
 
-	setting.WaffoEnabled = true
-	setting.WaffoSandbox = false
-	setting.WaffoApiKey = ""
-	setting.WaffoPrivateKey = "private"
-	setting.WaffoPublicCert = "public"
-	require.False(t, isWaffoWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoEnabled = true
+	setting.TenantState(testtenant.Context()).WaffoSandbox = false
+	setting.TenantState(testtenant.Context()).WaffoApiKey = ""
+	setting.TenantState(testtenant.Context()).WaffoPrivateKey = "private"
+	setting.TenantState(testtenant.Context()).WaffoPublicCert = "public"
+	require.False(t, isWaffoWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoApiKey = "api"
-	require.True(t, isWaffoWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoApiKey = "api"
+	require.True(t, isWaffoWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoEnabled = false
-	require.False(t, isWaffoWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoEnabled = false
+	require.False(t, isWaffoWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoEnabled = true
-	setting.WaffoSandbox = true
-	setting.WaffoSandboxApiKey = ""
-	setting.WaffoSandboxPrivateKey = "sandbox_private"
-	setting.WaffoSandboxPublicCert = "sandbox_public"
-	require.False(t, isWaffoWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoEnabled = true
+	setting.TenantState(testtenant.Context()).WaffoSandbox = true
+	setting.TenantState(testtenant.Context()).WaffoSandboxApiKey = ""
+	setting.TenantState(testtenant.Context()).WaffoSandboxPrivateKey = "sandbox_private"
+	setting.TenantState(testtenant.Context()).WaffoSandboxPublicCert = "sandbox_public"
+	require.False(t, isWaffoWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoSandboxApiKey = "sandbox_api"
-	require.True(t, isWaffoWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoSandboxApiKey = "sandbox_api"
+	require.True(t, isWaffoWebhookEnabled(testtenant.Context()))
 }
 
 func TestWaffoPancakeWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
-	originalMerchantID := setting.WaffoPancakeMerchantID
-	originalPrivateKey := setting.WaffoPancakePrivateKey
-	originalProductID := setting.WaffoPancakeProductID
+	originalMerchantID := setting.TenantState(testtenant.Context()).WaffoPancakeMerchantID
+	originalPrivateKey := setting.TenantState(testtenant.Context()).WaffoPancakePrivateKey
+	originalProductID := setting.TenantState(testtenant.Context()).WaffoPancakeProductID
 	t.Cleanup(func() {
-		setting.WaffoPancakeMerchantID = originalMerchantID
-		setting.WaffoPancakePrivateKey = originalPrivateKey
-		setting.WaffoPancakeProductID = originalProductID
+		setting.TenantState(testtenant.Context()).WaffoPancakeMerchantID = originalMerchantID
+		setting.TenantState(testtenant.Context()).WaffoPancakePrivateKey = originalPrivateKey
+		setting.TenantState(testtenant.Context()).WaffoPancakeProductID = originalProductID
 	})
 
 	// Presence of all three credentials enables the gateway. Webhook public
 	// keys are bundled in the SDK and there is no separate Enabled toggle —
 	// clear any of the three fields to disable.
-	setting.WaffoPancakeMerchantID = ""
-	setting.WaffoPancakePrivateKey = "private"
-	setting.WaffoPancakeProductID = "product"
-	require.False(t, isWaffoPancakeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoPancakeMerchantID = ""
+	setting.TenantState(testtenant.Context()).WaffoPancakePrivateKey = "private"
+	setting.TenantState(testtenant.Context()).WaffoPancakeProductID = "product"
+	require.False(t, isWaffoPancakeWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoPancakeMerchantID = "merchant"
-	require.True(t, isWaffoPancakeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoPancakeMerchantID = "merchant"
+	require.True(t, isWaffoPancakeWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoPancakeProductID = ""
-	require.False(t, isWaffoPancakeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoPancakeProductID = ""
+	require.False(t, isWaffoPancakeWebhookEnabled(testtenant.Context()))
 
-	setting.WaffoPancakeProductID = "product"
-	setting.WaffoPancakePrivateKey = ""
-	require.False(t, isWaffoPancakeWebhookEnabled())
+	setting.TenantState(testtenant.Context()).WaffoPancakeProductID = "product"
+	setting.TenantState(testtenant.Context()).WaffoPancakePrivateKey = ""
+	require.False(t, isWaffoPancakeWebhookEnabled(testtenant.Context()))
 }
 
 func TestEpayWebhookEnabledRequiresTopUpAndWebhookConfig(t *testing.T) {
 	confirmPaymentComplianceForTest(t)
-	originalPayAddress := operation_setting.PayAddress
-	originalEpayID := operation_setting.EpayId
-	originalEpayKey := operation_setting.EpayKey
-	originalPayMethods := operation_setting.PayMethods
+	originalPayAddress := operation_setting.TenantState(testtenant.Context()).PayAddress
+	originalEpayID := operation_setting.TenantState(testtenant.Context()).EpayId
+	originalEpayKey := operation_setting.TenantState(testtenant.Context()).EpayKey
+	originalPayMethods := operation_setting.TenantState(testtenant.Context()).PayMethods
 	t.Cleanup(func() {
-		operation_setting.PayAddress = originalPayAddress
-		operation_setting.EpayId = originalEpayID
-		operation_setting.EpayKey = originalEpayKey
-		operation_setting.PayMethods = originalPayMethods
+		operation_setting.TenantState(testtenant.Context()).PayAddress = originalPayAddress
+		operation_setting.TenantState(testtenant.Context()).EpayId = originalEpayID
+		operation_setting.TenantState(testtenant.Context()).EpayKey = originalEpayKey
+		operation_setting.TenantState(testtenant.Context()).PayMethods = originalPayMethods
 	})
 
-	operation_setting.PayAddress = "https://pay.example.com"
-	operation_setting.EpayId = "epay_id"
-	operation_setting.EpayKey = ""
-	operation_setting.PayMethods = []map[string]string{{"type": "alipay"}}
-	require.False(t, isEpayWebhookEnabled())
+	operation_setting.TenantState(testtenant.Context()).PayAddress = "https://pay.example.com"
+	operation_setting.TenantState(testtenant.Context()).EpayId = "epay_id"
+	operation_setting.TenantState(testtenant.Context()).EpayKey = ""
+	operation_setting.TenantState(testtenant.Context()).PayMethods = []map[string]string{{"type": "alipay"}}
+	require.False(t, isEpayWebhookEnabled(testtenant.Context()))
 
-	operation_setting.EpayKey = "epay_key"
-	require.True(t, isEpayWebhookEnabled())
+	operation_setting.TenantState(testtenant.Context()).EpayKey = "epay_key"
+	require.True(t, isEpayWebhookEnabled(testtenant.Context()))
 
-	operation_setting.PayMethods = nil
-	require.False(t, isEpayWebhookEnabled())
+	operation_setting.TenantState(testtenant.Context()).PayMethods = nil
+	require.False(t, isEpayWebhookEnabled(testtenant.Context()))
 }

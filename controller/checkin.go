@@ -14,7 +14,7 @@ import (
 
 // GetCheckinStatus 获取用户签到状态和历史记录
 func GetCheckinStatus(c *gin.Context) {
-	setting := operation_setting.GetCheckinSetting()
+	setting := operation_setting.GetCheckinSetting(c.Request.Context())
 	if !setting.Enabled {
 		common.ApiErrorMsg(c, "签到功能未启用")
 		return
@@ -23,7 +23,7 @@ func GetCheckinStatus(c *gin.Context) {
 	// 获取月份参数，默认为当前月份
 	month := c.DefaultQuery("month", time.Now().Format("2006-01"))
 
-	stats, err := model.GetUserCheckinStats(userId, month)
+	stats, err := model.GetUserCheckinStats(c.Request.Context(), userId, month)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -45,7 +45,7 @@ func GetCheckinStatus(c *gin.Context) {
 
 // DoCheckin 执行用户签到
 func DoCheckin(c *gin.Context) {
-	setting := operation_setting.GetCheckinSetting()
+	setting := operation_setting.GetCheckinSetting(c.Request.Context())
 	if !setting.Enabled {
 		common.ApiErrorMsg(c, "签到功能未启用")
 		return
@@ -53,7 +53,7 @@ func DoCheckin(c *gin.Context) {
 
 	userId := c.GetInt("id")
 
-	checkin, err := model.UserCheckin(userId)
+	checkin, err := model.UserCheckin(c.Request.Context(), userId)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
@@ -61,7 +61,7 @@ func DoCheckin(c *gin.Context) {
 		})
 		return
 	}
-	model.RecordLog(userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(checkin.QuotaAwarded)))
+	model.RecordLog(c.Request.Context(), userId, model.LogTypeSystem, fmt.Sprintf("用户签到，获得额度 %s", logger.LogQuota(c.Request.Context(), checkin.QuotaAwarded)))
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "签到成功",

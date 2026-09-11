@@ -7,15 +7,15 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/gin-gonic/gin"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateOptionRejectsRetiredFrontendTheme(t *testing.T) {
 	response := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(response)
-	context.Request = httptest.NewRequest(
+	context, _ := testtenant.CreateTestContext(response)
+	context.Request = testtenant.NewRequest(
 		http.MethodPut,
 		"/api/option/",
 		strings.NewReader(`{"key":"theme.frontend","value":"classic"}`),
@@ -28,12 +28,12 @@ func TestUpdateOptionRejectsRetiredFrontendTheme(t *testing.T) {
 }
 
 func TestGetStatusAdvertisesDefaultDashboard(t *testing.T) {
-	previousMap := common.OptionMap
-	common.OptionMap = map[string]string{}
-	t.Cleanup(func() { common.OptionMap = previousMap })
+	previousMap := common.TenantState(testtenant.Context()).OptionMap
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).OptionMap = previousMap })
 	response := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(response)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+	context, _ := testtenant.CreateTestContext(response)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/status", nil)
 
 	GetStatus(context)
 

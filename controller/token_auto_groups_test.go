@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -18,19 +19,19 @@ import (
 
 func configureTokenAutoGroupsTest(t *testing.T, maxCount string, autoGroups string) {
 	t.Helper()
-	originalMax := setting.GetMaxTokenAutoGroups()
-	originalAutoGroups := setting.AutoGroups2JsonString()
-	originalUsableGroups := setting.UserUsableGroups2JSONString()
-	originalRatios := ratio_setting.GroupRatio2JSONString()
-	require.NoError(t, setting.UpdateMaxTokenAutoGroups(maxCount))
-	require.NoError(t, setting.UpdateAutoGroupsByJsonString(autoGroups))
-	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+	originalMax := setting.GetMaxTokenAutoGroups(testtenant.Context())
+	originalAutoGroups := setting.AutoGroups2JsonString(testtenant.Context())
+	originalUsableGroups := setting.UserUsableGroups2JSONString(testtenant.Context())
+	originalRatios := ratio_setting.GroupRatio2JSONString(testtenant.Context())
+	require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), maxCount))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), autoGroups))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), `{"default":"Default","vip":"VIP"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), `{"default":1,"vip":1}`))
 	t.Cleanup(func() {
-		require.NoError(t, setting.UpdateMaxTokenAutoGroups(stringInt(originalMax)))
-		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
-		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+		require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), stringInt(originalMax)))
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), originalAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), originalUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), originalRatios))
 	})
 }
 

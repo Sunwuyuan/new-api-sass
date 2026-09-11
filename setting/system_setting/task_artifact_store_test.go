@@ -3,6 +3,7 @@ package system_setting
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,8 +19,8 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 		S3Prefix:            "tasks/v1/",
 		S3PresignTTLSeconds: 900,
 	}
-	require.NoError(t, ValidateTaskArtifactStoreConfig(valid))
-	require.NoError(t, ValidateTaskArtifactStoreConfig(TaskArtifactStoreConfig{
+	require.NoError(t, ValidateTaskArtifactStoreConfig(testtenant.Context(), valid))
+	require.NoError(t, ValidateTaskArtifactStoreConfig(testtenant.Context(), TaskArtifactStoreConfig{
 		Mode:                TaskArtifactStoreModeUpstream,
 		S3PresignTTLSeconds: DefaultTaskArtifactStorePresignTTLSeconds,
 	}))
@@ -49,7 +50,7 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			config := valid
 			testCase.mutate(&config)
-			assert.ErrorContains(t, ValidateTaskArtifactStoreConfig(config), testCase.match)
+			assert.ErrorContains(t, ValidateTaskArtifactStoreConfig(testtenant.Context(), config), testCase.match)
 		})
 	}
 }
@@ -57,7 +58,7 @@ func TestValidateTaskArtifactStoreConfig(t *testing.T) {
 func TestLoadTaskArtifactStoreConfigFallsBackToUpstream(t *testing.T) {
 	t.Setenv(TaskArtifactStoreModeEnv, "filesystem")
 	t.Setenv(TaskArtifactStoreS3PresignTTLEnv, "900")
-	config := LoadTaskArtifactStoreConfig()
+	config := LoadTaskArtifactStoreConfig(testtenant.Context())
 	assert.Equal(t, TaskArtifactStoreModeUpstream, config.Mode)
 
 	t.Setenv(TaskArtifactStoreModeEnv, TaskArtifactStoreModeS3)
@@ -68,7 +69,7 @@ func TestLoadTaskArtifactStoreConfigFallsBackToUpstream(t *testing.T) {
 	t.Setenv(TaskArtifactStoreS3SecretKeyEnv, "secret-key")
 	t.Setenv(TaskArtifactStoreS3PrefixEnv, "tasks/v1")
 	t.Setenv(TaskArtifactStoreS3PresignTTLEnv, "600")
-	config = LoadTaskArtifactStoreConfig()
+	config = LoadTaskArtifactStoreConfig(testtenant.Context())
 
 	assert.Equal(t, TaskArtifactStoreModeUpstream, config.Mode)
 	assert.Equal(t, "https://objects.example.com", config.S3Endpoint)

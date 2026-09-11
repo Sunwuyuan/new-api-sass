@@ -36,18 +36,18 @@ func filterPricingByUsableGroups(pricing []model.Pricing, usableGroup map[string
 }
 
 func GetPricing(c *gin.Context) {
-	pricing := model.GetPricing()
+	pricing := model.GetPricing(c.Request.Context())
 	userId, exists := c.Get("id")
 	usableGroup := map[string]string{}
 	groupRatio := map[string]float64{}
-	maps.Copy(groupRatio, ratio_setting.GetGroupRatioCopy())
+	maps.Copy(groupRatio, ratio_setting.GetGroupRatioCopy(c.Request.Context()))
 	var group string
 	if exists {
-		user, err := model.GetUserCache(userId.(int))
+		user, err := model.GetUserCache(c.Request.Context(), userId.(int))
 		if err == nil {
 			group = user.Group
 			for g := range groupRatio {
-				ratio, ok := ratio_setting.GetGroupGroupRatio(group, g)
+				ratio, ok := ratio_setting.GetGroupGroupRatio(c.Request.Context(), group, g)
 				if ok {
 					groupRatio[g] = ratio
 				}
@@ -55,10 +55,10 @@ func GetPricing(c *gin.Context) {
 		}
 	}
 
-	usableGroup = service.GetUserUsableGroups(group)
+	usableGroup = service.GetUserUsableGroups(c.Request.Context(), group)
 	pricing = filterPricingByUsableGroups(pricing, usableGroup)
 	// check groupRatio contains usableGroup
-	for group := range ratio_setting.GetGroupRatioCopy() {
+	for group := range ratio_setting.GetGroupRatioCopy(c.Request.Context()) {
 		if _, ok := usableGroup[group]; !ok {
 			delete(groupRatio, group)
 		}
@@ -67,18 +67,18 @@ func GetPricing(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"success":            true,
 		"data":               pricing,
-		"vendors":            model.GetVendors(),
+		"vendors":            model.GetVendors(c.Request.Context()),
 		"group_ratio":        groupRatio,
 		"usable_group":       usableGroup,
-		"supported_endpoint": model.GetSupportedEndpointMap(),
-		"auto_groups":        service.GetUserAutoGroup(group),
+		"supported_endpoint": model.GetSupportedEndpointMap(c.Request.Context()),
+		"auto_groups":        service.GetUserAutoGroup(c.Request.Context(), group),
 		"pricing_version":    "a42d372ccf0b5dd13ecf71203521f9d2",
 	})
 }
 
 func ResetModelRatio(c *gin.Context) {
 	defaultStr := ratio_setting.DefaultModelRatio2JSONString()
-	err := model.UpdateOption("ModelRatio", defaultStr)
+	err := model.UpdateOption(c.Request.Context(), "ModelRatio", defaultStr)
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,
@@ -86,7 +86,7 @@ func ResetModelRatio(c *gin.Context) {
 		})
 		return
 	}
-	err = ratio_setting.UpdateModelRatioByJSONString(defaultStr)
+	err = ratio_setting.UpdateModelRatioByJSONString(c.Request.Context(), defaultStr)
 	if err != nil {
 		c.JSON(200, gin.H{
 			"success": false,

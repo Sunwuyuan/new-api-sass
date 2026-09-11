@@ -1,5 +1,7 @@
 package ali
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -61,8 +63,8 @@ var syncModels = []string{
 	"wan2.6",
 }
 
-func isSyncImageModel(modelName string) bool {
-	return model_setting.IsSyncImageModel(modelName)
+func isSyncImageModel(tenantCtx context.Context, modelName string) bool {
+	return model_setting.IsSyncImageModel(tenantCtx, modelName)
 }
 
 func (a *Adaptor) ConvertGeminiRequest(*gin.Context, *relaycommon.RelayInfo, *dto.GeminiChatRequest) (any, error) {
@@ -110,7 +112,7 @@ func (a *Adaptor) GetRequestURL(info *relaycommon.RelayInfo) (string, error) {
 		case constant.RelayModeResponses:
 			fullRequestURL = fmt.Sprintf("%s/api/v2/apps/protocols/compatible-mode/v1/responses", info.ChannelBaseUrl)
 		case constant.RelayModeImagesGenerations:
-			if isSyncImageModel(info.UpstreamModelName) {
+			if isSyncImageModel(info.Context, info.UpstreamModelName) {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/multimodal-generation/generation", info.ChannelBaseUrl)
 			} else {
 				fullRequestURL = fmt.Sprintf("%s/api/v1/services/aigc/text2image/image-synthesis", info.ChannelBaseUrl)
@@ -143,7 +145,7 @@ func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *rel
 		req.Set("X-DashScope-Plugin", c.GetString("plugin"))
 	}
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.UpstreamModelName) {
+		if isSyncImageModel(c.Request.Context(), info.UpstreamModelName) {
 
 		} else {
 			req.Set("X-DashScope-Async", "enable")
@@ -183,7 +185,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 
 func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInfo, request dto.ImageRequest) (any, error) {
 	if info.RelayMode == constant.RelayModeImagesGenerations {
-		if isSyncImageModel(info.UpstreamModelName) {
+		if isSyncImageModel(c.Request.Context(), info.UpstreamModelName) {
 			a.IsSyncImageModel = true
 		}
 		aliRequest, err := oaiImage2AliImageRequest(info, request, a.IsSyncImageModel)
@@ -195,7 +197,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 		if isOldWanModel(info.UpstreamModelName) {
 			return oaiFormEdit2WanxImageEdit(c, info, request)
 		}
-		if isSyncImageModel(info.UpstreamModelName) {
+		if isSyncImageModel(c.Request.Context(), info.UpstreamModelName) {
 			if isWanModel(info.UpstreamModelName) {
 				a.IsSyncImageModel = false
 			} else {

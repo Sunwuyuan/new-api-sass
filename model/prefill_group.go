@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"database/sql/driver"
 	"encoding/json"
@@ -46,7 +48,7 @@ func (j *JSONValue) Scan(value any) error {
 		return nil
 	default:
 		// 其他类型尝试序列化为 JSON
-		b, err := json.Marshal(v)
+		b, err := common.Marshal(v)
 		if err != nil {
 			return err
 		}
@@ -76,6 +78,7 @@ func (j *JSONValue) UnmarshalJSON(data []byte) error {
 }
 
 type PrefillGroup struct {
+	TenantID    int64          `json:"-" gorm:"not null;index;uniqueIndex:uk_prefill_name,priority:1"`
 	Id          int            `json:"id"`
 	Name        string         `json:"name" gorm:"size:64;not null;uniqueIndex:uk_prefill_name,where:deleted_at IS NULL"`
 	Type        string         `json:"type" gorm:"size:32;index;not null"`
@@ -87,38 +90,38 @@ type PrefillGroup struct {
 }
 
 // Insert 新建组
-func (g *PrefillGroup) Insert() error {
+func (g *PrefillGroup) Insert(tenantCtx context.Context) error {
 	now := common.GetTimestamp()
 	g.CreatedTime = now
 	g.UpdatedTime = now
-	return DB.Create(g).Error
+	return DB.WithContext(tenantCtx).Create(g).Error
 }
 
 // IsPrefillGroupNameDuplicated 检查组名称是否重复（排除自身 ID）
-func IsPrefillGroupNameDuplicated(id int, name string) (bool, error) {
+func IsPrefillGroupNameDuplicated(tenantCtx context.Context, id int, name string) (bool, error) {
 	if name == "" {
 		return false, nil
 	}
 	var cnt int64
-	err := DB.Model(&PrefillGroup{}).Where("name = ? AND id <> ?", name, id).Count(&cnt).Error
+	err := DB.WithContext(tenantCtx).Model(&PrefillGroup{}).Where("name = ? AND id <> ?", name, id).Count(&cnt).Error
 	return cnt > 0, err
 }
 
 // Update 更新组
-func (g *PrefillGroup) Update() error {
+func (g *PrefillGroup) Update(tenantCtx context.Context) error {
 	g.UpdatedTime = common.GetTimestamp()
-	return DB.Save(g).Error
+	return DB.WithContext(tenantCtx).Save(g).Error
 }
 
 // DeleteByID 根据 ID 删除组
-func DeletePrefillGroupByID(id int) error {
-	return DB.Delete(&PrefillGroup{}, id).Error
+func DeletePrefillGroupByID(tenantCtx context.Context, id int) error {
+	return DB.WithContext(tenantCtx).Delete(&PrefillGroup{}, id).Error
 }
 
 // GetAllPrefillGroups 获取全部组，可按类型过滤（为空则返回全部）
-func GetAllPrefillGroups(groupType string) ([]*PrefillGroup, error) {
+func GetAllPrefillGroups(tenantCtx context.Context, groupType string) ([]*PrefillGroup, error) {
 	var groups []*PrefillGroup
-	query := DB.Model(&PrefillGroup{})
+	query := DB.WithContext(tenantCtx).Model(&PrefillGroup{})
 	if groupType != "" {
 		query = query.Where("type = ?", groupType)
 	}

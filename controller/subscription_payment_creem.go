@@ -41,7 +41,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		return
 	}
 
-	plan, err := model.GetSubscriptionPlanById(req.PlanId)
+	plan, err := model.GetSubscriptionPlanById(c.Request.Context(), req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -54,13 +54,13 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		common.ApiErrorMsg(c, "该套餐未配置 CreemProductId")
 		return
 	}
-	if setting.CreemWebhookSecret == "" && !setting.CreemTestMode {
+	if setting.TenantState(c.Request.Context()).CreemWebhookSecret == "" && !setting.TenantState(c.Request.Context()).CreemTestMode {
 		common.ApiErrorMsg(c, "Creem Webhook 未配置")
 		return
 	}
 
 	userId := c.GetInt("id")
-	user, err := model.GetUserById(userId, false)
+	user, err := model.GetUserById(c.Request.Context(), userId, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -71,7 +71,7 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountUserSubscriptionsByPlan(c.Request.Context(), userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -96,14 +96,14 @@ func SubscriptionRequestCreemPay(c *gin.Context) {
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	if err := order.Insert(); err != nil {
+	if err := order.Insert(c.Request.Context()); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
 
 	// Reuse Creem checkout generator by building a lightweight product reference.
 	currency := "USD"
-	switch operation_setting.GetGeneralSetting().QuotaDisplayType {
+	switch operation_setting.GetGeneralSetting(c.Request.Context()).QuotaDisplayType {
 	case operation_setting.QuotaDisplayTypeCNY:
 		currency = "CNY"
 	case operation_setting.QuotaDisplayTypeUSD:

@@ -40,28 +40,28 @@ type TelegramOAuthFlow struct {
 	RedirectURI  string `json:"redirect_uri"`
 }
 
-func TelegramConfigurationError() error {
-	if HasCustomProviderConflict("telegram") {
+func TelegramConfigurationError(tenantCtx context.Context) error {
+	if HasCustomProviderConflict(tenantCtx, "telegram") {
 		return ErrTelegramOAuthConflict
 	}
-	if !common.TelegramOAuthEnabled || !system_setting.GetTelegramSettings().IsConfigured() {
+	if !common.TenantState(tenantCtx).TelegramOAuthEnabled || !system_setting.GetTelegramSettings(tenantCtx).IsConfigured() {
 		return ErrTelegramOAuthNotConfigured
 	}
 	return nil
 }
 
-func NewTelegramOAuthFlow() (*TelegramOAuthFlow, error) {
-	if err := TelegramConfigurationError(); err != nil {
+func NewTelegramOAuthFlow(tenantCtx context.Context) (*TelegramOAuthFlow, error) {
+	if err := TelegramConfigurationError(tenantCtx); err != nil {
 		return nil, err
 	}
-	redirectURI := strings.TrimRight(system_setting.ServerAddress, "/") + "/oauth/telegram"
+	redirectURI := strings.TrimRight(system_setting.TenantState(tenantCtx).ServerAddress, "/") + "/oauth/telegram"
 	parsed, err := url.Parse(redirectURI)
 	if err != nil || parsed.Host == "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
 		return nil, ErrTelegramOAuthNotConfigured
 	}
 	return &TelegramOAuthFlow{
 		CodeVerifier: oauth2.GenerateVerifier(),
-		ClientID:     strings.TrimSpace(system_setting.GetTelegramSettings().ClientID),
+		ClientID:     strings.TrimSpace(system_setting.GetTelegramSettings(tenantCtx).ClientID),
 		RedirectURI:  redirectURI,
 	}, nil
 }
@@ -85,7 +85,7 @@ type TelegramProvider struct {
 }
 
 func init() {
-	Register("telegram", NewTelegramProvider(&http.Client{Timeout: 20 * time.Second}))
+	RegisterDefault("telegram", NewTelegramProvider(&http.Client{Timeout: 20 * time.Second}))
 }
 
 // NewTelegramProvider shares the HTTP client with a long-lived, cached JWKS
@@ -100,20 +100,22 @@ func NewTelegramProvider(client *http.Client) *TelegramProvider {
 	}
 }
 
-func (p *TelegramProvider) GetName() string { return "Telegram" }
+func (p *TelegramProvider) GetName(tenantCtx context.Context) string { return "Telegram" }
 
-func (p *TelegramProvider) IsEnabled() bool { return TelegramConfigurationError() == nil }
+func (p *TelegramProvider) IsEnabled(tenantCtx context.Context) bool {
+	return TelegramConfigurationError(tenantCtx) == nil
+}
 
 func (p *TelegramProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
-	if err := TelegramConfigurationError(); err != nil {
+	if err := TelegramConfigurationError(ctx); err != nil {
 		return nil, err
 	}
 	value, _ := c.Get(TelegramOAuthFlowContextKey)
 	flow, ok := value.(*TelegramOAuthFlow)
-	settings := system_setting.GetTelegramSettings()
+	settings := system_setting.GetTelegramSettings(ctx)
 	if !ok || flow == nil || flow.CodeVerifier == "" || code == "" ||
 		flow.ClientID != strings.TrimSpace(settings.ClientID) ||
-		flow.RedirectURI != strings.TrimRight(system_setting.ServerAddress, "/")+"/oauth/telegram" {
+		flow.RedirectURI != strings.TrimRight(system_setting.TenantState(ctx).ServerAddress, "/")+"/oauth/telegram" {
 		return nil, ErrTelegramOAuthFailed
 	}
 	values := url.Values{
@@ -149,10 +151,10 @@ func (p *TelegramProvider) ExchangeToken(ctx context.Context, code string, c *gi
 }
 
 func (p *TelegramProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
-	if err := TelegramConfigurationError(); err != nil {
+	if err := TelegramConfigurationError(ctx); err != nil {
 		return nil, err
 	}
-	if token == nil || token.ClientID != strings.TrimSpace(system_setting.GetTelegramSettings().ClientID) {
+	if token == nil || token.ClientID != strings.TrimSpace(system_setting.GetTelegramSettings(ctx).ClientID) {
 		return nil, ErrTelegramOAuthFailed
 	}
 	verifier := oidc.NewVerifier(TelegramIssuer, p.keys, &oidc.Config{
@@ -184,10 +186,12 @@ func (p *TelegramProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (
 	}, nil
 }
 
-func (p *TelegramProvider) IsUserIDTaken(id string) bool { return model.IsTelegramIdAlreadyTaken(id) }
+func (p *TelegramProvider) IsUserIDTaken(tenantCtx context.Context, id string) bool {
+	return model.IsTelegramIdAlreadyTaken(tenantCtx, id)
+}
 
-func (p *TelegramProvider) FillUserByProviderID(user *model.User, id string) error {
-	stored, err := model.GetUserByTelegramID(id)
+func (p *TelegramProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, id string) error {
+	stored, err := model.GetUserByTelegramID(tenantCtx, id)
 	if err != nil {
 		return err
 	}

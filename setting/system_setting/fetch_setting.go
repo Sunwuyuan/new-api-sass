@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type FetchSetting struct {
@@ -29,6 +31,6 @@ func init() {
 	config.GlobalConfig.Register("fetch_setting", &defaultFetchSetting)
 }
 
-func GetFetchSetting() *FetchSetting {
-	return &defaultFetchSetting
+func GetFetchSetting(tenantCtx context.Context) *FetchSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("fetch_setting").(*FetchSetting)
 }

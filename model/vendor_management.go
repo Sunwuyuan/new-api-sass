@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/sha256"
 	"errors"
@@ -194,25 +196,25 @@ func buildVendorOperationPreview(db *gorm.DB, operation VendorOperation) (*Vendo
 	return preview, nil
 }
 
-func PreviewVendorOperation(operation VendorOperation) (*VendorOperationPreview, error) {
-	return buildVendorOperationPreview(DB, operation)
+func PreviewVendorOperation(tenantCtx context.Context, operation VendorOperation) (*VendorOperationPreview, error) {
+	return buildVendorOperationPreview(DB.WithContext(tenantCtx), operation)
 }
 
-func ApplyVendorOperation(operation VendorOperation) (*VendorOperationResult, error) {
+func ApplyVendorOperation(tenantCtx context.Context, operation VendorOperation) (*VendorOperationResult, error) {
 	if operation.ExpectedVersion == "" {
 		return nil, ErrVendorConflict
 	}
-	return applyVendorOperation(operation)
+	return applyVendorOperation(tenantCtx, operation)
 }
 
-func DeleteVendors(ids []int) error {
-	_, err := applyVendorOperation(VendorOperation{Action: "delete", VendorIDs: ids})
+func DeleteVendors(tenantCtx context.Context, ids []int) error {
+	_, err := applyVendorOperation(tenantCtx, VendorOperation{Action: "delete", VendorIDs: ids})
 	return err
 }
 
-func applyVendorOperation(operation VendorOperation) (*VendorOperationResult, error) {
+func applyVendorOperation(tenantCtx context.Context, operation VendorOperation) (*VendorOperationResult, error) {
 	result := &VendorOperationResult{UpdatedModels: []int{}, DeletedVendors: []int{}}
-	err := metadataTransaction(func(tx *gorm.DB) error {
+	err := metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		preview, err := buildVendorOperationPreview(lockForUpdate(tx), operation)
 		if err != nil {
 			return err
@@ -243,6 +245,6 @@ func applyVendorOperation(operation VendorOperation) (*VendorOperationResult, er
 	if err != nil {
 		return nil, err
 	}
-	RefreshPricing()
+	RefreshPricing(tenantCtx)
 	return result, nil
 }

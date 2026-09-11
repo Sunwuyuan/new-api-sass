@@ -9,7 +9,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
@@ -36,14 +39,14 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, writer.Close())
 
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/edits", &body)
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		return c
 	}
 
 	convertAndReplay := func(t *testing.T, c *gin.Context, prompt string) {
-		info := &relaycommon.RelayInfo{
+		info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 			RelayMode: relayconstant.RelayModeImagesEdits,
 		}
 		request := dto.ImageRequest{
@@ -57,7 +60,7 @@ func TestConvertImageEditRequestMultipart(t *testing.T) {
 		convertedBody, ok := converted.(*bytes.Buffer)
 		require.True(t, ok)
 
-		replayedRequest := httptest.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(convertedBody.Bytes()))
+		replayedRequest := testtenant.NewRequest(http.MethodPost, "/v1/images/edits", bytes.NewReader(convertedBody.Bytes()))
 		replayedRequest.Header.Set("Content-Type", c.Request.Header.Get("Content-Type"))
 		require.NoError(t, replayedRequest.ParseMultipartForm(32<<20))
 

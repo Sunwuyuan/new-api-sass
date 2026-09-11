@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -17,9 +19,9 @@ import (
 )
 
 func TestDoRequestReturnsUpstreamRedirectWithoutFollowing(t *testing.T) {
-	service.InitHttpClient()
+	service.InitHttpClient(testtenant.Context())
 	gin.SetMode(gin.TestMode)
-	sharedClient := service.GetHttpClient()
+	sharedClient := service.GetHttpClient(testtenant.Context())
 	require.NotNil(t, sharedClient)
 	require.NotNil(t, sharedClient.CheckRedirect)
 	originalRedirectPolicy := reflect.ValueOf(sharedClient.CheckRedirect).Pointer()
@@ -60,12 +62,12 @@ func TestDoRequestReturnsUpstreamRedirectWithoutFollowing(t *testing.T) {
 			defer source.Close()
 
 			recorder := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(recorder)
-			ctx.Request = httptest.NewRequest(http.MethodPost, "/relay", nil)
+			ctx, _ := testtenant.CreateTestContext(recorder)
+			ctx.Request = testtenant.NewRequest(http.MethodPost, "/relay", nil)
 
-			req, err := http.NewRequest(http.MethodPost, source.URL, bytes.NewReader([]byte("request body")))
+			req, err := testtenant.HTTPRequest(http.MethodPost, source.URL, bytes.NewReader([]byte("request body")))
 			require.NoError(t, err)
-			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{}}
 
 			resp, err := doRequest(ctx, req, info)
 			require.NoError(t, err)

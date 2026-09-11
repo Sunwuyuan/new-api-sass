@@ -25,7 +25,7 @@ func GetVerificationMethods(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "当前认证方式不支持安全验证"})
 		return
 	}
-	requirements, err := service.GetVerificationRequirements(identity, c.Query("scope"))
+	requirements, err := service.GetVerificationRequirements(c.Request.Context(), identity, c.Query("scope"))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -145,7 +145,7 @@ func UniversalVerify(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	proof, err := service.VerifySecurityInput(identity, request)
+	proof, err := service.VerifySecurityInput(c.Request.Context(), identity, request)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return

@@ -1,8 +1,8 @@
 package setting
 
-import (
-	"encoding/json"
+import context "context"
 
+import (
 	"github.com/QuantumNous/new-api/common"
 )
 
@@ -42,13 +42,17 @@ var Chats = []map[string]string{
 	},
 }
 
-func UpdateChatsByJsonString(jsonString string) error {
-	Chats = make([]map[string]string, 0)
-	return json.Unmarshal([]byte(jsonString), &Chats)
+func UpdateChatsByJsonString(tenantCtx context.Context, jsonString string) error {
+	chats := make([]map[string]string, 0)
+	if err := common.Unmarshal([]byte(jsonString), &chats); err != nil {
+		return err
+	}
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.Chats = chats })
+	return nil
 }
 
-func Chats2JsonString() string {
-	jsonBytes, err := json.Marshal(Chats)
+func Chats2JsonString(tenantCtx context.Context) string {
+	jsonBytes, err := common.Marshal(TenantState(tenantCtx).Chats)
 	if err != nil {
 		common.SysLog("error marshalling chats: " + err.Error())
 		return "[]"

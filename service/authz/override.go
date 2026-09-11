@@ -1,5 +1,7 @@
 package authz
 
+import context "context"
+
 import (
 	"fmt"
 	"sort"
@@ -17,8 +19,8 @@ type overridePolicy struct {
 	Effect   string
 }
 
-func SetUserPermissions(userID int, permissions PermissionsMap) error {
-	e := currentEnforcer()
+func SetUserPermissions(tenantCtx context.Context, userID int, permissions PermissionsMap) error {
+	e := currentEnforcer(tenantCtx)
 	if e == nil {
 		return fmt.Errorf("authz enforcer is not initialized")
 	}
@@ -40,7 +42,7 @@ func SetUserPermissions(userID int, permissions PermissionsMap) error {
 }
 
 func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap) error {
-	e := currentEnforcer()
+	e := currentEnforcer(tx.Statement.Context)
 	if e == nil {
 		return fmt.Errorf("authz enforcer is not initialized")
 	}
@@ -67,8 +69,8 @@ func SetUserPermissionsInTx(tx *gorm.DB, userID int, permissions PermissionsMap)
 	return nil
 }
 
-func ClearUserPermissions(userID int) error {
-	e := currentEnforcer()
+func ClearUserPermissions(tenantCtx context.Context, userID int) error {
+	e := currentEnforcer(tenantCtx)
 	if e == nil {
 		return fmt.Errorf("authz enforcer is not initialized")
 	}
@@ -90,8 +92,8 @@ func ClearUserPermissionsInTx(tx *gorm.DB, userID int) error {
 	return nil
 }
 
-func ClearUserAuthorization(userID int) error {
-	return ClearUserPermissions(userID)
+func ClearUserAuthorization(tenantCtx context.Context, userID int) error {
+	return ClearUserPermissions(tenantCtx, userID)
 }
 
 func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) error {
@@ -100,13 +102,13 @@ func ClearUserAuthorizationInTx(tx *gorm.DB, userID int) error {
 
 // ExplicitUserPermissions returns the effective permission matrix for the
 // managed role plus any per-user overrides.
-func ExplicitUserPermissions(userID int) PermissionsMap {
-	return Capabilities(userID, common.RoleAdminUser)
+func ExplicitUserPermissions(tenantCtx context.Context, userID int) PermissionsMap {
+	return Capabilities(tenantCtx, userID, common.RoleAdminUser)
 }
 
 // ExplicitUserOverrides returns only the per-user override entries.
-func ExplicitUserOverrides(userID int) PermissionsMap {
-	e := currentEnforcer()
+func ExplicitUserOverrides(tenantCtx context.Context, userID int) PermissionsMap {
+	e := currentEnforcer(tenantCtx)
 	if e == nil {
 		return PermissionsMap{}
 	}

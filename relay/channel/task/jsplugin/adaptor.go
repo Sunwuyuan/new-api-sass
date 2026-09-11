@@ -82,6 +82,7 @@ const maxTaskArtifacts = 64
 const maxTaskPluginPersistedJSONBytes = 1 << 20
 
 type TaskAdaptor struct {
+	ctx            context.Context
 	plugin         *pluginruntime.LoadedPlugin
 	info           *relaycommon.RelayInfo
 	submit         *requestDescriptor
@@ -90,8 +91,10 @@ type TaskAdaptor struct {
 	files          []map[string]any
 }
 
-func New(plugin *pluginruntime.LoadedPlugin) *TaskAdaptor { return &TaskAdaptor{plugin: plugin} }
-func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo)   { a.info = info }
+func New(tenantCtx context.Context, plugin *pluginruntime.LoadedPlugin) *TaskAdaptor {
+	return &TaskAdaptor{plugin: plugin, ctx: context.WithoutCancel(tenantCtx)}
+}
+func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) { a.info = info }
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskError {
 	if pinnedValue, exists := c.Get(pluginruntime.ContextKeyPinnedEndpoint); exists {
@@ -196,7 +199,7 @@ func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskDat
 	if err := common.Unmarshal(taskData, &data); err != nil {
 		data = string(taskData)
 	}
-	ratios, err := a.usageRatios(context.Background(), cmp.Or(info.UpstreamModelName, info.OriginModelName), "extractUsageOnSubmit", a.submitContext(nil, info), data)
+	ratios, err := a.usageRatios(a.ctx, cmp.Or(info.UpstreamModelName, info.OriginModelName), "extractUsageOnSubmit", a.submitContext(nil, info), data)
 	if err != nil {
 		a.logRejectedUsage("extractUsageOnSubmit", err)
 		return nil
@@ -205,10 +208,10 @@ func (a *TaskAdaptor) AdjustBillingOnSubmit(info *relaycommon.RelayInfo, taskDat
 }
 
 func (a *TaskAdaptor) AdjustBillingOnComplete(task *model.Task, result *relaycommon.TaskInfo) int {
-	if !a.hasHook(context.Background(), "extractUsageOnComplete") {
+	if !a.hasHook(a.ctx, "extractUsageOnComplete") {
 		return 0
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "extractUsageOnComplete", jsonValue(task), jsonValue(result))
+	value, err := a.plugin.Engine.Call(a.ctx, "extractUsageOnComplete", jsonValue(task), jsonValue(result))
 	if err != nil {
 		return 0
 	}
@@ -580,7 +583,7 @@ func (a *TaskAdaptor) GetModelList() []string { return append([]string(nil), a.p
 func (a *TaskAdaptor) GetChannelName() string { return a.plugin.Meta.Name }
 func (a *TaskAdaptor) FetchMode() string      { return a.plugin.Meta.FetchMode }
 
-func (a *TaskAdaptor) FetchBatchTasks(baseURL, key string, tasks []*model.Task, proxy string) (*http.Response, error) {
+func (a *TaskAdaptor) FetchBatchTasks(tenantCtx context.Context, baseURL, key string, tasks []*model.Task, proxy string) (*http.Response, error) {
 	taskContexts := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {
 		taskCtx, err := a.queryContext(task, key, baseURL, proxy)
@@ -593,26 +596,26 @@ func (a *TaskAdaptor) FetchBatchTasks(baseURL, key string, tasks []*model.Task, 
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "buildBatchQueryRequest", ctx, taskContexts)
+	value, err := a.plugin.Engine.Call(a.ctx, "buildBatchQueryRequest", ctx, taskContexts)
 	if err != nil {
 		return nil, err
 	}
-	return a.doFetchDescriptor(baseURL, proxy, value)
+	return a.doFetchDescriptor(tenantCtx, baseURL, proxy, value)
 }
 
-func (a *TaskAdaptor) FetchTask(baseURL, key string, task *model.Task, proxy string) (*http.Response, error) {
+func (a *TaskAdaptor) FetchTask(tenantCtx context.Context, baseURL, key string, task *model.Task, proxy string) (*http.Response, error) {
 	ctx, err := a.queryContext(task, key, baseURL, proxy)
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "buildQueryRequest", ctx)
+	value, err := a.plugin.Engine.Call(a.ctx, "buildQueryRequest", ctx)
 	if err != nil {
 		return nil, err
 	}
-	return a.doFetchDescriptor(baseURL, proxy, value)
+	return a.doFetchDescriptor(tenantCtx, baseURL, proxy, value)
 }
 
-func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http.Response, error) {
+func (a *TaskAdaptor) doFetchDescriptor(tenantCtx context.Context, baseURL, proxy string, value any) (*http.Response, error) {
 	var descriptor requestDescriptor
 	if err := convert(value, &descriptor); err != nil {
 		return nil, err
@@ -643,7 +646,7 @@ func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http
 	for name, value := range descriptor.Headers {
 		req.Header.Set(name, value)
 	}
-	client, err := service.GetHttpClientWithProxy(proxy)
+	client, err := service.GetHttpClientWithProxy(tenantCtx, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -651,7 +654,7 @@ func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http
 	resp, err := client.Do(req)
 	if err != nil {
 		logger.LogDebug(
-			context.Background(),
+			a.ctx,
 			"task_plugin subsystem=adaptor event=query_request_failed plugin=%q method=%q reason=transport_error elapsed_ms=%d",
 			a.plugin.Meta.Key,
 			method,
@@ -660,7 +663,7 @@ func (a *TaskAdaptor) doFetchDescriptor(baseURL, proxy string, value any) (*http
 		return nil, err
 	}
 	logger.LogDebug(
-		context.Background(),
+		a.ctx,
 		"task_plugin subsystem=adaptor event=query_response_received plugin=%q method=%q status=%d elapsed_ms=%d",
 		a.plugin.Meta.Key,
 		method,
@@ -690,9 +693,9 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "parseBatchResult", ctx, input, hookHTTPResponse(resp))
+	value, err := a.plugin.Engine.Call(a.ctx, "parseBatchResult", ctx, input, hookHTTPResponse(resp))
 	if err != nil {
-		logger.LogDebug(context.Background(), "task_plugin subsystem=adaptor event=parse_batch_failed plugin=%q reason=hook_failed body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
+		logger.LogDebug(a.ctx, "task_plugin subsystem=adaptor event=parse_batch_failed plugin=%q reason=hook_failed body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
 		return nil, err
 	}
 	var parsed []struct {
@@ -709,11 +712,11 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 		State      any    `json:"state"`
 	}
 	if err = convert(value, &parsed); err != nil {
-		logger.LogDebug(context.Background(), "task_plugin subsystem=adaptor event=parse_batch_failed plugin=%q reason=invalid_result body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
+		logger.LogDebug(a.ctx, "task_plugin subsystem=adaptor event=parse_batch_failed plugin=%q reason=invalid_result body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
 		return nil, err
 	}
 	results := make(map[string]*service.BatchTaskResult, len(parsed))
-	hasCompletionUsage := a.hasHook(context.Background(), "extractUsageOnComplete")
+	hasCompletionUsage := a.hasHook(a.ctx, "extractUsageOnComplete")
 	for _, item := range parsed {
 		if strings.TrimSpace(item.TaskID) == "" {
 			continue
@@ -722,7 +725,7 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 		if item.State != nil {
 			pluginState, marshalErr := common.Marshal(item.State)
 			if marshalErr != nil || len(pluginState) > maxTaskPluginPersistedJSONBytes {
-				logger.LogWarn(context.Background(), fmt.Sprintf("task plugin %s rejected invalid or oversized poll state", a.plugin.Meta.Key))
+				logger.LogWarn(a.ctx, fmt.Sprintf("task plugin %s rejected invalid or oversized poll state", a.plugin.Meta.Key))
 			} else {
 				info.PluginState = pluginState
 			}
@@ -739,7 +742,7 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 					break
 				}
 			}
-			facts, hookErr := a.plugin.Engine.Call(context.Background(), "extractUsageOnComplete", itemCtx, jsonValue(&info), usageBody)
+			facts, hookErr := a.plugin.Engine.Call(a.ctx, "extractUsageOnComplete", itemCtx, jsonValue(&info), usageBody)
 			if hookErr == nil {
 				usageModel, _ := itemCtx["upstreamModel"].(string)
 				a.applyCompletionUsageFacts(&info, facts, usageModel)
@@ -748,7 +751,7 @@ func (a *TaskAdaptor) ParseBatchResult(tasks []*model.Task, resp *http.Response,
 		results[item.TaskID] = &service.BatchTaskResult{TaskInfo: info, Action: item.Action, SubmitTime: item.SubmitTime, StartTime: item.StartTime, FinishTime: item.FinishTime, Data: item.Data}
 	}
 	logger.LogDebug(
-		context.Background(),
+		a.ctx,
 		"task_plugin subsystem=adaptor event=parse_batch_complete plugin=%q body_bytes=%d results=%d completion_usage_hook=%t elapsed_ms=%d",
 		a.plugin.Meta.Key,
 		len(body),
@@ -774,14 +777,14 @@ func (a *TaskAdaptor) ParseTaskResult(task *model.Task, resp *http.Response, bod
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "parseTaskResult", ctx, input, hookHTTPResponse(resp))
+	value, err := a.plugin.Engine.Call(a.ctx, "parseTaskResult", ctx, input, hookHTTPResponse(resp))
 	if err != nil {
-		logger.LogDebug(context.Background(), "task_plugin subsystem=adaptor event=parse_task_failed plugin=%q reason=hook_failed body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
+		logger.LogDebug(a.ctx, "task_plugin subsystem=adaptor event=parse_task_failed plugin=%q reason=hook_failed body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
 		return nil, err
 	}
 	var parsed taskResult
 	if err = convert(value, &parsed); err != nil {
-		logger.LogDebug(context.Background(), "task_plugin subsystem=adaptor event=parse_task_failed plugin=%q reason=invalid_result body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
+		logger.LogDebug(a.ctx, "task_plugin subsystem=adaptor event=parse_task_failed plugin=%q reason=invalid_result body_bytes=%d elapsed_ms=%d", a.plugin.Meta.Key, len(body), time.Since(started).Milliseconds())
 		return nil, err
 	}
 	result := &relaycommon.TaskInfo{
@@ -797,15 +800,15 @@ func (a *TaskAdaptor) ParseTaskResult(task *model.Task, resp *http.Response, bod
 	}
 	if pluginState, present := encodeReturnedPluginState(value); present {
 		if len(pluginState) > maxTaskPluginPersistedJSONBytes {
-			logger.LogWarn(context.Background(), fmt.Sprintf("task plugin %s rejected oversized poll state (%d bytes)", a.plugin.Meta.Key, len(pluginState)))
+			logger.LogWarn(a.ctx, fmt.Sprintf("task plugin %s rejected oversized poll state (%d bytes)", a.plugin.Meta.Key, len(pluginState)))
 		} else {
 			result.PluginState = pluginState
 		}
 	}
 	// The raw polling response only exists at this boundary. Capture upstream
 	// units here so the host settlement path can consume them from TaskInfo.
-	if a.hasHook(context.Background(), "extractUsageOnComplete") {
-		facts, hookErr := a.plugin.Engine.Call(context.Background(), "extractUsageOnComplete", ctx, jsonValue(result), input)
+	if a.hasHook(a.ctx, "extractUsageOnComplete") {
+		facts, hookErr := a.plugin.Engine.Call(a.ctx, "extractUsageOnComplete", ctx, jsonValue(result), input)
 		if hookErr == nil {
 			usageModel, _ := ctx["upstreamModel"].(string)
 			a.applyCompletionUsageFacts(result, facts, usageModel)
@@ -813,7 +816,7 @@ func (a *TaskAdaptor) ParseTaskResult(task *model.Task, resp *http.Response, bod
 	}
 	taskStatus := model.TaskStatus(result.Status)
 	logger.LogDebug(
-		context.Background(),
+		a.ctx,
 		"task_plugin subsystem=adaptor event=parse_task_complete plugin=%q terminal=%t body_bytes=%d elapsed_ms=%d",
 		a.plugin.Meta.Key,
 		taskStatus == model.TaskStatusSuccess || taskStatus == model.TaskStatusFailure,
@@ -861,7 +864,7 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.CallPath(context.Background(), "protocols", []string{"openai_video", "render"}, map[string]any{"protocol": "openai_video", "operation": "retrieve"}, jsonValue(view))
+	value, err := a.plugin.Engine.CallPath(a.ctx, "protocols", []string{"openai_video", "render"}, map[string]any{"protocol": "openai_video", "operation": "retrieve"}, jsonValue(view))
 	if err != nil {
 		return nil, err
 	}
@@ -892,14 +895,14 @@ func (a *TaskAdaptor) ConvertToOpenAIVideo(task *model.Task) ([]byte, error) {
 }
 
 func (a *TaskAdaptor) ListArtifacts(task *model.Task) ([]channel.TaskArtifact, error) {
-	if !a.hasHook(context.Background(), "listArtifacts") {
+	if !a.hasHook(a.ctx, "listArtifacts") {
 		return nil, nil
 	}
 	ctx, err := taskArtifactContext(task)
 	if err != nil {
 		return nil, err
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "listArtifacts", ctx)
+	value, err := a.plugin.Engine.Call(a.ctx, "listArtifacts", ctx)
 	if err != nil {
 		return nil, fmt.Errorf("plugin artifact listing failed")
 	}
@@ -907,7 +910,7 @@ func (a *TaskAdaptor) ListArtifacts(task *model.Task) ([]channel.TaskArtifact, e
 }
 
 func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, clientRequest channel.TaskArtifactClientRequest) (*channel.TaskContentRequest, error) {
-	if !a.hasHook(context.Background(), "buildContentRequest") {
+	if !a.hasHook(a.ctx, "buildContentRequest") {
 		return nil, nil
 	}
 	if a.info == nil {
@@ -925,7 +928,7 @@ func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, 
 	ctx["baseUrl"] = a.info.ChannelBaseUrl
 	ctx["clientRequest"] = jsonValue(clientRequest)
 	proxy := a.info.ChannelSetting.Proxy
-	auth, err := resolveAuth(a.plugin.Meta.Auth, a.info.ApiKey, proxy)
+	auth, err := resolveAuth(a.ctx, a.plugin.Meta.Auth, a.info.ApiKey, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -934,7 +937,7 @@ func (a *TaskAdaptor) BuildContentRequest(task *model.Task, artifactKey string, 
 	if a.plugin.Meta.Auth.Type == "" || a.plugin.Meta.Auth.Type == "none" || a.plugin.Meta.Auth.Type == "api_key" {
 		ctx["apiKey"] = a.info.ApiKey
 	}
-	value, err := a.plugin.Engine.Call(context.Background(), "buildContentRequest", ctx)
+	value, err := a.plugin.Engine.Call(a.ctx, "buildContentRequest", ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -1056,7 +1059,7 @@ func (a *TaskAdaptor) queryContext(task *model.Task, key, baseURL, proxy string)
 			key = task.PrivateData.Key
 		}
 	}
-	auth, err := resolveAuth(a.plugin.Meta.Auth, key, proxy)
+	auth, err := resolveAuth(a.ctx, a.plugin.Meta.Auth, key, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -1070,7 +1073,7 @@ func (a *TaskAdaptor) queryContext(task *model.Task, key, baseURL, proxy string)
 
 func (a *TaskAdaptor) batchQueryContext(key, baseURL, proxy string, tasks []map[string]any) (map[string]any, error) {
 	ctx := map[string]any{"baseUrl": baseURL, "tasks": tasks}
-	auth, err := resolveAuth(a.plugin.Meta.Auth, key, proxy)
+	auth, err := resolveAuth(a.ctx, a.plugin.Meta.Auth, key, proxy)
 	if err != nil {
 		return nil, err
 	}
@@ -1354,7 +1357,7 @@ func (a *TaskAdaptor) submitContext(c *gin.Context, info *relaycommon.RelayInfo)
 	ctx["userSetting"] = info.UserSetting
 	proxy := ""
 	proxy = info.ChannelSetting.Proxy
-	if auth, err := resolveAuth(a.plugin.Meta.Auth, info.ApiKey, proxy); err == nil {
+	if auth, err := resolveAuth(a.ctx, a.plugin.Meta.Auth, info.ApiKey, proxy); err == nil {
 		ctx["auth"] = auth
 		ctx["authHeader"] = auth["authHeader"]
 		if a.plugin.Meta.Auth.Type == "" || a.plugin.Meta.Auth.Type == "none" || a.plugin.Meta.Auth.Type == "api_key" {

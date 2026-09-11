@@ -10,14 +10,19 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/service"
+
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -42,7 +47,7 @@ func (*imageReservation) Refund(*gin.Context)        {}
 func (*imageReservation) NeedsRefund() bool          { return false }
 
 func TestImageRequestReservesFinalQuantityBeforeUpstream(t *testing.T) {
-	service.InitHttpClient()
+	service.InitHttpClient(testtenant.Context())
 	for _, tc := range []struct {
 		name, body                                       string
 		tiered, passThrough, insufficient, retryToOpenAI bool
@@ -71,8 +76,8 @@ func TestImageRequestReservesFinalQuantityBeforeUpstream(t *testing.T) {
 				_, _ = io.WriteString(w, `{"error":{"message":"fixture upstream failure","type":"upstream_error"}}`)
 			}))
 			t.Cleanup(upstream.Close)
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
 			c.Request.Header.Set("Content-Type", "application/json")
 			channel := constant.ChannelTypeAli
 			if tc.retryToOpenAI {
@@ -90,13 +95,13 @@ func TestImageRequestReservesFinalQuantityBeforeUpstream(t *testing.T) {
 			if tc.insufficient {
 				reservation.limit = reservation.held
 			}
-			info := &relaycommon.RelayInfo{Request: request, OriginModelName: "z-image", RelayMode: relayconstant.RelayModeImagesGenerations,
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), Request: request, OriginModelName: "z-image", RelayMode: relayconstant.RelayModeImagesGenerations,
 				RequestURLPath: c.Request.URL.Path, Billing: reservation,
 				PriceData: hosttypes.PriceData{UsePrice: true, ModelPrice: 0.04, GroupRatioInfo: hosttypes.GroupRatioInfo{GroupRatio: 1}},
 			}
 			if tc.tiered {
 				expr := `tier("image", fixed(0.04)) * image_count`
-				info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: expr, ExprHash: billingexpr.ExprHashString(expr), GroupRatio: 1, QuotaPerUnit: common.QuotaPerUnit, EstimatedImageCount: common.GetPointer(1)}
+				info.TieredBillingSnapshot = &billingexpr.BillingSnapshot{BillingMode: "tiered_expr", ExprString: expr, ExprHash: billingexpr.ExprHashString(expr), GroupRatio: 1, QuotaPerUnit: common.TenantState(testtenant.Context()).QuotaPerUnit, EstimatedImageCount: common.GetPointer(1)}
 				info.BillingRequestInput = &billingexpr.RequestInput{Body: []byte(tc.body), ImageCount: common.GetPointer(1)}
 				info.PriceData.UsePrice = false
 			}
@@ -134,10 +139,10 @@ func TestImageRequestReservesFinalQuantityBeforeUpstream(t *testing.T) {
 
 func TestOptInSafeToolLossRejectedAsBadRequestWithAdminDiagnostics(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-4o",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "gpt-4o",
@@ -181,10 +186,10 @@ func TestOptInSafeToolLossRejectedAsBadRequestWithAdminDiagnostics(t *testing.T)
 
 func TestUnknownModelModifierIsBadRequestWithoutRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "m@thinkin:on",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "m@thinkin:on",

@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"crypto/rand"
 	"fmt"
@@ -22,8 +24,8 @@ const (
 )
 
 // GenerateTOTPSecret 生成TOTP密钥和配置
-func GenerateTOTPSecret(accountName string) (*otp.Key, error) {
-	issuer := Get2FAIssuer()
+func GenerateTOTPSecret(tenantCtx context.Context, accountName string) (*otp.Key, error) {
+	issuer := Get2FAIssuer(tenantCtx)
 	return totp.Generate(totp.GenerateOpts{
 		Issuer:      issuer,
 		AccountName: accountName,
@@ -112,8 +114,8 @@ func HashBackupCode(code string) (string, error) {
 }
 
 // Get2FAIssuer 获取2FA发行者名称
-func Get2FAIssuer() string {
-	return SystemName
+func Get2FAIssuer(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).SystemName
 }
 
 // getEnvOrDefault 获取环境变量或默认值
@@ -142,8 +144,8 @@ func ValidateNumericCode(code string) (string, error) {
 }
 
 // GenerateQRCodeData 生成二维码数据
-func GenerateQRCodeData(secret, username string) string {
-	issuer := Get2FAIssuer()
+func GenerateQRCodeData(tenantCtx context.Context, secret, username string) string {
+	issuer := Get2FAIssuer(tenantCtx)
 	accountName := fmt.Sprintf("%s (%s)", username, issuer)
 	return fmt.Sprintf("otpauth://totp/%s:%s?secret=%s&issuer=%s&digits=6&period=30",
 		issuer, accountName, secret, issuer)

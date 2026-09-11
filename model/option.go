@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"maps"
 	"strconv"
@@ -9,6 +11,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/plan"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -19,204 +22,205 @@ import (
 )
 
 type Option struct {
-	Key   string `json:"key" gorm:"primaryKey"`
-	Value string `json:"value"`
+	TenantID int64  `json:"-" gorm:"primaryKey;autoIncrement:false"`
+	Key      string `json:"key" gorm:"primaryKey"`
+	Value    string `json:"value"`
 }
 
-func AllOption() ([]*Option, error) {
+func AllOption(tenantCtx context.Context) ([]*Option, error) {
 	var options []*Option
 	var err error
-	err = DB.Find(&options).Error
+	err = DB.WithContext(tenantCtx).Find(&options).Error
 	return options, err
 }
 
-func InitOptionMap() {
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap = make(map[string]string)
+func InitOptionMap(tenantCtx context.Context) {
+	common.TenantState(tenantCtx).OptionMapRWMutex.Lock()
+	common.TenantState(tenantCtx).OptionMap = make(map[string]string)
 
 	// 添加原有的系统配置
-	common.OptionMap["FileUploadPermission"] = strconv.Itoa(common.FileUploadPermission)
-	common.OptionMap["FileDownloadPermission"] = strconv.Itoa(common.FileDownloadPermission)
-	common.OptionMap["ImageUploadPermission"] = strconv.Itoa(common.ImageUploadPermission)
-	common.OptionMap["ImageDownloadPermission"] = strconv.Itoa(common.ImageDownloadPermission)
-	common.OptionMap["PasswordLoginEnabled"] = strconv.FormatBool(common.PasswordLoginEnabled)
-	common.OptionMap["PasswordRegisterEnabled"] = strconv.FormatBool(common.PasswordRegisterEnabled)
-	common.OptionMap["EmailVerificationEnabled"] = strconv.FormatBool(common.EmailVerificationEnabled)
-	common.OptionMap["GitHubOAuthEnabled"] = strconv.FormatBool(common.GitHubOAuthEnabled)
-	common.OptionMap["LinuxDOOAuthEnabled"] = strconv.FormatBool(common.LinuxDOOAuthEnabled)
-	common.OptionMap["TelegramOAuthEnabled"] = strconv.FormatBool(common.TelegramOAuthEnabled)
-	common.OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.WeChatAuthEnabled)
-	common.OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TurnstileCheckEnabled)
-	common.OptionMap["RegisterEnabled"] = strconv.FormatBool(common.RegisterEnabled)
-	common.OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.AutomaticDisableChannelEnabled)
-	common.OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.AutomaticEnableChannelEnabled)
-	common.OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.LogConsumeEnabled)
-	common.OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.DisplayInCurrencyEnabled)
-	common.OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.DisplayTokenStatEnabled)
-	common.OptionMap["DrawingEnabled"] = strconv.FormatBool(common.DrawingEnabled)
-	common.OptionMap["TaskEnabled"] = strconv.FormatBool(common.TaskEnabled)
-	common.OptionMap["TaskPluginEnabled"] = strconv.FormatBool(constant.TaskPluginEnabled)
-	jsplugin.DefaultRegistry.SetEnabled(constant.TaskPluginEnabled)
-	common.OptionMap[setting.TaskPluginMarketplaceSourcesKey] = setting.TaskPluginMarketplaceSources2JsonString()
-	common.OptionMap[setting.TaskPluginDisabledFactoryKeysKey] = "[]"
-	jsplugin.DefaultRegistry.SetDisabledFactoryKeys(nil)
-	common.OptionMap["DataExportEnabled"] = strconv.FormatBool(common.DataExportEnabled)
-	common.OptionMap["ChannelDisableThreshold"] = strconv.FormatFloat(common.ChannelDisableThreshold, 'f', -1, 64)
-	common.OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.EmailDomainRestrictionEnabled)
-	common.OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.EmailAliasRestrictionEnabled)
-	common.OptionMap["EmailDomainWhitelist"] = strings.Join(common.EmailDomainWhitelist, ",")
-	common.OptionMap["SMTPServer"] = ""
-	common.OptionMap["SMTPFrom"] = ""
-	common.OptionMap["SMTPPort"] = strconv.Itoa(common.SMTPPort)
-	common.OptionMap["SMTPAccount"] = ""
-	common.OptionMap["SMTPToken"] = ""
-	common.OptionMap["SMTPSSLEnabled"] = strconv.FormatBool(common.SMTPSSLEnabled)
-	common.OptionMap["SMTPStartTLSEnabled"] = strconv.FormatBool(common.SMTPStartTLSEnabled)
-	common.OptionMap["SMTPInsecureSkipVerify"] = strconv.FormatBool(common.SMTPInsecureSkipVerify)
-	common.OptionMap["SMTPForceAuthLogin"] = strconv.FormatBool(common.SMTPForceAuthLogin)
-	common.OptionMap["Notice"] = ""
-	common.OptionMap["About"] = ""
-	common.OptionMap["HomePageContent"] = ""
-	common.OptionMap["Footer"] = common.Footer
-	common.OptionMap["SystemName"] = common.SystemName
-	common.OptionMap["Logo"] = common.Logo
-	common.OptionMap["ServerAddress"] = ""
-	common.OptionMap["TaskPublicAddress"] = system_setting.TaskPublicAddress
-	common.OptionMap["WorkerUrl"] = system_setting.WorkerUrl
-	common.OptionMap["WorkerValidKey"] = system_setting.WorkerValidKey
-	common.OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.WorkerAllowHttpImageRequestEnabled)
-	common.OptionMap["PayAddress"] = ""
-	common.OptionMap["CustomCallbackAddress"] = ""
-	common.OptionMap["EpayId"] = ""
-	common.OptionMap["EpayKey"] = ""
-	common.OptionMap["Price"] = strconv.FormatFloat(operation_setting.Price, 'f', -1, 64)
-	common.OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.USDExchangeRate, 'f', -1, 64)
-	common.OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.MinTopUp)
-	common.OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.StripeMinTopUp)
-	common.OptionMap["StripeApiSecret"] = setting.StripeApiSecret
-	common.OptionMap["StripeWebhookSecret"] = setting.StripeWebhookSecret
-	common.OptionMap["StripePriceId"] = setting.StripePriceId
-	common.OptionMap["StripeUnitPrice"] = strconv.FormatFloat(setting.StripeUnitPrice, 'f', -1, 64)
-	common.OptionMap["StripePromotionCodesEnabled"] = strconv.FormatBool(setting.StripePromotionCodesEnabled)
-	common.OptionMap["CreemApiKey"] = setting.CreemApiKey
-	common.OptionMap["CreemProducts"] = setting.CreemProducts
-	common.OptionMap["CreemTestMode"] = strconv.FormatBool(setting.CreemTestMode)
-	common.OptionMap["CreemWebhookSecret"] = setting.CreemWebhookSecret
-	common.OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.WaffoEnabled)
-	common.OptionMap["WaffoApiKey"] = setting.WaffoApiKey
-	common.OptionMap["WaffoPrivateKey"] = setting.WaffoPrivateKey
-	common.OptionMap["WaffoPublicCert"] = setting.WaffoPublicCert
-	common.OptionMap["WaffoSandboxPublicCert"] = setting.WaffoSandboxPublicCert
-	common.OptionMap["WaffoSandboxApiKey"] = setting.WaffoSandboxApiKey
-	common.OptionMap["WaffoSandboxPrivateKey"] = setting.WaffoSandboxPrivateKey
-	common.OptionMap["WaffoSandbox"] = strconv.FormatBool(setting.WaffoSandbox)
-	common.OptionMap["WaffoMerchantId"] = setting.WaffoMerchantId
-	common.OptionMap["WaffoNotifyUrl"] = setting.WaffoNotifyUrl
-	common.OptionMap["WaffoReturnUrl"] = setting.WaffoReturnUrl
-	common.OptionMap["WaffoSubscriptionReturnUrl"] = setting.WaffoSubscriptionReturnUrl
-	common.OptionMap["WaffoCurrency"] = setting.WaffoCurrency
-	common.OptionMap["WaffoUnitPrice"] = strconv.FormatFloat(setting.WaffoUnitPrice, 'f', -1, 64)
-	common.OptionMap["WaffoMinTopUp"] = strconv.Itoa(setting.WaffoMinTopUp)
-	common.OptionMap["WaffoPayMethods"] = setting.WaffoPayMethods2JsonString()
-	common.OptionMap["WaffoPancakeMerchantID"] = setting.WaffoPancakeMerchantID
-	common.OptionMap["WaffoPancakePrivateKey"] = setting.WaffoPancakePrivateKey
-	common.OptionMap["WaffoPancakeReturnURL"] = setting.WaffoPancakeReturnURL
-	common.OptionMap["WaffoPancakeUnitPrice"] = strconv.FormatFloat(setting.WaffoPancakeUnitPrice, 'f', -1, 64)
-	common.OptionMap["WaffoPancakeMinTopUp"] = strconv.Itoa(setting.WaffoPancakeMinTopUp)
-	common.OptionMap["WaffoPancakeStoreID"] = setting.WaffoPancakeStoreID
-	common.OptionMap["WaffoPancakeProductID"] = setting.WaffoPancakeProductID
-	common.OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString()
-	common.OptionMap["Chats"] = setting.Chats2JsonString()
-	common.OptionMap["AutoGroups"] = setting.AutoGroups2JsonString()
-	common.OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.DefaultUseAutoGroup)
-	common.OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups())
-	common.OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString()
-	common.OptionMap["GitHubClientId"] = ""
-	common.OptionMap["GitHubClientSecret"] = ""
-	common.OptionMap["TelegramBotToken"] = ""
-	common.OptionMap["TelegramBotName"] = ""
-	common.OptionMap["WeChatServerAddress"] = ""
-	common.OptionMap["WeChatServerToken"] = ""
-	common.OptionMap["WeChatAccountQRCodeImageURL"] = ""
-	common.OptionMap["TurnstileSiteKey"] = ""
-	common.OptionMap["TurnstileSecretKey"] = ""
-	common.OptionMap["QuotaForNewUser"] = strconv.Itoa(common.QuotaForNewUser)
-	common.OptionMap["QuotaForInviter"] = strconv.Itoa(common.QuotaForInviter)
-	common.OptionMap["QuotaForInvitee"] = strconv.Itoa(common.QuotaForInvitee)
-	common.OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.QuotaRemindThreshold)
-	common.OptionMap["PreConsumedQuota"] = strconv.Itoa(common.PreConsumedQuota)
-	common.OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.ModelRequestRateLimitCount)
-	common.OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.ModelRequestRateLimitDurationMinutes)
-	common.OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.ModelRequestRateLimitSuccessCount)
-	common.OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString()
-	common.OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString()
-	common.OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString()
-	common.OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString()
-	common.OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString()
-	common.OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString()
-	common.OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString()
-	common.OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString()
-	common.OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString()
-	common.OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString()
-	common.OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString()
-	common.OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString()
-	common.OptionMap["TopUpLink"] = common.TopUpLink
+	common.TenantState(tenantCtx).OptionMap["FileUploadPermission"] = strconv.Itoa(common.TenantState(tenantCtx).FileUploadPermission)
+	common.TenantState(tenantCtx).OptionMap["FileDownloadPermission"] = strconv.Itoa(common.TenantState(tenantCtx).FileDownloadPermission)
+	common.TenantState(tenantCtx).OptionMap["ImageUploadPermission"] = strconv.Itoa(common.TenantState(tenantCtx).ImageUploadPermission)
+	common.TenantState(tenantCtx).OptionMap["ImageDownloadPermission"] = strconv.Itoa(common.TenantState(tenantCtx).ImageDownloadPermission)
+	common.TenantState(tenantCtx).OptionMap["PasswordLoginEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).PasswordLoginEnabled)
+	common.TenantState(tenantCtx).OptionMap["PasswordRegisterEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).PasswordRegisterEnabled)
+	common.TenantState(tenantCtx).OptionMap["EmailVerificationEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).EmailVerificationEnabled)
+	common.TenantState(tenantCtx).OptionMap["GitHubOAuthEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).GitHubOAuthEnabled)
+	common.TenantState(tenantCtx).OptionMap["LinuxDOOAuthEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).LinuxDOOAuthEnabled)
+	common.TenantState(tenantCtx).OptionMap["TelegramOAuthEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).TelegramOAuthEnabled)
+	common.TenantState(tenantCtx).OptionMap["WeChatAuthEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).WeChatAuthEnabled)
+	common.TenantState(tenantCtx).OptionMap["TurnstileCheckEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).TurnstileCheckEnabled)
+	common.TenantState(tenantCtx).OptionMap["RegisterEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).RegisterEnabled)
+	common.TenantState(tenantCtx).OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).AutomaticDisableChannelEnabled)
+	common.TenantState(tenantCtx).OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).AutomaticEnableChannelEnabled)
+	common.TenantState(tenantCtx).OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).LogConsumeEnabled)
+	common.TenantState(tenantCtx).OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DisplayInCurrencyEnabled)
+	common.TenantState(tenantCtx).OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DisplayTokenStatEnabled)
+	common.TenantState(tenantCtx).OptionMap["DrawingEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DrawingEnabled)
+	common.TenantState(tenantCtx).OptionMap["TaskEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).TaskEnabled)
+	common.TenantState(tenantCtx).OptionMap["TaskPluginEnabled"] = strconv.FormatBool(constant.TenantRuntime(tenantCtx).TaskPluginEnabled)
+	jsplugin.TenantState(tenantCtx).DefaultRegistry.SetEnabled(constant.TenantRuntime(tenantCtx).TaskPluginEnabled)
+	common.TenantState(tenantCtx).OptionMap[setting.TaskPluginMarketplaceSourcesKey] = setting.TaskPluginMarketplaceSources2JsonString()
+	common.TenantState(tenantCtx).OptionMap[setting.TaskPluginDisabledFactoryKeysKey] = "[]"
+	jsplugin.TenantState(tenantCtx).DefaultRegistry.SetDisabledFactoryKeys(nil)
+	common.TenantState(tenantCtx).OptionMap["DataExportEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DataExportEnabled)
+	common.TenantState(tenantCtx).OptionMap["ChannelDisableThreshold"] = strconv.FormatFloat(common.TenantState(tenantCtx).ChannelDisableThreshold, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["EmailDomainRestrictionEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).EmailDomainRestrictionEnabled)
+	common.TenantState(tenantCtx).OptionMap["EmailAliasRestrictionEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).EmailAliasRestrictionEnabled)
+	common.TenantState(tenantCtx).OptionMap["EmailDomainWhitelist"] = strings.Join(common.TenantState(tenantCtx).EmailDomainWhitelist, ",")
+	common.TenantState(tenantCtx).OptionMap["SMTPServer"] = ""
+	common.TenantState(tenantCtx).OptionMap["SMTPFrom"] = ""
+	common.TenantState(tenantCtx).OptionMap["SMTPPort"] = strconv.Itoa(common.TenantState(tenantCtx).SMTPPort)
+	common.TenantState(tenantCtx).OptionMap["SMTPAccount"] = ""
+	common.TenantState(tenantCtx).OptionMap["SMTPToken"] = ""
+	common.TenantState(tenantCtx).OptionMap["SMTPSSLEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).SMTPSSLEnabled)
+	common.TenantState(tenantCtx).OptionMap["SMTPStartTLSEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).SMTPStartTLSEnabled)
+	common.TenantState(tenantCtx).OptionMap["SMTPInsecureSkipVerify"] = strconv.FormatBool(common.TenantState(tenantCtx).SMTPInsecureSkipVerify)
+	common.TenantState(tenantCtx).OptionMap["SMTPForceAuthLogin"] = strconv.FormatBool(common.TenantState(tenantCtx).SMTPForceAuthLogin)
+	common.TenantState(tenantCtx).OptionMap["Notice"] = ""
+	common.TenantState(tenantCtx).OptionMap["About"] = ""
+	common.TenantState(tenantCtx).OptionMap["HomePageContent"] = ""
+	common.TenantState(tenantCtx).OptionMap["Footer"] = common.TenantState(tenantCtx).Footer
+	common.TenantState(tenantCtx).OptionMap["SystemName"] = common.TenantState(tenantCtx).SystemName
+	common.TenantState(tenantCtx).OptionMap["Logo"] = common.TenantState(tenantCtx).Logo
+	common.TenantState(tenantCtx).OptionMap["ServerAddress"] = ""
+	common.TenantState(tenantCtx).OptionMap["TaskPublicAddress"] = system_setting.TenantState(tenantCtx).TaskPublicAddress
+	common.TenantState(tenantCtx).OptionMap["WorkerUrl"] = system_setting.TenantState(tenantCtx).WorkerUrl
+	common.TenantState(tenantCtx).OptionMap["WorkerValidKey"] = system_setting.TenantState(tenantCtx).WorkerValidKey
+	common.TenantState(tenantCtx).OptionMap["WorkerAllowHttpImageRequestEnabled"] = strconv.FormatBool(system_setting.TenantState(tenantCtx).WorkerAllowHttpImageRequestEnabled)
+	common.TenantState(tenantCtx).OptionMap["PayAddress"] = ""
+	common.TenantState(tenantCtx).OptionMap["CustomCallbackAddress"] = ""
+	common.TenantState(tenantCtx).OptionMap["EpayId"] = ""
+	common.TenantState(tenantCtx).OptionMap["EpayKey"] = ""
+	common.TenantState(tenantCtx).OptionMap["Price"] = strconv.FormatFloat(operation_setting.TenantState(tenantCtx).Price, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["USDExchangeRate"] = strconv.FormatFloat(operation_setting.TenantState(tenantCtx).USDExchangeRate, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["MinTopUp"] = strconv.Itoa(operation_setting.TenantState(tenantCtx).MinTopUp)
+	common.TenantState(tenantCtx).OptionMap["StripeMinTopUp"] = strconv.Itoa(setting.TenantState(tenantCtx).StripeMinTopUp)
+	common.TenantState(tenantCtx).OptionMap["StripeApiSecret"] = setting.TenantState(tenantCtx).StripeApiSecret
+	common.TenantState(tenantCtx).OptionMap["StripeWebhookSecret"] = setting.TenantState(tenantCtx).StripeWebhookSecret
+	common.TenantState(tenantCtx).OptionMap["StripePriceId"] = setting.TenantState(tenantCtx).StripePriceId
+	common.TenantState(tenantCtx).OptionMap["StripeUnitPrice"] = strconv.FormatFloat(setting.TenantState(tenantCtx).StripeUnitPrice, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["StripePromotionCodesEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).StripePromotionCodesEnabled)
+	common.TenantState(tenantCtx).OptionMap["CreemApiKey"] = setting.TenantState(tenantCtx).CreemApiKey
+	common.TenantState(tenantCtx).OptionMap["CreemProducts"] = setting.TenantState(tenantCtx).CreemProducts
+	common.TenantState(tenantCtx).OptionMap["CreemTestMode"] = strconv.FormatBool(setting.TenantState(tenantCtx).CreemTestMode)
+	common.TenantState(tenantCtx).OptionMap["CreemWebhookSecret"] = setting.TenantState(tenantCtx).CreemWebhookSecret
+	common.TenantState(tenantCtx).OptionMap["WaffoEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).WaffoEnabled)
+	common.TenantState(tenantCtx).OptionMap["WaffoApiKey"] = setting.TenantState(tenantCtx).WaffoApiKey
+	common.TenantState(tenantCtx).OptionMap["WaffoPrivateKey"] = setting.TenantState(tenantCtx).WaffoPrivateKey
+	common.TenantState(tenantCtx).OptionMap["WaffoPublicCert"] = setting.TenantState(tenantCtx).WaffoPublicCert
+	common.TenantState(tenantCtx).OptionMap["WaffoSandboxPublicCert"] = setting.TenantState(tenantCtx).WaffoSandboxPublicCert
+	common.TenantState(tenantCtx).OptionMap["WaffoSandboxApiKey"] = setting.TenantState(tenantCtx).WaffoSandboxApiKey
+	common.TenantState(tenantCtx).OptionMap["WaffoSandboxPrivateKey"] = setting.TenantState(tenantCtx).WaffoSandboxPrivateKey
+	common.TenantState(tenantCtx).OptionMap["WaffoSandbox"] = strconv.FormatBool(setting.TenantState(tenantCtx).WaffoSandbox)
+	common.TenantState(tenantCtx).OptionMap["WaffoMerchantId"] = setting.TenantState(tenantCtx).WaffoMerchantId
+	common.TenantState(tenantCtx).OptionMap["WaffoNotifyUrl"] = setting.TenantState(tenantCtx).WaffoNotifyUrl
+	common.TenantState(tenantCtx).OptionMap["WaffoReturnUrl"] = setting.TenantState(tenantCtx).WaffoReturnUrl
+	common.TenantState(tenantCtx).OptionMap["WaffoSubscriptionReturnUrl"] = setting.TenantState(tenantCtx).WaffoSubscriptionReturnUrl
+	common.TenantState(tenantCtx).OptionMap["WaffoCurrency"] = setting.TenantState(tenantCtx).WaffoCurrency
+	common.TenantState(tenantCtx).OptionMap["WaffoUnitPrice"] = strconv.FormatFloat(setting.TenantState(tenantCtx).WaffoUnitPrice, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["WaffoMinTopUp"] = strconv.Itoa(setting.TenantState(tenantCtx).WaffoMinTopUp)
+	common.TenantState(tenantCtx).OptionMap["WaffoPayMethods"] = setting.WaffoPayMethods2JsonString()
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeMerchantID"] = setting.TenantState(tenantCtx).WaffoPancakeMerchantID
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakePrivateKey"] = setting.TenantState(tenantCtx).WaffoPancakePrivateKey
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeReturnURL"] = setting.TenantState(tenantCtx).WaffoPancakeReturnURL
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeUnitPrice"] = strconv.FormatFloat(setting.TenantState(tenantCtx).WaffoPancakeUnitPrice, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeMinTopUp"] = strconv.Itoa(setting.TenantState(tenantCtx).WaffoPancakeMinTopUp)
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeStoreID"] = setting.TenantState(tenantCtx).WaffoPancakeStoreID
+	common.TenantState(tenantCtx).OptionMap["WaffoPancakeProductID"] = setting.TenantState(tenantCtx).WaffoPancakeProductID
+	common.TenantState(tenantCtx).OptionMap["TopupGroupRatio"] = common.TopupGroupRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["Chats"] = setting.Chats2JsonString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["AutoGroups"] = setting.AutoGroups2JsonString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["DefaultUseAutoGroup"] = strconv.FormatBool(setting.TenantRuntime(tenantCtx).DefaultUseAutoGroup)
+	common.TenantState(tenantCtx).OptionMap["MaxTokenAutoGroups"] = strconv.Itoa(setting.GetMaxTokenAutoGroups(tenantCtx))
+	common.TenantState(tenantCtx).OptionMap["PayMethods"] = operation_setting.PayMethods2JsonString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["GitHubClientId"] = ""
+	common.TenantState(tenantCtx).OptionMap["GitHubClientSecret"] = ""
+	common.TenantState(tenantCtx).OptionMap["TelegramBotToken"] = ""
+	common.TenantState(tenantCtx).OptionMap["TelegramBotName"] = ""
+	common.TenantState(tenantCtx).OptionMap["WeChatServerAddress"] = ""
+	common.TenantState(tenantCtx).OptionMap["WeChatServerToken"] = ""
+	common.TenantState(tenantCtx).OptionMap["WeChatAccountQRCodeImageURL"] = ""
+	common.TenantState(tenantCtx).OptionMap["TurnstileSiteKey"] = ""
+	common.TenantState(tenantCtx).OptionMap["TurnstileSecretKey"] = ""
+	common.TenantState(tenantCtx).OptionMap["QuotaForNewUser"] = strconv.Itoa(common.TenantState(tenantCtx).QuotaForNewUser)
+	common.TenantState(tenantCtx).OptionMap["QuotaForInviter"] = strconv.Itoa(common.TenantState(tenantCtx).QuotaForInviter)
+	common.TenantState(tenantCtx).OptionMap["QuotaForInvitee"] = strconv.Itoa(common.TenantState(tenantCtx).QuotaForInvitee)
+	common.TenantState(tenantCtx).OptionMap["QuotaRemindThreshold"] = strconv.Itoa(common.TenantState(tenantCtx).QuotaRemindThreshold)
+	common.TenantState(tenantCtx).OptionMap["PreConsumedQuota"] = strconv.Itoa(common.TenantState(tenantCtx).PreConsumedQuota)
+	common.TenantState(tenantCtx).OptionMap["ModelRequestRateLimitCount"] = strconv.Itoa(setting.TenantState(tenantCtx).ModelRequestRateLimitCount)
+	common.TenantState(tenantCtx).OptionMap["ModelRequestRateLimitDurationMinutes"] = strconv.Itoa(setting.TenantState(tenantCtx).ModelRequestRateLimitDurationMinutes)
+	common.TenantState(tenantCtx).OptionMap["ModelRequestRateLimitSuccessCount"] = strconv.Itoa(setting.TenantState(tenantCtx).ModelRequestRateLimitSuccessCount)
+	common.TenantState(tenantCtx).OptionMap["ModelRequestRateLimitGroup"] = setting.ModelRequestRateLimitGroup2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["ModelRatio"] = ratio_setting.ModelRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["ModelPrice"] = ratio_setting.ModelPrice2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["CacheRatio"] = ratio_setting.CacheRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["CreateCacheRatio"] = ratio_setting.CreateCacheRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["GroupRatio"] = ratio_setting.GroupRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["GroupGroupRatio"] = ratio_setting.GroupGroupRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["UserUsableGroups"] = setting.UserUsableGroups2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["CompletionRatio"] = ratio_setting.CompletionRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["ImageRatio"] = ratio_setting.ImageRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["AudioRatio"] = ratio_setting.AudioRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["AudioCompletionRatio"] = ratio_setting.AudioCompletionRatio2JSONString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["TopUpLink"] = common.TenantState(tenantCtx).TopUpLink
 	//common.OptionMap["ChatLink"] = common.ChatLink
 	//common.OptionMap["ChatLink2"] = common.ChatLink2
-	common.OptionMap["QuotaPerUnit"] = strconv.FormatFloat(common.QuotaPerUnit, 'f', -1, 64)
-	common.OptionMap["RetryTimes"] = strconv.Itoa(common.RetryTimes)
-	common.OptionMap["DataExportInterval"] = strconv.Itoa(common.DataExportInterval)
-	common.OptionMap["DataExportDefaultTime"] = common.DataExportDefaultTime
-	common.OptionMap["DefaultCollapseSidebar"] = strconv.FormatBool(common.DefaultCollapseSidebar)
-	common.OptionMap["MjNotifyEnabled"] = strconv.FormatBool(setting.MjNotifyEnabled)
-	common.OptionMap["MjAccountFilterEnabled"] = strconv.FormatBool(setting.MjAccountFilterEnabled)
-	common.OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.MjModeClearEnabled)
-	common.OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.MjForwardUrlEnabled)
-	common.OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.MjActionCheckSuccessEnabled)
-	common.OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.CheckSensitiveEnabled)
-	common.OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.DemoSiteEnabled)
-	common.OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.SelfUseModeEnabled)
-	common.OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.ModelRequestRateLimitEnabled)
-	common.OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.CheckSensitiveOnPromptEnabled)
-	common.OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.StopOnSensitiveEnabled)
-	common.OptionMap["SensitiveWords"] = setting.SensitiveWordsToString()
-	common.OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.StreamCacheQueueLength)
-	common.OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString()
-	common.OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString()
-	common.OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString()
-	common.OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled())
+	common.TenantState(tenantCtx).OptionMap["QuotaPerUnit"] = strconv.FormatFloat(common.TenantState(tenantCtx).QuotaPerUnit, 'f', -1, 64)
+	common.TenantState(tenantCtx).OptionMap["RetryTimes"] = strconv.Itoa(common.TenantState(tenantCtx).RetryTimes)
+	common.TenantState(tenantCtx).OptionMap["DataExportInterval"] = strconv.Itoa(common.TenantState(tenantCtx).DataExportInterval)
+	common.TenantState(tenantCtx).OptionMap["DataExportDefaultTime"] = common.TenantState(tenantCtx).DataExportDefaultTime
+	common.TenantState(tenantCtx).OptionMap["DefaultCollapseSidebar"] = strconv.FormatBool(common.TenantState(tenantCtx).DefaultCollapseSidebar)
+	common.TenantState(tenantCtx).OptionMap["MjNotifyEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).MjNotifyEnabled)
+	common.TenantState(tenantCtx).OptionMap["MjAccountFilterEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).MjAccountFilterEnabled)
+	common.TenantState(tenantCtx).OptionMap["MjModeClearEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).MjModeClearEnabled)
+	common.TenantState(tenantCtx).OptionMap["MjForwardUrlEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).MjForwardUrlEnabled)
+	common.TenantState(tenantCtx).OptionMap["MjActionCheckSuccessEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).MjActionCheckSuccessEnabled)
+	common.TenantState(tenantCtx).OptionMap["CheckSensitiveEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).CheckSensitiveEnabled)
+	common.TenantState(tenantCtx).OptionMap["DemoSiteEnabled"] = strconv.FormatBool(operation_setting.TenantState(tenantCtx).DemoSiteEnabled)
+	common.TenantState(tenantCtx).OptionMap["SelfUseModeEnabled"] = strconv.FormatBool(operation_setting.TenantState(tenantCtx).SelfUseModeEnabled)
+	common.TenantState(tenantCtx).OptionMap["ModelRequestRateLimitEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).ModelRequestRateLimitEnabled)
+	common.TenantState(tenantCtx).OptionMap["CheckSensitiveOnPromptEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).CheckSensitiveOnPromptEnabled)
+	common.TenantState(tenantCtx).OptionMap["StopOnSensitiveEnabled"] = strconv.FormatBool(setting.TenantState(tenantCtx).StopOnSensitiveEnabled)
+	common.TenantState(tenantCtx).OptionMap["SensitiveWords"] = setting.SensitiveWordsToString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["StreamCacheQueueLength"] = strconv.Itoa(setting.TenantState(tenantCtx).StreamCacheQueueLength)
+	common.TenantState(tenantCtx).OptionMap["AutomaticDisableKeywords"] = operation_setting.AutomaticDisableKeywordsToString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["AutomaticDisableStatusCodes"] = operation_setting.AutomaticDisableStatusCodesToString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["AutomaticRetryStatusCodes"] = operation_setting.AutomaticRetryStatusCodesToString(tenantCtx)
+	common.TenantState(tenantCtx).OptionMap["ExposeRatioEnabled"] = strconv.FormatBool(ratio_setting.IsExposeRatioEnabled(tenantCtx))
 
 	// 自动添加所有注册的模型配置
-	modelConfigs := config.GlobalConfig.ExportAllConfigs()
-	maps.Copy(common.OptionMap, modelConfigs)
+	modelConfigs := config.GlobalConfig.ForTenant(tenantCtx).ExportAllConfigs()
+	maps.Copy(common.TenantState(tenantCtx).OptionMap, modelConfigs)
 
-	common.OptionMapRWMutex.Unlock()
-	loadOptionsFromDatabase()
+	common.TenantState(tenantCtx).OptionMapRWMutex.Unlock()
+	loadOptionsFromDatabase(tenantCtx)
 }
 
-func loadOptionsFromDatabase() {
-	passkeyOptionMutex.Lock()
-	defer passkeyOptionMutex.Unlock()
-	options, _ := AllOption()
+func loadOptionsFromDatabase(tenantCtx context.Context) {
+	TenantState(tenantCtx).passkeyOptionMutex.Lock()
+	defer TenantState(tenantCtx).passkeyOptionMutex.Unlock()
+	options, _ := AllOption(tenantCtx)
 	passkeyOptions := make(map[string]string)
 	for _, option := range options {
 		if IsPasskeyDomainOption(option.Key) {
 			passkeyOptions[option.Key] = option.Value
 			continue
 		}
-		err := updateOptionMap(option.Key, option.Value)
+		err := updateOptionMap(tenantCtx, option.Key, option.Value)
 		if err != nil {
 			common.SysLog("failed to update option map: " + err.Error())
 		}
 	}
-	applyPasskeyDomainOptions(passkeyOptions)
+	applyPasskeyDomainOptions(tenantCtx, passkeyOptions)
 }
 
-func SyncOptions(frequency int) {
+func SyncOptions(tenantCtx context.Context, frequency int) {
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
 		common.SysLog("syncing options from database")
-		loadOptionsFromDatabase()
+		loadOptionsFromDatabase(tenantCtx)
 	}
 }
 
@@ -233,13 +237,16 @@ func validateOptionValue(key string, value string) error {
 	return nil
 }
 
-func UpdateOption(key string, value string) error {
+func UpdateOption(tenantCtx context.Context, key string, value string) error {
+	if err := plan.ValidateOption(tenantCtx, DB, key); err != nil {
+		return err
+	}
 	if IsPasskeyDomainOption(key) {
-		_, err := UpdatePasskeyDomainOptions(map[string]string{key: value}, false, "")
+		_, err := UpdatePasskeyDomainOptions(tenantCtx, map[string]string{key: value}, false, "")
 		return err
 	}
 	if IsModelPricingOption(key) {
-		return UpdateModelPricingOptions(map[string]string{key: value})
+		return UpdateModelPricingOptions(tenantCtx, map[string]string{key: value})
 	}
 	if err := validateOptionValue(key, value); err != nil {
 		return err
@@ -249,14 +256,14 @@ func UpdateOption(key string, value string) error {
 		Key: key,
 	}
 	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
+	if err := DB.WithContext(tenantCtx).FirstOrCreate(&option, Option{Key: key}).Error; err != nil {
+		return err
+	}
+	if err := DB.WithContext(tenantCtx).Model(&Option{}).Where("tenant_id = ? AND "+commonKeyCol+" = ?", option.TenantID, key).Update("value", value).Error; err != nil {
+		return err
+	}
 	// Update OptionMap
-	return updateOptionMap(key, value)
+	return updateOptionMap(tenantCtx, key, value)
 }
 
 // UpdateOptionsBulk persists multiple key/value pairs in a single database
@@ -264,13 +271,18 @@ func UpdateOption(key string, value string) error {
 // any DB write fails the whole transaction rolls back and no in-memory state
 // is touched — safe for callers that must commit a set of related options
 // atomically (e.g. payment gateway binding).
-func UpdateOptionsBulk(values map[string]string) error {
+func UpdateOptionsBulk(tenantCtx context.Context, values map[string]string) error {
 	if len(values) == 0 {
 		return nil
 	}
 	for key := range values {
+		if err := plan.ValidateOption(tenantCtx, DB, key); err != nil {
+			return err
+		}
+	}
+	for key := range values {
 		if IsPasskeyDomainOption(key) {
-			_, err := UpdatePasskeyDomainOptions(values, false, "")
+			_, err := UpdatePasskeyDomainOptions(tenantCtx, values, false, "")
 			return err
 		}
 	}
@@ -279,14 +291,13 @@ func UpdateOptionsBulk(values map[string]string) error {
 			return err
 		}
 	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		for k, v := range values {
 			option := Option{Key: k}
 			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
 				return err
 			}
-			option.Value = v
-			if err := tx.Save(&option).Error; err != nil {
+			if err := tx.Model(&Option{}).Where(Option{Key: k}).Update("value", v).Error; err != nil {
 				return err
 			}
 		}
@@ -296,26 +307,26 @@ func UpdateOptionsBulk(values map[string]string) error {
 		return err
 	}
 	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
+		if err := updateOptionMap(tenantCtx, k, v); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func updateOptionMap(key string, value string) (err error) {
+func updateOptionMap(tenantCtx context.Context, key string, value string) (err error) {
 	if key == retiredThemeOptionKey {
-		common.OptionMapRWMutex.Lock()
-		delete(common.OptionMap, key)
-		common.OptionMapRWMutex.Unlock()
+		common.TenantState(tenantCtx).OptionMapRWMutex.Lock()
+		delete(common.TenantState(tenantCtx).OptionMap, key)
+		common.TenantState(tenantCtx).OptionMapRWMutex.Unlock()
 		return nil
 	}
-	common.OptionMapRWMutex.Lock()
-	defer common.OptionMapRWMutex.Unlock()
-	common.OptionMap[key] = value
+	common.TenantState(tenantCtx).OptionMapRWMutex.Lock()
+	defer common.TenantState(tenantCtx).OptionMapRWMutex.Unlock()
+	common.TenantState(tenantCtx).OptionMap[key] = value
 
 	// 检查是否是模型配置 - 使用更规范的方式处理
-	if handleConfigUpdate(key, value) {
+	if handleConfigUpdate(tenantCtx, key, value) {
 		return nil // 已由配置系统处理
 	}
 
@@ -324,46 +335,46 @@ func updateOptionMap(key string, value string) (err error) {
 		intValue, _ := strconv.Atoi(value)
 		switch key {
 		case "FileUploadPermission":
-			common.FileUploadPermission = intValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.FileUploadPermission = intValue })
 		case "FileDownloadPermission":
-			common.FileDownloadPermission = intValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.FileDownloadPermission = intValue })
 		case "ImageUploadPermission":
-			common.ImageUploadPermission = intValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.ImageUploadPermission = intValue })
 		case "ImageDownloadPermission":
-			common.ImageDownloadPermission = intValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.ImageDownloadPermission = intValue })
 		}
 	}
 	if strings.HasSuffix(key, "Enabled") || key == "DefaultCollapseSidebar" || key == "DefaultUseAutoGroup" || key == "SMTPForceAuthLogin" || key == "SMTPInsecureSkipVerify" {
 		boolValue := value == "true"
 		switch key {
 		case "PasswordRegisterEnabled":
-			common.PasswordRegisterEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.PasswordRegisterEnabled = boolValue })
 		case "PasswordLoginEnabled":
-			common.PasswordLoginEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.PasswordLoginEnabled = boolValue })
 		case "EmailVerificationEnabled":
-			common.EmailVerificationEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.EmailVerificationEnabled = boolValue })
 		case "GitHubOAuthEnabled":
-			common.GitHubOAuthEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.GitHubOAuthEnabled = boolValue })
 		case "LinuxDOOAuthEnabled":
-			common.LinuxDOOAuthEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LinuxDOOAuthEnabled = boolValue })
 		case "WeChatAuthEnabled":
-			common.WeChatAuthEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.WeChatAuthEnabled = boolValue })
 		case "TelegramOAuthEnabled":
-			common.TelegramOAuthEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TelegramOAuthEnabled = boolValue })
 		case "TurnstileCheckEnabled":
-			common.TurnstileCheckEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TurnstileCheckEnabled = boolValue })
 		case "RegisterEnabled":
-			common.RegisterEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.RegisterEnabled = boolValue })
 		case "EmailDomainRestrictionEnabled":
-			common.EmailDomainRestrictionEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.EmailDomainRestrictionEnabled = boolValue })
 		case "EmailAliasRestrictionEnabled":
-			common.EmailAliasRestrictionEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.EmailAliasRestrictionEnabled = boolValue })
 		case "AutomaticDisableChannelEnabled":
-			common.AutomaticDisableChannelEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.AutomaticDisableChannelEnabled = boolValue })
 		case "AutomaticEnableChannelEnabled":
-			common.AutomaticEnableChannelEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.AutomaticEnableChannelEnabled = boolValue })
 		case "LogConsumeEnabled":
-			common.LogConsumeEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LogConsumeEnabled = boolValue })
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS
@@ -371,269 +382,271 @@ func updateOptionMap(key string, value string) (err error) {
 			if !boolValue {
 				newVal = "TOKENS"
 			}
-			if cfg := config.GlobalConfig.Get("general_setting"); cfg != nil {
-				_ = config.UpdateConfigFromMap(cfg, map[string]string{"quota_display_type": newVal})
-			}
+			_ = config.GlobalConfig.ForTenant(tenantCtx).Update("general_setting", map[string]string{"quota_display_type": newVal})
 		case "DisplayTokenStatEnabled":
-			common.DisplayTokenStatEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DisplayTokenStatEnabled = boolValue })
 		case "DrawingEnabled":
-			common.DrawingEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DrawingEnabled = boolValue })
 		case "TaskEnabled":
-			common.TaskEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TaskEnabled = boolValue })
 		case "TaskPluginEnabled":
-			constant.TaskPluginEnabled = boolValue
-			jsplugin.DefaultRegistry.SetEnabled(boolValue)
+			constant.UpdateTenantRuntime(tenantCtx, func(state *constant.WorkspaceRuntime) { state.TaskPluginEnabled = boolValue })
+			jsplugin.TenantState(tenantCtx).DefaultRegistry.SetEnabled(boolValue)
 		case "DataExportEnabled":
-			common.DataExportEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DataExportEnabled = boolValue })
 		case "DefaultCollapseSidebar":
-			common.DefaultCollapseSidebar = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DefaultCollapseSidebar = boolValue })
 		case "MjNotifyEnabled":
-			setting.MjNotifyEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.MjNotifyEnabled = boolValue })
 		case "MjAccountFilterEnabled":
-			setting.MjAccountFilterEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.MjAccountFilterEnabled = boolValue })
 		case "MjModeClearEnabled":
-			setting.MjModeClearEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.MjModeClearEnabled = boolValue })
 		case "MjForwardUrlEnabled":
-			setting.MjForwardUrlEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.MjForwardUrlEnabled = boolValue })
 		case "MjActionCheckSuccessEnabled":
-			setting.MjActionCheckSuccessEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.MjActionCheckSuccessEnabled = boolValue })
 		case "CheckSensitiveEnabled":
-			setting.CheckSensitiveEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CheckSensitiveEnabled = boolValue })
 		case "DemoSiteEnabled":
-			operation_setting.DemoSiteEnabled = boolValue
+			operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.DemoSiteEnabled = boolValue })
 		case "SelfUseModeEnabled":
-			operation_setting.SelfUseModeEnabled = boolValue
+			operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.SelfUseModeEnabled = boolValue })
 		case "CheckSensitiveOnPromptEnabled":
-			setting.CheckSensitiveOnPromptEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CheckSensitiveOnPromptEnabled = boolValue })
 		case "ModelRequestRateLimitEnabled":
-			setting.ModelRequestRateLimitEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.ModelRequestRateLimitEnabled = boolValue })
 		case "StopOnSensitiveEnabled":
-			setting.StopOnSensitiveEnabled = boolValue
+			setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StopOnSensitiveEnabled = boolValue })
 		case "SMTPSSLEnabled":
-			common.SMTPSSLEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPSSLEnabled = boolValue })
 		case "SMTPStartTLSEnabled":
-			common.SMTPStartTLSEnabled = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPStartTLSEnabled = boolValue })
 		case "SMTPInsecureSkipVerify":
-			common.SMTPInsecureSkipVerify = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPInsecureSkipVerify = boolValue })
 		case "SMTPForceAuthLogin":
-			common.SMTPForceAuthLogin = boolValue
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPForceAuthLogin = boolValue })
 		case "WorkerAllowHttpImageRequestEnabled":
-			system_setting.WorkerAllowHttpImageRequestEnabled = boolValue
+			system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.WorkerAllowHttpImageRequestEnabled = boolValue })
 		case "DefaultUseAutoGroup":
-			setting.DefaultUseAutoGroup = boolValue
+			setting.UpdateTenantRuntime(tenantCtx, func(state *setting.WorkspaceRuntime) { state.DefaultUseAutoGroup = boolValue })
 		case "ExposeRatioEnabled":
-			ratio_setting.SetExposeRatioEnabled(boolValue)
+			ratio_setting.SetExposeRatioEnabled(tenantCtx, boolValue)
 		}
 	}
 	if key == setting.TaskPluginDisabledFactoryKeysKey {
-		jsplugin.DefaultRegistry.SetDisabledFactoryKeys(setting.ParseTaskPluginDisabledFactoryKeys(value))
+		jsplugin.TenantState(tenantCtx).DefaultRegistry.SetDisabledFactoryKeys(setting.ParseTaskPluginDisabledFactoryKeys(value))
 	}
 	switch key {
 	case "EmailDomainWhitelist":
-		common.EmailDomainWhitelist = strings.Split(value, ",")
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.EmailDomainWhitelist = strings.Split(value, ",") })
 	case "SMTPServer":
-		common.SMTPServer = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPServer = value })
 	case "SMTPPort":
 		intValue, _ := strconv.Atoi(value)
-		common.SMTPPort = intValue
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPPort = intValue })
 	case "SMTPAccount":
-		common.SMTPAccount = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPAccount = value })
 	case "SMTPFrom":
-		common.SMTPFrom = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPFrom = value })
 	case "SMTPToken":
-		common.SMTPToken = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SMTPToken = value })
 	case "ServerAddress":
-		system_setting.ServerAddress = value
+		system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.ServerAddress = value })
 	case "TaskPublicAddress":
-		system_setting.TaskPublicAddress = value
+		system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.TaskPublicAddress = value })
 	case "WorkerUrl":
-		system_setting.WorkerUrl = value
+		system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.WorkerUrl = value })
 	case "WorkerValidKey":
-		system_setting.WorkerValidKey = value
+		system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.WorkerValidKey = value })
 	case "PayAddress":
-		operation_setting.PayAddress = value
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.PayAddress = value })
 	case "Chats":
-		err = setting.UpdateChatsByJsonString(value)
+		err = setting.UpdateChatsByJsonString(tenantCtx, value)
 	case "AutoGroups":
-		err = setting.UpdateAutoGroupsByJsonString(value)
+		err = setting.UpdateAutoGroupsByJsonString(tenantCtx, value)
 	case "MaxTokenAutoGroups":
-		err = setting.UpdateMaxTokenAutoGroups(value)
+		err = setting.UpdateMaxTokenAutoGroups(tenantCtx, value)
 	case "CustomCallbackAddress":
-		operation_setting.CustomCallbackAddress = value
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.CustomCallbackAddress = value })
 	case "EpayId":
-		operation_setting.EpayId = value
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.EpayId = value })
 	case "EpayKey":
-		operation_setting.EpayKey = value
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.EpayKey = value })
 	case "Price":
-		operation_setting.Price, _ = strconv.ParseFloat(value, 64)
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.Price, _ = strconv.ParseFloat(value, 64) })
 	case "USDExchangeRate":
-		operation_setting.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) {
+			state.USDExchangeRate, _ = strconv.ParseFloat(value, 64)
+		})
 	case "MinTopUp":
-		operation_setting.MinTopUp, _ = strconv.Atoi(value)
+		operation_setting.UpdateTenantSettings(tenantCtx, func(state *operation_setting.WorkspaceState) { state.MinTopUp, _ = strconv.Atoi(value) })
 	case "StripeApiSecret":
-		setting.StripeApiSecret = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripeApiSecret = value })
 	case "StripeWebhookSecret":
-		setting.StripeWebhookSecret = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripeWebhookSecret = value })
 	case "StripePriceId":
-		setting.StripePriceId = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripePriceId = value })
 	case "StripeUnitPrice":
-		setting.StripeUnitPrice, _ = strconv.ParseFloat(value, 64)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripeUnitPrice, _ = strconv.ParseFloat(value, 64) })
 	case "StripeMinTopUp":
-		setting.StripeMinTopUp, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripeMinTopUp, _ = strconv.Atoi(value) })
 	case "StripePromotionCodesEnabled":
-		setting.StripePromotionCodesEnabled = value == "true"
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StripePromotionCodesEnabled = value == "true" })
 	case "CreemApiKey":
-		setting.CreemApiKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CreemApiKey = value })
 	case "CreemProducts":
-		setting.CreemProducts = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CreemProducts = value })
 	case "CreemTestMode":
-		setting.CreemTestMode = value == "true"
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CreemTestMode = value == "true" })
 	case "CreemWebhookSecret":
-		setting.CreemWebhookSecret = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.CreemWebhookSecret = value })
 	case "WaffoEnabled":
-		setting.WaffoEnabled = value == "true"
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoEnabled = value == "true" })
 	case "WaffoApiKey":
-		setting.WaffoApiKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoApiKey = value })
 	case "WaffoPrivateKey":
-		setting.WaffoPrivateKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPrivateKey = value })
 	case "WaffoPublicCert":
-		setting.WaffoPublicCert = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPublicCert = value })
 	case "WaffoSandboxPublicCert":
-		setting.WaffoSandboxPublicCert = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoSandboxPublicCert = value })
 	case "WaffoSandboxApiKey":
-		setting.WaffoSandboxApiKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoSandboxApiKey = value })
 	case "WaffoSandboxPrivateKey":
-		setting.WaffoSandboxPrivateKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoSandboxPrivateKey = value })
 	case "WaffoSandbox":
-		setting.WaffoSandbox = value == "true"
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoSandbox = value == "true" })
 	case "WaffoMerchantId":
-		setting.WaffoMerchantId = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoMerchantId = value })
 	case "WaffoNotifyUrl":
-		setting.WaffoNotifyUrl = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoNotifyUrl = value })
 	case "WaffoReturnUrl":
-		setting.WaffoReturnUrl = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoReturnUrl = value })
 	case "WaffoSubscriptionReturnUrl":
-		setting.WaffoSubscriptionReturnUrl = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoSubscriptionReturnUrl = value })
 	case "WaffoCurrency":
-		setting.WaffoCurrency = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoCurrency = value })
 	case "WaffoUnitPrice":
-		setting.WaffoUnitPrice, _ = strconv.ParseFloat(value, 64)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoUnitPrice, _ = strconv.ParseFloat(value, 64) })
 	case "WaffoMinTopUp":
-		setting.WaffoMinTopUp, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoMinTopUp, _ = strconv.Atoi(value) })
 	case "WaffoPancakeMerchantID":
-		setting.WaffoPancakeMerchantID = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeMerchantID = value })
 	case "WaffoPancakePrivateKey":
-		setting.WaffoPancakePrivateKey = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakePrivateKey = value })
 	case "WaffoPancakeReturnURL":
-		setting.WaffoPancakeReturnURL = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeReturnURL = value })
 	case "WaffoPancakeStoreID":
-		setting.WaffoPancakeStoreID = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeStoreID = value })
 	case "WaffoPancakeProductID":
-		setting.WaffoPancakeProductID = value
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeProductID = value })
 	case "WaffoPancakeUnitPrice":
-		setting.WaffoPancakeUnitPrice, _ = strconv.ParseFloat(value, 64)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeUnitPrice, _ = strconv.ParseFloat(value, 64) })
 	case "WaffoPancakeMinTopUp":
-		setting.WaffoPancakeMinTopUp, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.WaffoPancakeMinTopUp, _ = strconv.Atoi(value) })
 	case "TopupGroupRatio":
-		err = common.UpdateTopupGroupRatioByJSONString(value)
+		err = common.UpdateTopupGroupRatioByJSONString(tenantCtx, value)
 	case "GitHubClientId":
-		common.GitHubClientId = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.GitHubClientId = value })
 	case "GitHubClientSecret":
-		common.GitHubClientSecret = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.GitHubClientSecret = value })
 	case "LinuxDOClientId":
-		common.LinuxDOClientId = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LinuxDOClientId = value })
 	case "LinuxDOClientSecret":
-		common.LinuxDOClientSecret = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LinuxDOClientSecret = value })
 	case "LinuxDOMinimumTrustLevel":
-		common.LinuxDOMinimumTrustLevel, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LinuxDOMinimumTrustLevel, _ = strconv.Atoi(value) })
 	case "Footer":
-		common.Footer = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.Footer = value })
 	case "SystemName":
-		common.SystemName = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.SystemName = value })
 	case "Logo":
-		common.Logo = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.Logo = value })
 	case "WeChatServerAddress":
-		common.WeChatServerAddress = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.WeChatServerAddress = value })
 	case "WeChatServerToken":
-		common.WeChatServerToken = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.WeChatServerToken = value })
 	case "WeChatAccountQRCodeImageURL":
-		common.WeChatAccountQRCodeImageURL = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.WeChatAccountQRCodeImageURL = value })
 	case "TelegramBotToken":
-		common.TelegramBotToken = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TelegramBotToken = value })
 	case "TelegramBotName":
-		common.TelegramBotName = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TelegramBotName = value })
 	case "TurnstileSiteKey":
-		common.TurnstileSiteKey = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TurnstileSiteKey = value })
 	case "TurnstileSecretKey":
-		common.TurnstileSecretKey = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TurnstileSecretKey = value })
 	case "QuotaForNewUser":
-		common.QuotaForNewUser, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.QuotaForNewUser, _ = strconv.Atoi(value) })
 	case "QuotaForInviter":
-		common.QuotaForInviter, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.QuotaForInviter, _ = strconv.Atoi(value) })
 	case "QuotaForInvitee":
-		common.QuotaForInvitee, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.QuotaForInvitee, _ = strconv.Atoi(value) })
 	case "QuotaRemindThreshold":
-		common.QuotaRemindThreshold, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.QuotaRemindThreshold, _ = strconv.Atoi(value) })
 	case "PreConsumedQuota":
-		common.PreConsumedQuota, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.PreConsumedQuota, _ = strconv.Atoi(value) })
 	case "ModelRequestRateLimitCount":
-		setting.ModelRequestRateLimitCount, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.ModelRequestRateLimitCount, _ = strconv.Atoi(value) })
 	case "ModelRequestRateLimitDurationMinutes":
-		setting.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) {
+			state.ModelRequestRateLimitDurationMinutes, _ = strconv.Atoi(value)
+		})
 	case "ModelRequestRateLimitSuccessCount":
-		setting.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.ModelRequestRateLimitSuccessCount, _ = strconv.Atoi(value) })
 	case "ModelRequestRateLimitGroup":
-		err = setting.UpdateModelRequestRateLimitGroupByJSONString(value)
+		err = setting.UpdateModelRequestRateLimitGroupByJSONString(tenantCtx, value)
 	case "RetryTimes":
-		common.RetryTimes, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.RetryTimes, _ = strconv.Atoi(value) })
 	case "DataExportInterval":
-		common.DataExportInterval, _ = strconv.Atoi(value)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DataExportInterval, _ = strconv.Atoi(value) })
 	case "DataExportDefaultTime":
-		common.DataExportDefaultTime = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.DataExportDefaultTime = value })
 	case "ModelRatio":
-		err = ratio_setting.UpdateModelRatioByJSONString(value)
+		err = ratio_setting.UpdateModelRatioByJSONString(tenantCtx, value)
 	case "GroupRatio":
-		err = ratio_setting.UpdateGroupRatioByJSONString(value)
+		err = ratio_setting.UpdateGroupRatioByJSONString(tenantCtx, value)
 	case "GroupGroupRatio":
-		err = ratio_setting.UpdateGroupGroupRatioByJSONString(value)
+		err = ratio_setting.UpdateGroupGroupRatioByJSONString(tenantCtx, value)
 	case "UserUsableGroups":
-		err = setting.UpdateUserUsableGroupsByJSONString(value)
+		err = setting.UpdateUserUsableGroupsByJSONString(tenantCtx, value)
 	case "CompletionRatio":
-		err = ratio_setting.UpdateCompletionRatioByJSONString(value)
+		err = ratio_setting.UpdateCompletionRatioByJSONString(tenantCtx, value)
 	case "ModelPrice":
-		err = ratio_setting.UpdateModelPriceByJSONString(value)
+		err = ratio_setting.UpdateModelPriceByJSONString(tenantCtx, value)
 	case "CacheRatio":
-		err = ratio_setting.UpdateCacheRatioByJSONString(value)
+		err = ratio_setting.UpdateCacheRatioByJSONString(tenantCtx, value)
 	case "CreateCacheRatio":
-		err = ratio_setting.UpdateCreateCacheRatioByJSONString(value)
+		err = ratio_setting.UpdateCreateCacheRatioByJSONString(tenantCtx, value)
 	case "ImageRatio":
-		err = ratio_setting.UpdateImageRatioByJSONString(value)
+		err = ratio_setting.UpdateImageRatioByJSONString(tenantCtx, value)
 	case "AudioRatio":
-		err = ratio_setting.UpdateAudioRatioByJSONString(value)
+		err = ratio_setting.UpdateAudioRatioByJSONString(tenantCtx, value)
 	case "AudioCompletionRatio":
-		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(value)
+		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(tenantCtx, value)
 	case "TopUpLink":
-		common.TopUpLink = value
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.TopUpLink = value })
 	//case "ChatLink":
 	//	common.ChatLink = value
 	//case "ChatLink2":
 	//	common.ChatLink2 = value
 	case "ChannelDisableThreshold":
-		common.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.ChannelDisableThreshold, _ = strconv.ParseFloat(value, 64) })
 	case "QuotaPerUnit":
-		common.QuotaPerUnit, _ = strconv.ParseFloat(value, 64)
+		common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.QuotaPerUnit, _ = strconv.ParseFloat(value, 64) })
 	case "SensitiveWords":
-		setting.SensitiveWordsFromString(value)
+		setting.SensitiveWordsFromString(tenantCtx, value)
 	case "AutomaticDisableKeywords":
-		operation_setting.AutomaticDisableKeywordsFromString(value)
+		operation_setting.AutomaticDisableKeywordsFromString(tenantCtx, value)
 	case "AutomaticDisableStatusCodes":
-		err = operation_setting.AutomaticDisableStatusCodesFromString(value)
+		err = operation_setting.AutomaticDisableStatusCodesFromString(tenantCtx, value)
 	case "AutomaticRetryStatusCodes":
-		err = operation_setting.AutomaticRetryStatusCodesFromString(value)
+		err = operation_setting.AutomaticRetryStatusCodesFromString(tenantCtx, value)
 	case "StreamCacheQueueLength":
-		setting.StreamCacheQueueLength, _ = strconv.Atoi(value)
+		setting.UpdateTenantSettings(tenantCtx, func(state *setting.WorkspaceState) { state.StreamCacheQueueLength, _ = strconv.Atoi(value) })
 	case "PayMethods":
-		err = operation_setting.UpdatePayMethodsByJsonString(value)
+		err = operation_setting.UpdatePayMethodsByJsonString(tenantCtx, value)
 	case "WaffoPayMethods":
 		// WaffoPayMethods is read directly from OptionMap via setting.GetWaffoPayMethods().
 		// The value is already stored in OptionMap at the top of this function (line: common.OptionMap[key] = value).
@@ -643,9 +656,9 @@ func updateOptionMap(key string, value string) (err error) {
 }
 
 // handleConfigUpdate 处理分层配置更新，返回是否已处理
-func handleConfigUpdate(key, value string) bool {
+func handleConfigUpdate(tenantCtx context.Context, key, value string) bool {
 	if key == operation_setting.ToolPriceOptionKey {
-		operation_setting.LoadToolPricesFromJSONString(value)
+		operation_setting.LoadToolPricesFromJSONString(tenantCtx, value)
 		return true
 	}
 
@@ -658,7 +671,7 @@ func handleConfigUpdate(key, value string) bool {
 	configKey := parts[1]
 
 	// 获取配置对象
-	cfg := config.GlobalConfig.Get(configName)
+	cfg := config.GlobalConfig.ForTenant(tenantCtx).Get(configName)
 	if cfg == nil {
 		return false // 未注册的配置
 	}
@@ -667,15 +680,17 @@ func handleConfigUpdate(key, value string) bool {
 	configMap := map[string]string{
 		configKey: value,
 	}
-	config.UpdateConfigFromMap(cfg, configMap)
+	config.GlobalConfig.ForTenant(tenantCtx).Update(configName, configMap)
 
 	// 特定配置的后处理
 	if configName == "performance_setting" {
-		performance_setting.UpdateAndSync()
+		performance_setting.UpdateAndSync(tenantCtx)
 	} else if configName == "billing_setting" {
-		InvalidatePricingCache()
-		ratio_setting.InvalidateExposedDataCache()
+		InvalidatePricingCache(tenantCtx)
+		ratio_setting.InvalidateExposedDataCache(tenantCtx)
 	}
 
 	return true // 已处理
 }
+
+func RefreshTenantSettings(ctx context.Context) { loadOptionsFromDatabase(ctx) }

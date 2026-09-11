@@ -1,9 +1,12 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"strings"
 	"sync"
 
@@ -16,10 +19,10 @@ var metadataMutationMu sync.Mutex
 
 // metadataTransaction serializes changes to vendors and model ownership before
 // acquiring model/vendor row locks. The option anchor also covers empty tables.
-func metadataTransaction(change func(*gorm.DB) error) error {
-	metadataMutationMu.Lock()
-	defer metadataMutationMu.Unlock()
-	return DB.Transaction(func(tx *gorm.DB) error {
+func metadataTransaction(tenantCtx context.Context, change func(*gorm.DB) error) error {
+	TenantState(tenantCtx).metadataMutationMu.Lock()
+	defer TenantState(tenantCtx).metadataMutationMu.Unlock()
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := lockMetadataMutation(tx); err != nil {
 			return err
 		}
@@ -151,7 +154,7 @@ func ValidateModelEndpoints(raw string) error {
 	return nil
 }
 
-func ApplyMetadataSync(updates []MetadataSyncUpdate, upstreamVendors map[string]Vendor) (*MetadataSyncResult, error) {
+func ApplyMetadataSync(tenantCtx context.Context, updates []MetadataSyncUpdate, upstreamVendors map[string]Vendor) (*MetadataSyncResult, error) {
 	if len(updates) == 0 {
 		return nil, errors.New("select metadata changes before applying")
 	}
@@ -181,7 +184,7 @@ func ApplyMetadataSync(updates []MetadataSyncUpdate, upstreamVendors map[string]
 		}
 	}
 	result := &MetadataSyncResult{CreatedModels: []string{}, UpdatedModels: []MetadataSyncSelection{}, CreatedVendors: []string{}}
-	err := metadataTransaction(func(tx *gorm.DB) error {
+	err := metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		locals, vendors, err := GetMetadataSyncState(lockForUpdate(tx))
 		if err != nil {
 			return err
@@ -254,6 +257,11 @@ func ApplyMetadataSync(updates []MetadataSyncUpdate, upstreamVendors map[string]
 			}
 			fields["updated_time"] = common.GetTimestamp()
 			if update.Create {
+				identity, err := tenant.FromContext(tx.Statement.Context)
+				if err != nil {
+					return err
+				}
+				fields["tenant_id"] = identity.ID
 				fields["model_name"] = update.ModelName
 				fields["sync_official"] = 1
 				fields["created_time"] = common.GetTimestamp()
@@ -273,6 +281,6 @@ func ApplyMetadataSync(updates []MetadataSyncUpdate, upstreamVendors map[string]
 	if err != nil {
 		return nil, err
 	}
-	RefreshPricing()
+	RefreshPricing(tenantCtx)
 	return result, nil
 }

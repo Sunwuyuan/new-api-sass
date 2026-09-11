@@ -75,11 +75,11 @@ func NewGenericOAuthProvider(config *model.CustomOAuthProvider) *GenericOAuthPro
 	return &GenericOAuthProvider{config: config}
 }
 
-func (p *GenericOAuthProvider) GetName() string {
+func (p *GenericOAuthProvider) GetName(tenantCtx context.Context) string {
 	return p.config.Name
 }
 
-func (p *GenericOAuthProvider) IsEnabled() bool {
+func (p *GenericOAuthProvider) IsEnabled(tenantCtx context.Context) bool {
 	return p.config.Enabled
 }
 
@@ -92,7 +92,7 @@ func (p *GenericOAuthProvider) ExchangeToken(ctx context.Context, code string, c
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	redirectUri := fmt.Sprintf("%s/oauth/%s", system_setting.ServerAddress, p.config.Slug)
+	redirectUri := fmt.Sprintf("%s/oauth/%s", system_setting.TenantState(ctx).ServerAddress, p.config.Slug)
 	values := url.Values{}
 	values.Set("grant_type", "authorization_code")
 	values.Set("code", code)
@@ -286,12 +286,12 @@ func (p *GenericOAuthProvider) GetUserInfo(ctx context.Context, token *OAuthToke
 	}, nil
 }
 
-func (p *GenericOAuthProvider) IsUserIDTaken(providerUserID string) bool {
-	return model.IsProviderUserIdTaken(p.config.Id, providerUserID)
+func (p *GenericOAuthProvider) IsUserIDTaken(tenantCtx context.Context, providerUserID string) bool {
+	return model.IsProviderUserIdTaken(tenantCtx, p.config.Id, providerUserID)
 }
 
-func (p *GenericOAuthProvider) FillUserByProviderID(user *model.User, providerUserID string) error {
-	foundUser, err := model.GetUserByOAuthBinding(p.config.Id, providerUserID)
+func (p *GenericOAuthProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, providerUserID string) error {
+	foundUser, err := model.GetUserByOAuthBinding(tenantCtx, p.config.Id, providerUserID)
 	if err != nil {
 		return err
 	}

@@ -26,7 +26,7 @@ func Setup2FA(c *gin.Context) {
 		return
 	}
 	identity, _ := middleware.GetSessionAuthIdentity(c)
-	setup, err := service.StartTwoFASetup(identity, authorization)
+	setup, err := service.StartTwoFASetup(c.Request.Context(), identity, authorization)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -46,11 +46,11 @@ func Enable2FA(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	if err := service.FinishTwoFASetup(identity, req.FlowToken, req.Code); err != nil {
+	if err := service.FinishTwoFASetup(c.Request.Context(), identity, req.FlowToken, req.Code); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "twofa_enabled")
+	bundle, err := service.AdvanceCurrentSessionToUserVersion(c.Request.Context(), identity, "twofa_enabled")
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -66,11 +66,11 @@ func Disable2FA(c *gin.Context) {
 	}
 	identity, _ := middleware.GetSessionAuthIdentity(c)
 	userId := identity.UserID
-	if err := model.DisableTwoFAForSession(identity); err != nil {
+	if err := model.DisableTwoFAForSession(c.Request.Context(), identity); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "twofa_disabled")
+	bundle, err := service.AdvanceCurrentSessionToUserVersion(c.Request.Context(), identity, "twofa_disabled")
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -90,7 +90,7 @@ func Disable2FA(c *gin.Context) {
 func Get2FAStatus(c *gin.Context) {
 	userId := c.GetInt("id")
 
-	twoFA, err := model.GetTwoFAByUserId(userId)
+	twoFA, err := model.GetTwoFAByUserId(c.Request.Context(), userId)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -106,7 +106,7 @@ func Get2FAStatus(c *gin.Context) {
 		status["locked"] = twoFA.IsLocked()
 		if twoFA.IsEnabled {
 			// 获取剩余备用码数量
-			backupCount, err := model.GetUnusedBackupCodeCount(userId)
+			backupCount, err := model.GetUnusedBackupCodeCount(c.Request.Context(), userId)
 			if err != nil {
 				common.SysLog("获取备用码数量失败: " + err.Error())
 			} else {
@@ -141,7 +141,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 	}
 
 	// 保存新的备用码并原子推进用户鉴权版本
-	if err := model.ReplaceBackupCodesForSession(identity, backupCodes); err != nil {
+	if err := model.ReplaceBackupCodesForSession(c.Request.Context(), identity, backupCodes); err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "保存备用码失败",
@@ -149,7 +149,7 @@ func RegenerateBackupCodes(c *gin.Context) {
 		common.SysLog("保存备用码失败: " + err.Error())
 		return
 	}
-	bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "twofa_backup_codes_regenerated")
+	bundle, err := service.AdvanceCurrentSessionToUserVersion(c.Request.Context(), identity, "twofa_backup_codes_regenerated")
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -174,7 +174,7 @@ func Verify2FALogin(c *gin.Context) {
 
 // Admin2FAStats 管理员获取2FA统计信息
 func Admin2FAStats(c *gin.Context) {
-	stats, err := model.GetTwoFAStats()
+	stats, err := model.GetTwoFAStats(c.Request.Context())
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -200,7 +200,7 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 检查目标用户权限
-	targetUser, err := model.GetUserById(userId, false)
+	targetUser, err := model.GetUserById(c.Request.Context(), userId, false)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
 		return
@@ -220,7 +220,7 @@ func AdminDisable2FA(c *gin.Context) {
 	}
 
 	// 禁用2FA
-	if err := model.DisableTwoFAWithAuthVersion(userId); err != nil {
+	if err := model.DisableTwoFAWithAuthVersion(c.Request.Context(), userId); err != nil {
 		if errors.Is(err, model.ErrTwoFANotEnabled) {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -231,7 +231,7 @@ func AdminDisable2FA(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	if _, err := model.RevokeAllUserSessions(userId, "admin_twofa_disabled"); err != nil {
+	if _, err := model.RevokeAllUserSessions(c.Request.Context(), userId, "admin_twofa_disabled"); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}

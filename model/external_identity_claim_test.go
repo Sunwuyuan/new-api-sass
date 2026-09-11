@@ -3,6 +3,7 @@ package model
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -52,7 +53,7 @@ func TestClearTelegramBindingReleasesIdentityClaim(t *testing.T) {
 		return ClaimExternalIdentityWithTx(tx, ExternalIdentityProviderTelegram, user.TelegramId, user.Id)
 	}))
 
-	require.NoError(t, user.ClearBinding(ExternalIdentityProviderTelegram))
+	require.NoError(t, user.ClearBinding(testtenant.Context(), ExternalIdentityProviderTelegram))
 	assert.Empty(t, user.TelegramId)
 
 	var count int64
@@ -65,8 +66,8 @@ func TestInitializeExternalIdentityClaimsIsIdempotent(t *testing.T) {
 
 	user := User{Username: "telegram-legacy", Password: "password", TelegramId: "telegram-legacy-id"}
 	require.NoError(t, DB.Create(&user).Error)
-	require.NoError(t, InitializeExternalIdentityClaims())
-	require.NoError(t, InitializeExternalIdentityClaims())
+	require.NoError(t, InitializeExternalIdentityClaims(testtenant.Context()))
+	require.NoError(t, InitializeExternalIdentityClaims(testtenant.Context()))
 
 	var claim ExternalIdentityClaim
 	require.NoError(t, DB.Where("provider = ? AND subject = ?", ExternalIdentityProviderTelegram, user.TelegramId).
@@ -82,7 +83,7 @@ func TestInitializeExternalIdentityClaimsRejectsAmbiguousLegacyBindings(t *testi
 	require.NoError(t, DB.Create(&first).Error)
 	require.NoError(t, DB.Create(&second).Error)
 
-	err := InitializeExternalIdentityClaims()
+	err := InitializeExternalIdentityClaims(testtenant.Context())
 	assert.ErrorIs(t, err, ErrExternalIdentityAlreadyClaimed)
 
 	var count int64

@@ -131,11 +131,11 @@ func normalizeSyncValue(field string, value any) any {
 	return value
 }
 
-func getLocalPricingSyncData() map[string]any {
-	data := billing_setting.GetPricingSyncData(map[string]any(ratio_setting.GetExposedData()))
-	data["image_ratio"] = ratio_setting.GetImageRatioCopy()
-	data["audio_ratio"] = ratio_setting.GetAudioRatioCopy()
-	data["audio_completion_ratio"] = ratio_setting.GetAudioCompletionRatioCopy()
+func getLocalPricingSyncData(tenantCtx context.Context) map[string]any {
+	data := billing_setting.GetPricingSyncData(tenantCtx, map[string]any(ratio_setting.GetExposedData(tenantCtx)))
+	data["image_ratio"] = ratio_setting.GetImageRatioCopy(tenantCtx)
+	data["audio_ratio"] = ratio_setting.GetAudioRatioCopy(tenantCtx)
+	data["audio_completion_ratio"] = ratio_setting.GetAudioCompletionRatioCopy(tenantCtx)
 	return data
 }
 
@@ -237,7 +237,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 		for _, id64 := range req.ChannelIDs {
 			intIds = append(intIds, int(id64))
 		}
-		dbChannels, err := model.GetChannelsByIds(intIds)
+		dbChannels, err := model.GetChannelsByIds(c.Request.Context(), intIds)
 		if err != nil {
 			logger.LogError(c.Request.Context(), "failed to query channels: "+err.Error())
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "查询渠道失败"})
@@ -329,12 +329,12 @@ func FetchUpstreamRatios(c *gin.Context) {
 
 			// OpenRouter requires Bearer token auth
 			if isOpenRouter && chItem.ID != 0 {
-				dbCh, err := model.GetChannelById(chItem.ID, true)
+				dbCh, err := model.GetChannelById(c.Request.Context(), chItem.ID, true)
 				if err != nil {
 					ch <- upstreamResult{Name: uniqueName, Err: "failed to get channel key: " + err.Error()}
 					return
 				}
-				key, _, apiErr := dbCh.GetNextEnabledKey()
+				key, _, apiErr := dbCh.GetNextEnabledKey(c.Request.Context())
 				if apiErr != nil {
 					ch <- upstreamResult{Name: uniqueName, Err: "failed to get enabled channel key: " + apiErr.Error()}
 					return
@@ -570,7 +570,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 	wg.Wait()
 	close(ch)
 
-	localData := effectivePricingSyncData(getLocalPricingSyncData())
+	localData := effectivePricingSyncData(getLocalPricingSyncData(c.Request.Context()))
 
 	var testResults []dto.TestResult
 	var successfulChannels []struct {
@@ -1105,7 +1105,7 @@ func convertModelsDevToRatioData(reader io.Reader) (map[string]any, error) {
 }
 
 func GetSyncableChannels(c *gin.Context) {
-	channels, err := model.GetAllChannels(0, 0, true, false)
+	channels, err := model.GetAllChannels(c.Request.Context(), 0, 0, true, false)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

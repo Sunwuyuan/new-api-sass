@@ -24,6 +24,16 @@ func SetWebRouter(router *gin.Engine, assets WebAssets, pluginDispatcher gin.Han
 
 	router.NoRoute(
 		pluginDispatcher,
+		func(c *gin.Context) {
+			// Plugin submissions have already been dispatched. A frontend
+			// fallback must never accept mutations as successful gateway calls.
+			if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
+				c.Abort()
+				controller.RelayNotFound(c)
+				return
+			}
+			c.Next()
+		},
 		middleware.RouteTag("web"),
 		gzip.Gzip(gzip.DefaultCompression),
 		middleware.AccessTokenAudit(),

@@ -12,7 +12,7 @@ import (
 // but do not have corresponding records in the models meta table.
 // This helps administrators quickly discover models that need configuration.
 func GetMissingModels(c *gin.Context) {
-	missing, err := model.GetMissingModels()
+	missing, err := model.GetMissingModels(c.Request.Context())
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,

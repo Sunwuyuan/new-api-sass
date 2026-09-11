@@ -5,7 +5,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
@@ -14,7 +17,7 @@ import (
 
 func TestGetRequestURLAlphaSearch(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    constant.ChannelTypeSub2API,
 			ChannelBaseUrl: "https://sub2api.example",
@@ -30,7 +33,7 @@ func TestGetRequestURLAlphaSearch(t *testing.T) {
 
 func TestAdaptorInheritsNewAPIResponsesCompactSupport(t *testing.T) {
 	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:    constant.ChannelTypeSub2API,
 			ChannelBaseUrl: "https://sub2api.example",
@@ -63,7 +66,7 @@ func TestConvertClaudeRequestPreservesAdaptiveThinkingForCompatibleModel(t *test
 			{Role: "user", Content: "hello"},
 		},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.6-sol",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType: constant.ChannelTypeSub2API,

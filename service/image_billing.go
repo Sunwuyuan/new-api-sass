@@ -67,7 +67,7 @@ func PrepareImageBillingForRequest(c *gin.Context, info *relaycommon.RelayInfo, 
 		info.PriceData.AddOtherRatio("prompt_extend", extensionRatio)
 		base := info.ImageQuotaBeforeGroup
 		if info.PriceData.UsePrice {
-			base = info.PriceData.ModelPrice * common.QuotaPerUnit
+			base = info.PriceData.ModelPrice * common.TenantState(c.Request.Context()).QuotaPerUnit
 		}
 		quota, err = common.QuotaFromFloatStrict(info.PriceData.ApplyOtherRatiosToFloat(base * info.PriceData.GroupRatioInfo.GroupRatio))
 	}

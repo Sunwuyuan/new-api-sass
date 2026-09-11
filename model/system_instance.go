@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/common"
 
@@ -43,7 +45,7 @@ func (instance *SystemInstance) BeforeCreate(_ *gorm.DB) error {
 	return nil
 }
 
-func UpsertSystemInstance(nodeName string, info any, startedAt int64, lastSeenAt int64) error {
+func UpsertSystemInstance(tenantCtx context.Context, nodeName string, info any, startedAt int64, lastSeenAt int64) error {
 	infoText, err := marshalSystemInstanceInfo(info)
 	if err != nil {
 		return err
@@ -58,7 +60,7 @@ func UpsertSystemInstance(nodeName string, info any, startedAt int64, lastSeenAt
 		LastSeenAt: lastSeenAt,
 		UpdatedAt:  lastSeenAt,
 	}
-	return DB.Clauses(clause.OnConflict{
+	return DB.WithContext(tenantCtx).Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "node_name"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"info",
@@ -69,19 +71,19 @@ func UpsertSystemInstance(nodeName string, info any, startedAt int64, lastSeenAt
 	}).Create(instance).Error
 }
 
-func ListSystemInstances() ([]*SystemInstance, error) {
+func ListSystemInstances(tenantCtx context.Context) ([]*SystemInstance, error) {
 	var instances []*SystemInstance
-	err := DB.Order("last_seen_at desc").Find(&instances).Error
+	err := DB.WithContext(tenantCtx).Order("last_seen_at desc").Find(&instances).Error
 	return instances, err
 }
 
-func DeleteStaleSystemInstances(now int64) (int64, error) {
-	result := DB.Where("last_seen_at < ?", now-SystemInstanceStaleAfterSeconds).Delete(&SystemInstance{})
+func DeleteStaleSystemInstances(tenantCtx context.Context, now int64) (int64, error) {
+	result := DB.WithContext(tenantCtx).Where("last_seen_at < ?", now-SystemInstanceStaleAfterSeconds).Delete(&SystemInstance{})
 	return result.RowsAffected, result.Error
 }
 
-func DeleteStaleSystemInstance(nodeName string, now int64) (bool, error) {
-	result := DB.Where("node_name = ? AND last_seen_at < ?", nodeName, now-SystemInstanceStaleAfterSeconds).Delete(&SystemInstance{})
+func DeleteStaleSystemInstance(tenantCtx context.Context, nodeName string, now int64) (bool, error) {
+	result := DB.WithContext(tenantCtx).Where("node_name = ? AND last_seen_at < ?", nodeName, now-SystemInstanceStaleAfterSeconds).Delete(&SystemInstance{})
 	return result.RowsAffected > 0, result.Error
 }
 

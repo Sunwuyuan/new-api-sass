@@ -2,7 +2,6 @@ package controller
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -14,10 +13,10 @@ import (
 )
 
 func getIoAPIKey(c *gin.Context) (string, bool) {
-	common.OptionMapRWMutex.RLock()
-	enabled := common.OptionMap["model_deployment.ionet.enabled"] == "true"
-	apiKey := common.OptionMap["model_deployment.ionet.api_key"]
-	common.OptionMapRWMutex.RUnlock()
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.RLock()
+	enabled := common.TenantState(c.Request.Context()).OptionMap["model_deployment.ionet.enabled"] == "true"
+	apiKey := common.TenantState(c.Request.Context()).OptionMap["model_deployment.ionet.api_key"]
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.RUnlock()
 	if !enabled || strings.TrimSpace(apiKey) == "" {
 		common.ApiErrorMsg(c, "io.net model deployment is not enabled or api key missing")
 		return "", false
@@ -26,10 +25,10 @@ func getIoAPIKey(c *gin.Context) (string, bool) {
 }
 
 func GetModelDeploymentSettings(c *gin.Context) {
-	common.OptionMapRWMutex.RLock()
-	enabled := common.OptionMap["model_deployment.ionet.enabled"] == "true"
-	hasAPIKey := strings.TrimSpace(common.OptionMap["model_deployment.ionet.api_key"]) != ""
-	common.OptionMapRWMutex.RUnlock()
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.RLock()
+	enabled := common.TenantState(c.Request.Context()).OptionMap["model_deployment.ionet.enabled"] == "true"
+	hasAPIKey := strings.TrimSpace(common.TenantState(c.Request.Context()).OptionMap["model_deployment.ionet.api_key"]) != ""
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.RUnlock()
 
 	common.ApiSuccess(c, gin.H{
 		"provider":    "io.net",
@@ -66,7 +65,7 @@ func TestIoNetConnection(c *gin.Context) {
 		return
 	}
 	if len(bytes.TrimSpace(rawBody)) > 0 {
-		if err := json.Unmarshal(rawBody, &req); err != nil {
+		if err := common.Unmarshal(rawBody, &req); err != nil {
 			common.ApiErrorMsg(c, "invalid request payload")
 			return
 		}
@@ -74,9 +73,9 @@ func TestIoNetConnection(c *gin.Context) {
 
 	apiKey := strings.TrimSpace(req.APIKey)
 	if apiKey == "" {
-		common.OptionMapRWMutex.RLock()
-		storedKey := strings.TrimSpace(common.OptionMap["model_deployment.ionet.api_key"])
-		common.OptionMapRWMutex.RUnlock()
+		common.TenantState(c.Request.Context()).OptionMapRWMutex.RLock()
+		storedKey := strings.TrimSpace(common.TenantState(c.Request.Context()).OptionMap["model_deployment.ionet.api_key"])
+		common.TenantState(c.Request.Context()).OptionMapRWMutex.RUnlock()
 		if storedKey == "" {
 			common.ApiErrorMsg(c, "api_key is required")
 			return

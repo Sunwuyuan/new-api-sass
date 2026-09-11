@@ -1,5 +1,7 @@
 package ratio_setting
 
+import context "context"
+
 import (
 	"maps"
 	"strings"
@@ -333,34 +335,34 @@ var defaultCompletionRatio = map[string]float64{
 }
 
 // InitRatioSettings initializes all model related settings maps
-func InitRatioSettings() {
-	modelPriceMap.AddAll(defaultModelPrice)
-	modelRatioMap.AddAll(defaultModelRatio)
-	completionRatioMap.AddAll(defaultCompletionRatio)
-	cacheRatioMap.AddAll(defaultCacheRatio)
-	createCacheRatioMap.AddAll(defaultCreateCacheRatio)
-	imageRatioMap.AddAll(defaultImageRatio)
-	audioRatioMap.AddAll(defaultAudioRatio)
-	audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
+func InitRatioSettings(tenantCtx context.Context) {
+	TenantState(tenantCtx).modelPriceMap.AddAll(defaultModelPrice)
+	TenantState(tenantCtx).modelRatioMap.AddAll(defaultModelRatio)
+	TenantState(tenantCtx).completionRatioMap.AddAll(defaultCompletionRatio)
+	TenantState(tenantCtx).cacheRatioMap.AddAll(defaultCacheRatio)
+	TenantState(tenantCtx).createCacheRatioMap.AddAll(defaultCreateCacheRatio)
+	TenantState(tenantCtx).imageRatioMap.AddAll(defaultImageRatio)
+	TenantState(tenantCtx).audioRatioMap.AddAll(defaultAudioRatio)
+	TenantState(tenantCtx).audioCompletionRatioMap.AddAll(defaultAudioCompletionRatio)
 }
 
-func GetModelPriceMap() map[string]float64 {
-	return modelPriceMap.ReadAll()
+func GetModelPriceMap(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).modelPriceMap.ReadAll()
 }
 
-func ModelPrice2JSONString() string {
-	return modelPriceMap.MarshalJSONString()
+func ModelPrice2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).modelPriceMap.MarshalJSONString()
 }
 
-func UpdateModelPriceByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(modelPriceMap, jsonStr, InvalidateExposedDataCache)
+func UpdateModelPriceByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).modelPriceMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
 // GetModelPrice 返回模型的价格，如果模型不存在则返回-1，false
-func GetModelPrice(name string, printErr bool) (float64, bool) {
+func GetModelPrice(tenantCtx context.Context, name string, printErr bool) (float64, bool) {
 	name = FormatMatchingModelName(name)
 
-	if price, ok := modelPriceMap.Get(name); ok {
+	if price, ok := TenantState(tenantCtx).modelPriceMap.Get(name); ok {
 		return price, true
 	}
 
@@ -370,8 +372,8 @@ func GetModelPrice(name string, printErr bool) (float64, bool) {
 	return -1, false
 }
 
-func UpdateModelRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(modelRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateModelRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).modelRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
 // 处理带有思考预算的模型名称，方便统一定价
@@ -382,12 +384,12 @@ func handleThinkingBudgetModel(name, prefix, wildcard string) string {
 	return name
 }
 
-func GetModelRatio(name string) (float64, bool, string) {
+func GetModelRatio(tenantCtx context.Context, name string) (float64, bool, string) {
 	name = FormatMatchingModelName(name)
 
-	ratio, ok := modelRatioMap.Get(name)
+	ratio, ok := TenantState(tenantCtx).modelRatioMap.Get(name)
 	if !ok {
-		return 37.5, operation_setting.SelfUseModeEnabled, name
+		return 37.5, operation_setting.TenantState(tenantCtx).SelfUseModeEnabled, name
 	}
 	return ratio, true, name
 }
@@ -425,16 +427,16 @@ func GetDefaultPricingMaps() map[string]map[string]float64 {
 	return result
 }
 
-func CompletionRatio2JSONString() string {
-	return completionRatioMap.MarshalJSONString()
+func CompletionRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).completionRatioMap.MarshalJSONString()
 }
 
-func UpdateCompletionRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(completionRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateCompletionRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).completionRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
-func GetCompletionRatio(name string) float64 {
-	return GetCompletionRatioInfo(name).Ratio
+func GetCompletionRatio(tenantCtx context.Context, name string) float64 {
+	return GetCompletionRatioInfo(tenantCtx, name).Ratio
 }
 
 type CompletionRatioInfo struct {
@@ -442,10 +444,10 @@ type CompletionRatioInfo struct {
 	Locked bool    `json:"locked"`
 }
 
-func GetCompletionRatioInfo(name string) CompletionRatioInfo {
+func GetCompletionRatioInfo(tenantCtx context.Context, name string) CompletionRatioInfo {
 	name = FormatMatchingModelName(name)
 	var configured *float64
-	if ratio, ok := completionRatioMap.Get(name); ok {
+	if ratio, ok := TenantState(tenantCtx).completionRatioMap.Get(name); ok {
 		configured = &ratio
 	}
 	return ResolveCompletionRatio(name, configured)
@@ -608,36 +610,36 @@ func getHardcodedCompletionModelRatio(name string) (float64, bool) {
 	return 1, false
 }
 
-func GetAudioRatio(name string) float64 {
+func GetAudioRatio(tenantCtx context.Context, name string) float64 {
 	name = FormatMatchingModelName(name)
-	if ratio, ok := audioRatioMap.Get(name); ok {
+	if ratio, ok := TenantState(tenantCtx).audioRatioMap.Get(name); ok {
 		return ratio
 	}
 	return 1
 }
 
-func GetAudioCompletionRatio(name string) float64 {
+func GetAudioCompletionRatio(tenantCtx context.Context, name string) float64 {
 	name = FormatMatchingModelName(name)
-	if ratio, ok := audioCompletionRatioMap.Get(name); ok {
+	if ratio, ok := TenantState(tenantCtx).audioCompletionRatioMap.Get(name); ok {
 		return ratio
 	}
 	return 1
 }
 
-func ContainsAudioRatio(name string) bool {
+func ContainsAudioRatio(tenantCtx context.Context, name string) bool {
 	name = FormatMatchingModelName(name)
-	_, ok := audioRatioMap.Get(name)
+	_, ok := TenantState(tenantCtx).audioRatioMap.Get(name)
 	return ok
 }
 
-func ContainsAudioCompletionRatio(name string) bool {
+func ContainsAudioCompletionRatio(tenantCtx context.Context, name string) bool {
 	name = FormatMatchingModelName(name)
-	_, ok := audioCompletionRatioMap.Get(name)
+	_, ok := TenantState(tenantCtx).audioCompletionRatioMap.Get(name)
 	return ok
 }
 
-func ModelRatio2JSONString() string {
-	return modelRatioMap.MarshalJSONString()
+func ModelRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).modelRatioMap.MarshalJSONString()
 }
 
 var defaultImageRatio = map[string]float64{
@@ -647,76 +649,76 @@ var imageRatioMap = types.NewRWMap[string, float64]()
 var audioRatioMap = types.NewRWMap[string, float64]()
 var audioCompletionRatioMap = types.NewRWMap[string, float64]()
 
-func ImageRatio2JSONString() string {
-	return imageRatioMap.MarshalJSONString()
+func ImageRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).imageRatioMap.MarshalJSONString()
 }
 
-func UpdateImageRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(imageRatioMap, jsonStr)
+func UpdateImageRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonString(TenantState(tenantCtx).imageRatioMap, jsonStr)
 }
 
 const DefaultImageRatio = 1.0
 
-func GetImageRatio(name string) (float64, bool) {
-	ratio, ok := imageRatioMap.Get(name)
+func GetImageRatio(tenantCtx context.Context, name string) (float64, bool) {
+	ratio, ok := TenantState(tenantCtx).imageRatioMap.Get(name)
 	if !ok {
 		return DefaultImageRatio, false
 	}
 	return ratio, true
 }
 
-func AudioRatio2JSONString() string {
-	return audioRatioMap.MarshalJSONString()
+func AudioRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).audioRatioMap.MarshalJSONString()
 }
 
-func UpdateAudioRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(audioRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateAudioRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).audioRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
-func AudioCompletionRatio2JSONString() string {
-	return audioCompletionRatioMap.MarshalJSONString()
+func AudioCompletionRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).audioCompletionRatioMap.MarshalJSONString()
 }
 
-func UpdateAudioCompletionRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(audioCompletionRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateAudioCompletionRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).audioCompletionRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
-func GetModelRatioCopy() map[string]float64 {
-	return modelRatioMap.ReadAll()
+func GetModelRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).modelRatioMap.ReadAll()
 }
 
-func GetModelPriceCopy() map[string]float64 {
-	return modelPriceMap.ReadAll()
+func GetModelPriceCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).modelPriceMap.ReadAll()
 }
 
-func GetCompletionRatioCopy() map[string]float64 {
-	return completionRatioMap.ReadAll()
+func GetCompletionRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).completionRatioMap.ReadAll()
 }
 
-func GetImageRatioCopy() map[string]float64 {
-	return imageRatioMap.ReadAll()
+func GetImageRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).imageRatioMap.ReadAll()
 }
 
-func GetAudioRatioCopy() map[string]float64 {
-	return audioRatioMap.ReadAll()
+func GetAudioRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).audioRatioMap.ReadAll()
 }
 
-func GetAudioCompletionRatioCopy() map[string]float64 {
-	return audioCompletionRatioMap.ReadAll()
+func GetAudioCompletionRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).audioCompletionRatioMap.ReadAll()
 }
 
 // RoutingMatchModelName returns the name used for channel-ability and token-limit
 // fallback matching: strip @ modifiers and legacy aliases first, then apply
 // wildcard normalization.
-func RoutingMatchModelName(name string) string {
-	return FormatMatchingModelName(hostreasoning.BaseModelName(name))
+func RoutingMatchModelName(tenantCtx context.Context, name string) string {
+	return FormatMatchingModelName(hostreasoning.BaseModelName(tenantCtx, name))
 }
 
 // HasConfiguredModelRatio reports whether name has an explicit ratio entry
 // after wildcard normalization. Self-use fallback does not count.
-func HasConfiguredModelRatio(name string) bool {
+func HasConfiguredModelRatio(tenantCtx context.Context, name string) bool {
 	name = FormatMatchingModelName(name)
-	_, ok := modelRatioMap.Get(name)
+	_, ok := TenantState(tenantCtx).modelRatioMap.Get(name)
 	return ok
 }
 
@@ -740,12 +742,12 @@ func FormatMatchingModelName(name string) string {
 }
 
 // result: 倍率or价格， usePrice， exist
-func GetModelRatioOrPrice(model string) (float64, bool, bool) { // price or ratio
-	price, usePrice := GetModelPrice(model, false)
+func GetModelRatioOrPrice(tenantCtx context.Context, model string) (float64, bool, bool) { // price or ratio
+	price, usePrice := GetModelPrice(tenantCtx, model, false)
 	if usePrice {
 		return price, true, true
 	}
-	modelRatio, success, _ := GetModelRatio(model)
+	modelRatio, success, _ := GetModelRatio(tenantCtx, model)
 	if success {
 		return modelRatio, false, true
 	}

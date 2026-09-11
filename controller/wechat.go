@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -24,15 +26,15 @@ type wechatLoginResponse struct {
 	Data    string `json:"data"`
 }
 
-func getWeChatIdByCode(code string) (string, error) {
+func getWeChatIdByCode(tenantCtx context.Context, code string) (string, error) {
 	if code == "" {
 		return "", errors.New("无效的参数")
 	}
-	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", common.WeChatServerAddress, url.QueryEscape(code)), nil)
+	req, err := http.NewRequest("GET", fmt.Sprintf("%s/api/wechat/user?code=%s", common.TenantState(tenantCtx).WeChatServerAddress, url.QueryEscape(code)), nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Authorization", common.WeChatServerToken)
+	req.Header.Set("Authorization", common.TenantState(tenantCtx).WeChatServerToken)
 	client := http.Client{
 		Timeout: 5 * time.Second,
 	}
@@ -56,7 +58,7 @@ func getWeChatIdByCode(code string) (string, error) {
 }
 
 func WeChatAuth(c *gin.Context) {
-	if !common.WeChatAuthEnabled {
+	if !common.TenantState(c.Request.Context()).WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
@@ -64,7 +66,7 @@ func WeChatAuth(c *gin.Context) {
 		return
 	}
 	code := c.Query("code")
-	wechatId, err := getWeChatIdByCode(code)
+	wechatId, err := getWeChatIdByCode(c.Request.Context(), code)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"message": err.Error(),
@@ -75,8 +77,8 @@ func WeChatAuth(c *gin.Context) {
 	user := model.User{
 		WeChatId: wechatId,
 	}
-	if model.IsWeChatIdAlreadyTaken(wechatId) {
-		err := user.FillUserByWeChatId()
+	if model.IsWeChatIdAlreadyTaken(c.Request.Context(), wechatId) {
+		err := user.FillUserByWeChatId(c.Request.Context())
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -92,13 +94,13 @@ func WeChatAuth(c *gin.Context) {
 			return
 		}
 	} else {
-		if common.RegisterEnabled {
-			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId()+1)
+		if common.TenantState(c.Request.Context()).RegisterEnabled {
+			user.Username = "wechat_" + strconv.Itoa(model.GetMaxUserId(c.Request.Context())+1)
 			user.DisplayName = "WeChat User"
 			user.Role = common.RoleCommonUser
 			user.Status = common.UserStatusEnabled
 
-			if err := user.Insert(0); err != nil {
+			if err := user.Insert(c.Request.Context(), 0); err != nil {
 				c.JSON(http.StatusOK, gin.H{
 					"success": false,
 					"message": err.Error(),
@@ -138,7 +140,7 @@ func WeChatBind(c *gin.Context) {
 	defer func() {
 		recordUserSecurityAudit(c, identity.UserID, "user.binding_bind", map[string]any{"provider": "wechat", "success": succeeded, "notification_failed": notificationFailed})
 	}()
-	if !common.WeChatAuthEnabled {
+	if !common.TenantState(c.Request.Context()).WeChatAuthEnabled {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "管理员未开启通过微信登录以及注册",
 			"success": false,
@@ -162,7 +164,7 @@ func WeChatBind(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: context}) == nil {
 		return
 	}
-	wechatId, err := getWeChatIdByCode(code)
+	wechatId, err := getWeChatIdByCode(c.Request.Context(), code)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"message": err.Error(),
@@ -170,7 +172,7 @@ func WeChatBind(c *gin.Context) {
 		})
 		return
 	}
-	if model.IsWeChatIdAlreadyTaken(wechatId) {
+	if model.IsWeChatIdAlreadyTaken(c.Request.Context(), wechatId) {
 		c.JSON(http.StatusOK, gin.H{
 			"success": false,
 			"message": "该微信账号已被绑定",
@@ -178,19 +180,19 @@ func WeChatBind(c *gin.Context) {
 		return
 	}
 	// 只更新绑定列，避免完整用户快照覆盖并发的封禁、降权或分组变更。
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+	if err := model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		return model.UpdateUserBindColumnForSessionWithTx(tx, identity, "wechat_id", wechatId)
 	}); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
 	succeeded = true
-	user, err := model.GetUserById(identity.UserID, false)
+	user, err := model.GetUserById(c.Request.Context(), identity.UserID, false)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	notificationFailed = service.NotifyAccountSecurityChange(user.Email, "WeChat account linked") != nil
+	notificationFailed = service.NotifyAccountSecurityChange(c.Request.Context(), user.Email, "WeChat account linked") != nil
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

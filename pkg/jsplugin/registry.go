@@ -235,6 +235,26 @@ func NewRegistry() *Registry {
 
 var DefaultRegistry = NewRegistry()
 
+// CloneFactory keeps immutable compiled modules but gives each workspace its
+// own VM pools and routing state. JavaScript globals never cross workspaces.
+func (r *Registry) CloneFactory() *Registry {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	registry := NewRegistry()
+	for key, plugin := range r.factory {
+		engine := *plugin.Engine
+		engine.pool = make(chan *runtimeInstance, cap(plugin.Engine.pool))
+		engine.semaphore = make(chan struct{}, cap(plugin.Engine.semaphore))
+		registry.factory[key] = &LoadedPlugin{Meta: cloneMeta(plugin.Meta), Engine: &engine}
+	}
+	generation, err := buildRoutingGeneration(registry.factory, registry.override, 1)
+	if err != nil {
+		panic(err)
+	} // The startup factory was already validated.
+	registry.generation.Store(generation)
+	return registry
+}
+
 func (r *Registry) Register(source string, options Options) (*LoadedPlugin, error) {
 	return r.register(source, options, false)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"os"
 	"reflect"
 	"strconv"
@@ -38,6 +39,7 @@ func InitRedisClient() (err error) {
 	}
 	opt.PoolSize = GetEnvOrDefault("REDIS_POOL_SIZE", 10)
 	RDB = redis.NewClient(opt)
+	RDB.AddHook(tenant.RedisScope{})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -61,19 +63,13 @@ func ParseRedisOption() *redis.Options {
 	return opt
 }
 
-func RedisSet(key string, value string, expiration time.Duration) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis SET: key=%s, value=%s, expiration=%v", key, value, expiration))
-	}
-	ctx := context.Background()
+func RedisSet(tenantCtx context.Context, key string, value string, expiration time.Duration) error {
+	ctx := tenantCtx
 	return RDB.Set(ctx, key, value, expiration).Err()
 }
 
-func RedisGet(key string) (string, error) {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis GET: key=%s", key))
-	}
-	ctx := context.Background()
+func RedisGet(tenantCtx context.Context, key string) (string, error) {
+	ctx := tenantCtx
 	val, err := RDB.Get(ctx, key).Result()
 	return val, err
 }
@@ -88,27 +84,18 @@ func RedisGet(key string) (string, error) {
 //	return RDB.GetSet(ctx, key, expiration).Result()
 //}
 
-func RedisDel(key string) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis DEL: key=%s", key))
-	}
-	ctx := context.Background()
+func RedisDel(tenantCtx context.Context, key string) error {
+	ctx := tenantCtx
 	return RDB.Del(ctx, key).Err()
 }
 
-func RedisDelKey(key string) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis DEL Key: key=%s", key))
-	}
-	ctx := context.Background()
+func RedisDelKey(tenantCtx context.Context, key string) error {
+	ctx := tenantCtx
 	return RDB.Del(ctx, key).Err()
 }
 
-func RedisHSetObj(key string, obj any, expiration time.Duration) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis HSET: key=%s, obj=%+v, expiration=%v", key, obj, expiration))
-	}
-	ctx := context.Background()
+func RedisHSetObj(tenantCtx context.Context, key string, obj any, expiration time.Duration) error {
+	ctx := tenantCtx
 
 	data := make(map[string]any)
 
@@ -158,11 +145,8 @@ func RedisHSetObj(key string, obj any, expiration time.Duration) error {
 	return nil
 }
 
-func RedisHGetObj(key string, obj any) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis HGETALL: key=%s", key))
-	}
-	ctx := context.Background()
+func RedisHGetObj(tenantCtx context.Context, key string, obj any) error {
+	ctx := tenantCtx
 
 	result, err := RDB.HGetAll(ctx, key).Result()
 	if err != nil {
@@ -239,12 +223,9 @@ func RedisHGetObj(key string, obj any) error {
 }
 
 // RedisIncr Add this function to handle atomic increments
-func RedisIncr(key string, delta int64) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis INCR: key=%s, delta=%d", key, delta))
-	}
+func RedisIncr(tenantCtx context.Context, key string, delta int64) error {
 	// 检查键的剩余生存时间
-	ttlCmd := RDB.TTL(context.Background(), key)
+	ttlCmd := RDB.TTL(tenantCtx, key)
 	ttl, err := ttlCmd.Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return fmt.Errorf("failed to get TTL: %w", err)
@@ -252,7 +233,7 @@ func RedisIncr(key string, delta int64) error {
 
 	// 只有在 key 存在且有 TTL 时才需要特殊处理
 	if ttl > 0 {
-		ctx := context.Background()
+		ctx := tenantCtx
 		// 开始一个Redis事务
 		txn := RDB.TxPipeline()
 
@@ -272,18 +253,15 @@ func RedisIncr(key string, delta int64) error {
 	return nil
 }
 
-func RedisHIncrBy(key, field string, delta int64) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis HINCRBY: key=%s, field=%s, delta=%d", key, field, delta))
-	}
-	ttlCmd := RDB.TTL(context.Background(), key)
+func RedisHIncrBy(tenantCtx context.Context, key, field string, delta int64) error {
+	ttlCmd := RDB.TTL(tenantCtx, key)
 	ttl, err := ttlCmd.Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return fmt.Errorf("failed to get TTL: %w", err)
 	}
 
 	if ttl > 0 {
-		ctx := context.Background()
+		ctx := tenantCtx
 		txn := RDB.TxPipeline()
 
 		incrCmd := txn.HIncrBy(ctx, key, field, delta)
@@ -299,18 +277,15 @@ func RedisHIncrBy(key, field string, delta int64) error {
 	return nil
 }
 
-func RedisHSetField(key, field string, value any) error {
-	if DebugEnabled {
-		SysLog(fmt.Sprintf("Redis HSET field: key=%s, field=%s, value=%v", key, field, value))
-	}
-	ttlCmd := RDB.TTL(context.Background(), key)
+func RedisHSetField(tenantCtx context.Context, key, field string, value any) error {
+	ttlCmd := RDB.TTL(tenantCtx, key)
 	ttl, err := ttlCmd.Result()
 	if err != nil && !errors.Is(err, redis.Nil) {
 		return fmt.Errorf("failed to get TTL: %w", err)
 	}
 
 	if ttl > 0 {
-		ctx := context.Background()
+		ctx := tenantCtx
 		txn := RDB.TxPipeline()
 
 		hsetCmd := txn.HSet(ctx, key, field, value)

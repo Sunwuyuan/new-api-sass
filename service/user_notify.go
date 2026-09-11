@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"bytes"
 	"fmt"
@@ -13,17 +15,17 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
-func NotifyRootUser(t string, subject string, content string) {
-	user := model.GetRootUser().ToBaseUser()
-	err := NotifyUser(user.Id, user.Email, user.GetSetting(), dto.NewNotify(t, subject, content, nil))
+func NotifyRootUser(tenantCtx context.Context, t string, subject string, content string) {
+	user := model.GetRootUser(tenantCtx).ToBaseUser()
+	err := NotifyUser(tenantCtx, user.Id, user.Email, user.GetSetting(), dto.NewNotify(t, subject, content, nil))
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to notify root user: %s", err.Error()))
 	}
 }
 
-func NotifyUpstreamModelUpdateWatchers(subject string, content string) {
+func NotifyUpstreamModelUpdateWatchers(tenantCtx context.Context, subject string, content string) {
 	var users []model.User
-	if err := model.DB.
+	if err := model.DB.WithContext(tenantCtx).
 		Select("id", "email", "role", "status", "setting").
 		Where("status = ? AND role >= ?", common.UserStatusEnabled, common.RoleAdminUser).
 		Find(&users).Error; err != nil {
@@ -38,7 +40,7 @@ func NotifyUpstreamModelUpdateWatchers(subject string, content string) {
 		if !userSetting.UpstreamModelUpdateNotifyEnabled {
 			continue
 		}
-		if err := NotifyUser(user.Id, user.Email, userSetting, notification); err != nil {
+		if err := NotifyUser(tenantCtx, user.Id, user.Email, userSetting, notification); err != nil {
 			common.SysLog(fmt.Sprintf("failed to notify user %d for upstream model update: %s", user.Id, err.Error()))
 			continue
 		}
@@ -47,14 +49,14 @@ func NotifyUpstreamModelUpdateWatchers(subject string, content string) {
 	common.SysLog(fmt.Sprintf("upstream model update notifications sent: %d", sentCount))
 }
 
-func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
+func NotifyUser(tenantCtx context.Context, userId int, userEmail string, userSetting dto.UserSetting, data dto.Notify) error {
 	notifyType := userSetting.NotifyType
 	if notifyType == "" {
 		notifyType = dto.NotifyTypeEmail
 	}
 
 	// Check notification limit
-	canSend, err := CheckNotificationLimit(userId, data.Type)
+	canSend, err := CheckNotificationLimit(tenantCtx, userId, data.Type)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("failed to check notification limit: %s", err.Error()))
 		return err
@@ -74,7 +76,7 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 			common.SysLog(fmt.Sprintf("user %d has no email, skip sending email", userId))
 			return nil
 		}
-		return sendEmailNotify(emailToUse, data)
+		return sendEmailNotify(tenantCtx, emailToUse, data)
 	case dto.NotifyTypeWebhook:
 		webhookURLStr := userSetting.WebhookUrl
 		if webhookURLStr == "" {
@@ -84,14 +86,14 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 
 		// 获取 webhook secret
 		webhookSecret := userSetting.WebhookSecret
-		return SendWebhookNotify(webhookURLStr, webhookSecret, data)
+		return SendWebhookNotify(tenantCtx, webhookURLStr, webhookSecret, data)
 	case dto.NotifyTypeBark:
 		barkURL := userSetting.BarkUrl
 		if barkURL == "" {
 			common.SysLog(fmt.Sprintf("user %d has no bark url, skip sending bark", userId))
 			return nil
 		}
-		return sendBarkNotify(barkURL, data)
+		return sendBarkNotify(tenantCtx, barkURL, data)
 	case dto.NotifyTypeGotify:
 		gotifyUrl := userSetting.GotifyUrl
 		gotifyToken := userSetting.GotifyToken
@@ -99,22 +101,22 @@ func NotifyUser(userId int, userEmail string, userSetting dto.UserSetting, data 
 			common.SysLog(fmt.Sprintf("user %d has no gotify url or token, skip sending gotify", userId))
 			return nil
 		}
-		return sendGotifyNotify(gotifyUrl, gotifyToken, userSetting.GotifyPriority, data)
+		return sendGotifyNotify(tenantCtx, gotifyUrl, gotifyToken, userSetting.GotifyPriority, data)
 	}
 	return nil
 }
 
-func sendEmailNotify(userEmail string, data dto.Notify) error {
+func sendEmailNotify(tenantCtx context.Context, userEmail string, data dto.Notify) error {
 	// make email content
 	content := data.Content
 	// 处理占位符
 	for _, value := range data.Values {
 		content = strings.Replace(content, dto.ContentValueParam, fmt.Sprintf("%v", value), 1)
 	}
-	return common.SendEmail(data.Title, userEmail, content)
+	return common.SendEmail(tenantCtx, data.Title, userEmail, content)
 }
 
-func sendBarkNotify(barkURL string, data dto.Notify) error {
+func sendBarkNotify(tenantCtx context.Context, barkURL string, data dto.Notify) error {
 	// 处理占位符
 	content := data.Content
 	for _, value := range data.Values {
@@ -130,18 +132,18 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 	var resp *http.Response
 	var err error
 
-	if system_setting.EnableWorker() {
+	if system_setting.EnableWorker(tenantCtx) {
 		// 使用worker发送请求
 		workerReq := &WorkerRequest{
 			URL:    finalURL,
-			Key:    system_setting.WorkerValidKey,
+			Key:    system_setting.TenantState(tenantCtx).WorkerValidKey,
 			Method: http.MethodGet,
 			Headers: map[string]string{
 				"User-Agent": "OneAPI-Bark-Notify/1.0",
 			},
 		}
 
-		resp, err = DoWorkerRequest(workerReq)
+		resp, err = DoWorkerRequest(tenantCtx, workerReq)
 		if err != nil {
 			return fmt.Errorf("failed to send bark request through worker: %v", err)
 		}
@@ -153,7 +155,7 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 		}
 	} else {
 		// SSRF防护：验证Bark URL（非Worker模式）
-		if err := ValidateSSRFProtectedFetchURL(finalURL); err != nil {
+		if err := ValidateSSRFProtectedFetchURL(tenantCtx, finalURL); err != nil {
 			return fmt.Errorf("request reject: %v", err)
 		}
 
@@ -167,7 +169,7 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 		req.Header.Set("User-Agent", "OneAPI-Bark-Notify/1.0")
 
 		// 发送请求
-		client := GetSSRFProtectedHTTPClient()
+		client := GetSSRFProtectedHTTPClient(tenantCtx)
 		resp, err = client.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to send bark request: %v", err)
@@ -183,7 +185,7 @@ func sendBarkNotify(barkURL string, data dto.Notify) error {
 	return nil
 }
 
-func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data dto.Notify) error {
+func sendGotifyNotify(tenantCtx context.Context, gotifyUrl string, gotifyToken string, priority int, data dto.Notify) error {
 	// 处理占位符
 	content := data.Content
 	for _, value := range data.Values {
@@ -221,11 +223,11 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 	var req *http.Request
 	var resp *http.Response
 
-	if system_setting.EnableWorker() {
+	if system_setting.EnableWorker(tenantCtx) {
 		// 使用worker发送请求
 		workerReq := &WorkerRequest{
 			URL:    finalURL,
-			Key:    system_setting.WorkerValidKey,
+			Key:    system_setting.TenantState(tenantCtx).WorkerValidKey,
 			Method: http.MethodPost,
 			Headers: map[string]string{
 				"Content-Type": "application/json; charset=utf-8",
@@ -234,7 +236,7 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 			Body: payloadBytes,
 		}
 
-		resp, err = DoWorkerRequest(workerReq)
+		resp, err = DoWorkerRequest(tenantCtx, workerReq)
 		if err != nil {
 			return fmt.Errorf("failed to send gotify request through worker: %v", err)
 		}
@@ -246,7 +248,7 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 		}
 	} else {
 		// SSRF防护：验证Gotify URL（非Worker模式）
-		if err := ValidateSSRFProtectedFetchURL(finalURL); err != nil {
+		if err := ValidateSSRFProtectedFetchURL(tenantCtx, finalURL); err != nil {
 			return fmt.Errorf("request reject: %v", err)
 		}
 
@@ -261,7 +263,7 @@ func sendGotifyNotify(gotifyUrl string, gotifyToken string, priority int, data d
 		req.Header.Set("User-Agent", "NewAPI-Gotify-Notify/1.0")
 
 		// 发送请求
-		client := GetSSRFProtectedHTTPClient()
+		client := GetSSRFProtectedHTTPClient(tenantCtx)
 		resp, err = client.Do(req)
 		if err != nil {
 			return fmt.Errorf("failed to send gotify request: %v", err)

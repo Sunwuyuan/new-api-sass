@@ -3,12 +3,12 @@ package relay
 import (
 	"testing"
 
-	"github.com/gin-gonic/gin"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetTaskPlatformPriority(t *testing.T) {
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set("platform", "fallback")
 	assert.Equal(t, "fallback", string(GetTaskPlatform(c)))
 	c.Set("channel_type", 59)

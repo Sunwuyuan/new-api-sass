@@ -7,6 +7,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 )
 
@@ -55,19 +56,19 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 
 		if delta > 0 {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费后补扣费：%s（实际消耗：%s，预扣费：%s）",
-				logger.FormatQuota(delta),
-				logger.FormatQuota(actualQuota),
-				logger.FormatQuota(preConsumed),
+				logger.FormatQuota(ctx.Request.Context(), delta),
+				logger.FormatQuota(ctx.Request.Context(), actualQuota),
+				logger.FormatQuota(ctx.Request.Context(), preConsumed),
 			))
 		} else if delta < 0 {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费后返还扣费：%s（实际消耗：%s，预扣费：%s）",
-				logger.FormatQuota(-delta),
-				logger.FormatQuota(actualQuota),
-				logger.FormatQuota(preConsumed),
+				logger.FormatQuota(ctx.Request.Context(), -delta),
+				logger.FormatQuota(ctx.Request.Context(), actualQuota),
+				logger.FormatQuota(ctx.Request.Context(), preConsumed),
 			))
 		} else {
 			logger.LogInfo(ctx, fmt.Sprintf("预扣费与实际消耗一致，无需调整：%s（按次计费）",
-				logger.FormatQuota(actualQuota),
+				logger.FormatQuota(ctx.Request.Context(), actualQuota),
 			))
 		}
 
@@ -89,7 +90,12 @@ func SettleBilling(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, actualQuo
 	// 回退：无 BillingSession 时使用旧路径
 	quotaDelta := actualQuota - relayInfo.FinalPreConsumedQuota
 	if quotaDelta != 0 {
-		return PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true)
+		if err := PostConsumeQuota(relayInfo, quotaDelta, relayInfo.FinalPreConsumedQuota, true); err != nil {
+			return err
+		}
+	}
+	if actualQuota > 0 {
+		tenant.MarkBilled(relayInfo.Context)
 	}
 	return nil
 }

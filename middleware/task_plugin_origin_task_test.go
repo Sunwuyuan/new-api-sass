@@ -12,10 +12,13 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	appI18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -74,8 +77,8 @@ func insertOriginOwnedTask(t *testing.T, taskID string, userID, channelID int, p
 
 func originTaskTestContext(userID int) *gin.Context {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/jobs", nil)
 	common.SetContextKey(c, constant.ContextKeyUserId, userID)
 	return c
 }
@@ -230,7 +233,7 @@ func TestApplyOriginTaskAffinitySetsLockedChannel(t *testing.T) {
 	c := originTaskTestContext(7)
 	require.Nil(t, applyOriginTaskIntent(c, map[string]any{"originTaskIds": []any{"task-lock"}}, jsplugin.Meta{Key: "origin-plugin"}))
 
-	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 	taskErr := relay.ApplyOriginTaskAffinity(c, info)
 	require.Nil(t, taskErr)
 	locked, ok := info.LockedChannel.(*model.Channel)
@@ -265,7 +268,7 @@ export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
 	reached := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUserId, 7)
 		c.Next()
@@ -276,7 +279,7 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 		assert.Equal(t, channel.Id, pinnedID)
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"resolved-model"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"resolved-model"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -303,12 +306,12 @@ export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
 	reached := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUserId, 7)
 		c.Next()
 	}, PrepareTaskPluginRoute(), func(c *gin.Context) { reached = true })
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"resolved-model"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"resolved-model"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -321,7 +324,7 @@ func TestPrepareTaskPluginEndpointPinsOriginTaskChannel(t *testing.T) {
 	channel := insertOriginTaskChannel(t, common.ChannelStatusEnabled)
 	insertOriginOwnedTask(t, "task-endpoint", 7, channel.Id, "origin-endpoint")
 	const key = "origin-endpoint"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -329,10 +332,12 @@ func TestPrepareTaskPluginEndpointPinsOriginTaskChannel(t *testing.T) {
 		`return {model: ctx.model, originTaskIds: ["task-endpoint"], requestBody: {prompt: "ok"}};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	reached := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/v1/responses", func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUserId, 7)
 		c.Next()
@@ -343,7 +348,7 @@ func TestPrepareTaskPluginEndpointPinsOriginTaskChannel(t *testing.T) {
 		assert.Equal(t, channel.Id, pinnedID)
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model","input":"hello"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model","input":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -354,7 +359,7 @@ func TestPrepareTaskPluginEndpointPinsOriginTaskChannel(t *testing.T) {
 func TestPrepareTaskPluginEndpointRejectsUnknownOriginTask(t *testing.T) {
 	setupOriginTaskDB(t)
 	const key = "origin-endpoint-missing"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -362,15 +367,17 @@ func TestPrepareTaskPluginEndpointRejectsUnknownOriginTask(t *testing.T) {
 		`return {model: ctx.model, originTaskIds: ["missing"], requestBody: {prompt: "ok"}};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	reached := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/v1/responses", func(c *gin.Context) {
 		common.SetContextKey(c, constant.ContextKeyUserId, 7)
 		c.Next()
 	}, PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) { reached = true })
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model","input":"hello"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model","input":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -385,8 +392,8 @@ func TestDistributeHonorsOriginTaskChannelPin(t *testing.T) {
 	channel := insertOriginTaskChannel(t, common.ChannelStatusEnabled)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("resolved_task_model", "resolved-model")
 	service.GetChannelConstraints(c).AddPin(dto.ChannelPin{
@@ -418,8 +425,8 @@ func TestDistributeTokenPinBeatsOriginPin(t *testing.T) {
 	t.Cleanup(func() { gin.DefaultErrorWriter = previousWriter })
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("resolved_task_model", "resolved-model")
 	constraints := service.GetChannelConstraints(c)
@@ -455,8 +462,8 @@ func TestDistributePinViolatingIdentityFilterErrors(t *testing.T) {
 	channel := insertOriginTaskChannel(t, common.ChannelStatusEnabled)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("resolved_task_model", "resolved-model")
 	c.Set("expected_task_plugin_key", "alpha")
@@ -481,7 +488,7 @@ func TestApplyChannelPinLocksOnlySameChannelRetry(t *testing.T) {
 	c := originTaskTestContext(7)
 	require.Nil(t, applyOriginTaskIntent(c, map[string]any{"originTaskIds": []any{"task-lock-mode"}}, jsplugin.Meta{Key: "origin-plugin"}))
 
-	info := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 	require.Nil(t, relay.ApplyChannelPin(c, info))
 	locked, ok := info.LockedChannel.(*model.Channel)
 	require.True(t, ok)
@@ -494,7 +501,7 @@ func TestApplyChannelPinLocksOnlySameChannelRetry(t *testing.T) {
 		Rank:      dto.PinRankToken,
 		RetryMode: dto.PinRetrySingleAttempt,
 	})
-	tokenInfo := &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	tokenInfo := &relaycommon.RelayInfo{Context: testtenant.Context(), TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 	require.Nil(t, relay.ApplyChannelPin(tokenOnly, tokenInfo))
 	assert.Nil(t, tokenInfo.LockedChannel)
 }

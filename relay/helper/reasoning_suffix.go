@@ -26,7 +26,7 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 	if info == nil {
 		return nil
 	}
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled ||
+	if model_setting.GetGlobalSettings(info.Context).PassThroughRequestEnabled ||
 		info.ChannelMeta != nil && info.ChannelSetting.PassThroughBodyEnabled {
 		return nil
 	}
@@ -37,13 +37,13 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 	if info.ChannelMeta != nil {
 		upstream = info.UpstreamModelName
 	}
-	originParsed, err := parseRequestModelName(origin, opts)
+	originParsed, err := parseRequestModelName(info.Context, origin, opts)
 	if err != nil {
 		return reasoning.AsClientError(err)
 	}
 	upstreamParsed := originParsed
 	if upstream != origin {
-		upstreamParsed, err = parseRequestModelName(upstream, opts)
+		upstreamParsed, err = parseRequestModelName(info.Context, upstream, opts)
 		if err != nil {
 			return reasoning.AsClientError(err)
 		}
@@ -120,7 +120,7 @@ func ApplyReasoningModelSuffix(c *gin.Context, info *relaycommon.RelayInfo, outb
 	return nil
 }
 
-func parseRequestModelName(name string, opts *convmeta.Options) (parsedModelModifiers, error) {
+func parseRequestModelName(tenantCtx context.Context, name string, opts *convmeta.Options) (parsedModelModifiers, error) {
 	if opts.ShouldPreserveThinkingSuffix(name) {
 		return parsedModelModifiers{base: name}, nil
 	}
@@ -131,7 +131,7 @@ func parseRequestModelName(name string, opts *convmeta.Options) (parsedModelModi
 	if opts.ShouldPreserveThinkingSuffix(parsed.base) {
 		return parsed, nil
 	}
-	legacyBase, legacyIntent, legacyFound, err := parseHostModelSuffix(parsed.base, opts)
+	legacyBase, legacyIntent, legacyFound, err := parseHostModelSuffix(tenantCtx, parsed.base, opts)
 	if err != nil {
 		return parsedModelModifiers{}, err
 	}
@@ -204,11 +204,11 @@ func sameModifierIntent(left reasoning.Intent, right reasoning.Intent) bool {
 	return *left.BudgetTokens == *right.BudgetTokens
 }
 
-func parseHostModelSuffix(name string, opts *convmeta.Options) (string, reasoning.Intent, bool, error) {
+func parseHostModelSuffix(tenantCtx context.Context, name string, opts *convmeta.Options) (string, reasoning.Intent, bool, error) {
 	if name == "" {
 		return name, reasoning.Intent{}, false, nil
 	}
-	return hostreasoning.ParseLegacyModelSuffix(
+	return hostreasoning.ParseLegacyModelSuffix(tenantCtx,
 		name,
 		opts.Claude.ThinkingAdapterEnabled,
 		opts.Gemini.ThinkingAdapterEnabled,

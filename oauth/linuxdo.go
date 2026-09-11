@@ -3,7 +3,6 @@ package oauth
 import (
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,7 +18,7 @@ import (
 )
 
 func init() {
-	Register("linuxdo", &LinuxDOProvider{})
+	RegisterDefault("linuxdo", &LinuxDOProvider{})
 }
 
 // LinuxDOProvider implements OAuth for Linux DO
@@ -34,12 +33,12 @@ type linuxdoUser struct {
 	Silenced   bool   `json:"silenced"`
 }
 
-func (p *LinuxDOProvider) GetName() string {
+func (p *LinuxDOProvider) GetName(tenantCtx context.Context) string {
 	return "Linux DO"
 }
 
-func (p *LinuxDOProvider) IsEnabled() bool {
-	return common.LinuxDOOAuthEnabled
+func (p *LinuxDOProvider) IsEnabled(tenantCtx context.Context) bool {
+	return common.TenantState(tenantCtx).LinuxDOOAuthEnabled
 }
 
 func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -49,7 +48,7 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 
 	// Get access token using Basic auth
 	tokenEndpoint := common.GetEnvOrDefaultString("LINUX_DO_TOKEN_ENDPOINT", "https://connect.linux.do/oauth2/token")
-	credentials := common.LinuxDOClientId + ":" + common.LinuxDOClientSecret
+	credentials := common.TenantState(ctx).LinuxDOClientId + ":" + common.TenantState(ctx).LinuxDOClientSecret
 	basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(credentials))
 
 	// Get redirect URI from request
@@ -88,7 +87,7 @@ func (p *LinuxDOProvider) ExchangeToken(ctx context.Context, code string, c *gin
 		AccessToken string `json:"access_token"`
 		Message     string `json:"message"`
 	}
-	if err := json.NewDecoder(res.Body).Decode(&tokenRes); err != nil {
+	if err := common.DecodeJson(res.Body, &tokenRes); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
 	}
@@ -128,7 +127,7 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	logger.LogDebug(ctx, "[OAuth-LinuxDO] GetUserInfo response status: %d", res.StatusCode)
 
 	var linuxdoUser linuxdoUser
-	if err := json.NewDecoder(res.Body).Decode(&linuxdoUser); err != nil {
+	if err := common.DecodeJson(res.Body, &linuxdoUser); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
 	}
@@ -142,11 +141,11 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 		linuxdoUser.Id, linuxdoUser.Username, linuxdoUser.Name, linuxdoUser.TrustLevel, linuxdoUser.Active, linuxdoUser.Silenced)
 
 	// Check trust level
-	if linuxdoUser.TrustLevel < common.LinuxDOMinimumTrustLevel {
+	if linuxdoUser.TrustLevel < common.TenantState(ctx).LinuxDOMinimumTrustLevel {
 		logger.LogWarn(ctx, fmt.Sprintf("[OAuth-LinuxDO] GetUserInfo: trust level too low (required=%d, current=%d)",
-			common.LinuxDOMinimumTrustLevel, linuxdoUser.TrustLevel))
+			common.TenantState(ctx).LinuxDOMinimumTrustLevel, linuxdoUser.TrustLevel))
 		return nil, &TrustLevelError{
-			Required: common.LinuxDOMinimumTrustLevel,
+			Required: common.TenantState(ctx).LinuxDOMinimumTrustLevel,
 			Current:  linuxdoUser.TrustLevel,
 		}
 	}
@@ -165,13 +164,13 @@ func (p *LinuxDOProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	}, nil
 }
 
-func (p *LinuxDOProvider) IsUserIDTaken(providerUserID string) bool {
-	return model.IsLinuxDOIdAlreadyTaken(providerUserID)
+func (p *LinuxDOProvider) IsUserIDTaken(tenantCtx context.Context, providerUserID string) bool {
+	return model.IsLinuxDOIdAlreadyTaken(tenantCtx, providerUserID)
 }
 
-func (p *LinuxDOProvider) FillUserByProviderID(user *model.User, providerUserID string) error {
+func (p *LinuxDOProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, providerUserID string) error {
 	user.LinuxDOId = providerUserID
-	return user.FillUserByLinuxDOId()
+	return user.FillUserByLinuxDOId(tenantCtx)
 }
 
 func (p *LinuxDOProvider) SetProviderUserID(user *model.User, providerUserID string) {

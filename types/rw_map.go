@@ -4,11 +4,27 @@ import (
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/tenant"
 )
 
 type RWMap[K comparable, V any] struct {
 	data  map[K]V
 	mutex sync.RWMutex
+}
+
+// CloneForTenant copies configuration defaults under the map's lock. Nested
+// maps and slices belong to the destination workspace as well.
+func (m *RWMap[K, V]) CloneForTenant() any {
+	if m == nil {
+		return (*RWMap[K, V])(nil)
+	}
+	m.mutex.RLock()
+	defer m.mutex.RUnlock()
+	result := NewRWMap[K, V]()
+	for key, value := range m.data {
+		result.data[key] = tenant.Clone(value)
+	}
+	return result
 }
 
 func (m *RWMap[K, V]) UnmarshalJSON(b []byte) error {

@@ -1,12 +1,14 @@
 package model
 
 import (
-	"fmt"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"os"
-	"strings"
+	"path/filepath"
 	"testing"
-	"time"
 
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,280 +18,124 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-func requireTokenConstraintExists(t *testing.T, db *gorm.DB, constraintName string) {
-	t.Helper()
-	var count int64
-	require.NoError(t, db.Raw(`
-SELECT count(*)
-FROM pg_catalog.pg_constraint
-WHERE conrelid = to_regclass(?)
-  AND conname = ?`, "tokens", constraintName).Scan(&count).Error)
-	require.EqualValues(t, 1, count)
-}
-
-func requireTokenIndexExists(t *testing.T, db *gorm.DB, indexName string) {
-	t.Helper()
-	var count int64
-	require.NoError(t, db.Raw(`
-SELECT count(*)
-FROM pg_catalog.pg_index AS index_meta
-JOIN pg_catalog.pg_class AS index_class
-  ON index_class.oid = index_meta.indexrelid
-WHERE index_meta.indrelid = to_regclass(?)
-  AND index_class.relname = ?`, "tokens", indexName).Scan(&count).Error)
-	require.EqualValues(t, 1, count)
-}
-
-func testTokenKeyMigrationNonPostgreSQL(t *testing.T, db *gorm.DB) {
-	t.Helper()
-	tableName := fmt.Sprintf("token_migration_%d", time.Now().UnixNano())
-	t.Cleanup(func() { _ = db.Migrator().DropTable(tableName) })
-
-	tableDB := db.Table(tableName)
-	require.NoError(t, tableDB.AutoMigrate(&Token{}))
-	require.NoError(t, tableDB.Create(&Token{UserId: 1, Key: "preserved-key"}).Error)
-
-	for range 2 {
-		require.NoError(t, migrateTokenKeyUniqueness(db))
-		require.NoError(t, tableDB.AutoMigrate(&Token{}))
-	}
-
-	var preserved Token
-	require.NoError(t, tableDB.Where(&Token{Key: "preserved-key"}).First(&preserved).Error)
-	assert.Equal(t, 1, preserved.UserId)
-	expectedIndex := db.NamingStrategy.IndexName(tableName, "key")
-	assert.True(t, db.Migrator().HasIndex(tableName, expectedIndex))
-}
-
-func TestMigrateTokenKeyUniquenessSQLite(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	testTokenKeyMigrationNonPostgreSQL(t, db)
-}
-
-func TestMigrateTokenKeyUniquenessMySQL(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("TEST_MYSQL_DSN"))
-	if dsn == "" {
-		t.Skip("TEST_MYSQL_DSN is not configured")
-	}
-
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	testTokenKeyMigrationNonPostgreSQL(t, db)
-}
-
-func TestMigrateTokenKeyUniquenessPostgreSQL(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		t.Skip("TEST_POSTGRES_DSN is not configured")
-	}
-
-	db, err := gorm.Open(postgres.New(postgres.Config{
-		DSN:                  dsn,
-		PreferSimpleProtocol: true,
-	}), &gorm.Config{})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-
-	tests := []struct {
-		name                 string
-		prepareOld           func(*testing.T, *gorm.DB)
-		expectedError        string
-		preservedConstraints []string
-		preservedIndexes     []string
-	}{
-		{name: "fresh"},
-		{
-			name: "legacy_idx_constraint",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Migrator().DropIndex(&Token{}, tokenKeyIndex))
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: tokenKeyIndex},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-		},
-		{
-			name: "gorm_generated_constraint",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: gormTokenKeyConstraint},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-		},
-		{
-			name: "postgres_default_constraint_without_target_index",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Migrator().DropIndex(&Token{}, tokenKeyIndex))
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: postgresTokenKeyConstraint},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-		},
-		{
-			name: "non_conflicting_uniqueness_is_preserved",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: postgresTokenKeyConstraint},
-					clause.Column{Name: "key"},
-				).Error)
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?, ?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: "keep_tokens_key_user_id"},
-					clause.Column{Name: "key"},
-					clause.Column{Name: "user_id"},
-				).Error)
-				require.NoError(t, tx.Exec(
-					"CREATE UNIQUE INDEX ? ON ? (?) WHERE user_id > 0",
-					clause.Column{Name: "keep_tokens_partial_key"},
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-			preservedConstraints: []string{"keep_tokens_key_user_id"},
-			preservedIndexes:     []string{"keep_tokens_partial_key"},
-		},
-		{
-			name: "arbitrary_constraint_is_rejected",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: "keep_tokens_key_unique"},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-			expectedError:        "unsupported unique constraint",
-			preservedConstraints: []string{"keep_tokens_key_unique"},
-		},
-		{
-			name: "deferrable_constraint_is_rejected",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Migrator().DropIndex(&Token{}, tokenKeyIndex))
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?) DEFERRABLE INITIALLY DEFERRED",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: postgresTokenKeyConstraint},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-			expectedError:        "unsupported definition",
-			preservedConstraints: []string{postgresTokenKeyConstraint},
-		},
-		{
-			name: "invalid_target_index_is_rejected",
-			prepareOld: func(t *testing.T, tx *gorm.DB) {
-				t.Helper()
-				require.NoError(t, tx.Migrator().DropIndex(&Token{}, tokenKeyIndex))
-				require.NoError(t, tx.Exec(
-					"CREATE INDEX ? ON ? (?)",
-					clause.Column{Name: tokenKeyIndex},
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: "key"},
-				).Error)
-				require.NoError(t, tx.Exec(
-					"ALTER TABLE ? ADD CONSTRAINT ? UNIQUE (?)",
-					clause.Table{Name: "tokens"},
-					clause.Column{Name: postgresTokenKeyConstraint},
-					clause.Column{Name: "key"},
-				).Error)
-			},
-			expectedError:        "unexpected definition",
-			preservedConstraints: []string{postgresTokenKeyConstraint},
-			preservedIndexes:     []string{tokenKeyIndex},
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			tx := db.Begin()
-			require.NoError(t, tx.Error)
-			t.Cleanup(func() { _ = tx.Rollback().Error })
-
-			schemaName := fmt.Sprintf("token_migration_%d", time.Now().UnixNano())
-			require.NoError(t, tx.Exec(
-				"CREATE SCHEMA ?",
-				clause.Table{Name: schemaName},
-			).Error)
-			require.NoError(t, tx.Exec(
-				"SET LOCAL search_path TO ?",
-				clause.Table{Name: schemaName},
-			).Error)
-
-			require.NoError(t, migrateTokenKeyUniqueness(tx))
-			require.NoError(t, tx.AutoMigrate(&Token{}))
-			original := Token{UserId: 1, Key: "preserved-key", Name: "preserve me"}
-			require.NoError(t, tx.Create(&original).Error)
-			if test.prepareOld != nil {
-				test.prepareOld(t, tx)
+// These optional engines must point to a disposable database. The fixture
+// refuses to touch an existing tokens table and removes only its own table.
+func TestMigrateTokenTenantScope(t *testing.T) {
+	for _, engine := range []string{"sqlite", "mysql", "postgres"} {
+		t.Run(engine, func(t *testing.T) {
+			dsn := os.Getenv("TEST_MYSQL_DSN")
+			if engine == "postgres" {
+				dsn = os.Getenv("TEST_POSTGRES_DSN")
 			}
+			if engine != "sqlite" && dsn == "" {
+				t.Skip("disposable database DSN is not configured")
+			}
+			for _, legacy := range []bool{false, true} {
+				name := "fresh"
+				if legacy {
+					name = "released_schema"
+				}
+				t.Run(name, func(t *testing.T) {
+					db := tokenMigrationDatabase(t, engine, dsn)
+					var raw [24]byte
+					_, err := rand.Read(raw[:])
+					require.NoError(t, err)
+					key := hex.EncodeToString(raw[:])
+					if legacy {
+						type releasedToken struct {
+							Id     int    `gorm:"primaryKey"`
+							Key    string `gorm:"type:char(48);uniqueIndex:idx_tokens_key"`
+							UserId int
+							Name   string
+						}
+						require.NoError(t, db.Table("tokens").AutoMigrate(&releasedToken{}))
+						require.NoError(t, db.Table("tokens").Create(&releasedToken{Key: key, UserId: 7, Name: "preserved"}).Error)
+					}
+					for range 2 {
+						require.NoError(t, MigrateTenantSchema(db, []any{&Token{}}))
+						require.NoError(t, db.AutoMigrate(&Token{}))
+					}
+					require.NoError(t, db.Use(tenant.Scope{}))
+					a := db.WithContext(tenant.WithContext(context.Background(), tenant.Identity{ID: 1, Slug: "imported"}))
+					b := db.WithContext(tenant.WithContext(context.Background(), tenant.Identity{ID: 2, Slug: "other"}))
+					if legacy {
+						var row Token
+						require.NoError(t, a.Where(map[string]any{"key": key}).First(&row).Error)
+						assert.Equal(t, "preserved", row.Name)
+						assert.Equal(t, 7, row.UserId)
+						assert.EqualValues(t, 1, row.TenantID)
+					} else {
+						require.NoError(t, a.Create(&Token{Key: key, UserId: 7, Name: "preserved"}).Error)
+					}
+					assert.Error(t, a.Create(&Token{Key: key, UserId: 8}).Error)
+					require.NoError(t, b.Create(&Token{Key: key, UserId: 8, Name: "independent"}).Error)
+					var rows []Token
+					require.NoError(t, b.Find(&rows).Error)
+					require.Len(t, rows, 1)
+					assert.Equal(t, "independent", rows[0].Name)
+					assert.ErrorIs(t, db.Find(&rows).Error, tenant.ErrMissing)
+				})
+			}
+		})
+	}
+}
 
-			if test.expectedError != "" {
-				err := migrateTokenKeyUniqueness(tx)
+func tokenMigrationDatabase(t *testing.T, engine, dsn string) *gorm.DB {
+	t.Helper()
+	var dialector gorm.Dialector = sqlite.Open(filepath.Join(t.TempDir(), "tokens.sqlite"))
+	if engine == "mysql" {
+		dialector = mysql.Open(dsn)
+	} else if engine == "postgres" {
+		dialector = postgres.New(postgres.Config{DSN: dsn, PreferSimpleProtocol: true})
+	}
+	db, err := gorm.Open(dialector, &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
+	require.False(t, db.Migrator().HasTable("tokens"), "use an empty disposable database")
+	t.Cleanup(func() {
+		_, err := sqlDB.Exec("DROP TABLE IF EXISTS tokens")
+		require.NoError(t, err)
+	})
+	return db
+}
+
+func TestTokenTenantMigrationPostgreSQLConstraints(t *testing.T) {
+	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("disposable PostgreSQL database DSN is not configured")
+	}
+	for _, tc := range []struct {
+		name       string
+		constraint string
+		deferrable bool
+		reject     bool
+	}{
+		{name: "legacy index constraint", constraint: tokenKeyIndex},
+		{name: "GORM constraint", constraint: gormTokenKeyConstraint},
+		{name: "PostgreSQL constraint", constraint: postgresTokenKeyConstraint},
+		{name: "unknown constraint preserved", constraint: "custom_tokens_key", reject: true},
+		{name: "deferrable constraint preserved", constraint: postgresTokenKeyConstraint, deferrable: true, reject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := tokenMigrationDatabase(t, "postgres", dsn)
+			require.NoError(t, db.AutoMigrate(&Token{}))
+			query := "ALTER TABLE tokens ADD CONSTRAINT ? UNIQUE (key)"
+			if tc.deferrable {
+				query += " DEFERRABLE INITIALLY DEFERRED"
+			}
+			require.NoError(t, db.Exec(query, clause.Column{Name: tc.constraint}).Error)
+			err := MigrateTenantSchema(db, []any{&Token{}})
+			if tc.reject {
 				require.Error(t, err)
-				assert.Contains(t, err.Error(), test.expectedError)
-				for _, constraintName := range test.preservedConstraints {
-					requireTokenConstraintExists(t, tx, constraintName)
-				}
-				for _, indexName := range test.preservedIndexes {
-					requireTokenIndexExists(t, tx, indexName)
-				}
+				assert.True(t, db.Migrator().HasConstraint(&Token{}, tc.constraint))
 				return
 			}
-
-			for range 2 {
-				require.NoError(t, migrateTokenKeyUniqueness(tx))
-				require.NoError(t, tx.AutoMigrate(&Token{}))
-			}
-
-			var preserved Token
-			require.NoError(t, tx.First(&preserved, original.Id).Error)
-			assert.Equal(t, original.Key, preserved.Key)
-			assert.Equal(t, original.Name, preserved.Name)
-
-			constraints, err := inspectTokenKeyUniqueConstraints(tx, "tokens")
 			require.NoError(t, err)
-			assert.Empty(t, constraints)
-			targetIndex, err := inspectTokenKeyIndex(tx, "tokens")
-			require.NoError(t, err)
-			assert.True(t, targetIndex.standaloneValid)
-			for _, constraintName := range test.preservedConstraints {
-				requireTokenConstraintExists(t, tx, constraintName)
-			}
-			for _, indexName := range test.preservedIndexes {
-				requireTokenIndexExists(t, tx, indexName)
-			}
-
-			duplicateError := tx.Transaction(func(duplicateTx *gorm.DB) error {
-				return duplicateTx.Create(&Token{UserId: 2, Key: original.Key}).Error
-			})
-			require.Error(t, duplicateError)
-
-			var totalRows int64
-			require.NoError(t, tx.Model(&Token{}).Count(&totalRows).Error)
-			assert.EqualValues(t, 1, totalRows)
+			require.NoError(t, db.AutoMigrate(&Token{}))
+			assert.False(t, db.Migrator().HasConstraint(&Token{}, tc.constraint))
+			assert.True(t, db.Migrator().HasIndex(&Token{}, "tenant_token_key"))
 		})
 	}
 }

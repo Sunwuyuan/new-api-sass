@@ -21,8 +21,6 @@ import { EmailSettingsSection } from '../integrations/email-settings-section'
 import { MonitoringSettingsSection } from '../integrations/monitoring-settings-section'
 import { WorkerSettingsSection } from '../integrations/worker-settings-section'
 import { LogSettingsSection } from '../maintenance/log-settings-section'
-import { PerformanceSection } from '../maintenance/performance-section'
-import { UpdateCheckerSection } from '../maintenance/update-checker-section'
 import type { OperationsSettings } from '../types'
 import { createSectionRegistry } from '../utils/section-registry'
 
@@ -98,46 +96,6 @@ const OPERATIONS_SECTIONS = [
     build: (settings: OperationsSettings) => (
       <LogSettingsSection
         defaultEnabled={Boolean(settings.LogConsumeEnabled)}
-      />
-    ),
-  },
-  {
-    id: 'performance',
-    titleKey: 'Performance',
-    build: (settings: OperationsSettings) => (
-      <PerformanceSection
-        defaultValues={{
-          'performance_setting.disk_cache_enabled':
-            settings['performance_setting.disk_cache_enabled'] ?? false,
-          'performance_setting.disk_cache_threshold_mb':
-            settings['performance_setting.disk_cache_threshold_mb'] ?? 10,
-          'performance_setting.disk_cache_max_size_mb':
-            settings['performance_setting.disk_cache_max_size_mb'] ?? 1024,
-          'performance_setting.disk_cache_path':
-            settings['performance_setting.disk_cache_path'] ?? '',
-          'performance_setting.monitor_enabled':
-            settings['performance_setting.monitor_enabled'] ?? false,
-          'performance_setting.monitor_cpu_threshold':
-            settings['performance_setting.monitor_cpu_threshold'] ?? 90,
-          'performance_setting.monitor_memory_threshold':
-            settings['performance_setting.monitor_memory_threshold'] ?? 90,
-          'performance_setting.monitor_disk_threshold':
-            settings['performance_setting.monitor_disk_threshold'] ?? 95,
-        }}
-      />
-    ),
-  },
-  {
-    id: 'update-checker',
-    titleKey: 'System maintenance',
-    build: (
-      _settings: OperationsSettings,
-      currentVersion?: string | null,
-      startTime?: number | null
-    ) => (
-      <UpdateCheckerSection
-        currentVersion={currentVersion}
-        startTime={startTime}
       />
     ),
   },

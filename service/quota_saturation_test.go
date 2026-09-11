@@ -6,12 +6,14 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
-	hosttypes "github.com/QuantumNous/new-api/types"
 
+	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -21,9 +23,9 @@ import (
 // log formatter strips admin_info for non-admin viewers).
 func TestAttachQuotaSaturationNestsUnderAdminInfo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(nil)
+	ctx, _ := testtenant.CreateTestContext(nil)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          7,
 		OriginModelName: "gpt-image-1",
 		QuotaClamp: &common.QuotaClamp{
@@ -48,19 +50,19 @@ func TestAttachQuotaSaturationNestsUnderAdminInfo(t *testing.T) {
 }
 
 func TestCalcViolationFeeQuotaSaturates(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 500_000
-	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500_000
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit })
 
-	require.Equal(t, common.MaxQuota, calcViolationFeeQuota(1e20, 1))
+	require.Equal(t, common.MaxQuota, calcViolationFeeQuota(testtenant.Context(), 1e20, 1))
 }
 
 func TestCalcOpenRouterCacheCreateTokensDoesNotWrap(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	common.QuotaPerUnit = 500_000
-	t.Cleanup(func() { common.QuotaPerUnit = oldQuotaPerUnit })
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500_000
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit })
 
-	got := CalcOpenRouterCacheCreateTokens(dto.Usage{Cost: math.Inf(1)}, hosttypes.PriceData{
+	got := CalcOpenRouterCacheCreateTokens(testtenant.Context(), dto.Usage{Cost: math.Inf(1)}, hosttypes.PriceData{
 		ModelRatio:         1,
 		CacheCreationRatio: 2,
 		CacheRatio:         1,
@@ -73,9 +75,9 @@ func TestCalcOpenRouterCacheCreateTokensDoesNotWrap(t *testing.T) {
 // merged into a pre-existing admin_info map without clobbering it.
 func TestAttachQuotaSaturationPreservesExistingAdminInfo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(nil)
+	ctx, _ := testtenant.CreateTestContext(nil)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		QuotaClamp: &common.QuotaClamp{Op: "QuotaFromFloat", Kind: common.QuotaClampUnderflow, Clamped: common.MinQuota},
 	}
 	other := model.NewLogOther()
@@ -91,9 +93,9 @@ func TestAttachQuotaSaturationPreservesExistingAdminInfo(t *testing.T) {
 // saturation) leaves the log untouched.
 func TestAttachQuotaSaturationNoClampNoMarker(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(nil)
+	ctx, _ := testtenant.CreateTestContext(nil)
 
-	relayInfo := &relaycommon.RelayInfo{QuotaClamp: nil}
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(), QuotaClamp: nil}
 	other := model.NewLogOther()
 	other.SetPublic("model_price", 0.004)
 	attachQuotaSaturation(ctx, relayInfo, other)
@@ -104,8 +106,8 @@ func TestAttachQuotaSaturationNoClampNoMarker(t *testing.T) {
 
 func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(nil)
-	info := &relaycommon.RelayInfo{
+	c, _ := testtenant.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		QuotaClamp: &common.QuotaClamp{
 			Op:       "QuotaFromFloat",
 			Kind:     common.QuotaClampOverflow,
@@ -128,8 +130,8 @@ func TestPreConsumeBillingRejectsSaturatedQuotaBeforeDeduction(t *testing.T) {
 
 func TestPreConsumeBillingRejectsNegativeQuotaBeforeDeduction(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(nil)
-	info := &relaycommon.RelayInfo{}
+	c, _ := testtenant.CreateTestContext(nil)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context()}
 
 	apiErr := PreConsumeBilling(c, -1, info)
 

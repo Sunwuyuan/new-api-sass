@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -36,11 +37,11 @@ func TestTaskLogDTOSeparatesUserAdminAndRootDetails(t *testing.T) {
 		},
 	}
 
-	userView := tasksToDto([]*model.Task{task}, false, common.RoleCommonUser)[0]
+	userView := tasksToDto(testtenant.Context(), []*model.Task{task}, false, common.RoleCommonUser)[0]
 	assert.Nil(t, userView.AdminInfo)
 	assert.Nil(t, userView.RootInfo)
 
-	adminView := tasksToDto([]*model.Task{task}, false, common.RoleAdminUser)[0]
+	adminView := tasksToDto(testtenant.Context(), []*model.Task{task}, false, common.RoleAdminUser)[0]
 	require.NotNil(t, adminView.AdminInfo)
 	require.NotNil(t, adminView.AdminInfo.TaskPlugin)
 	assert.Equal(t, "document-parser", adminView.AdminInfo.TaskPlugin.Key)
@@ -53,7 +54,7 @@ func TestTaskLogDTOSeparatesUserAdminAndRootDetails(t *testing.T) {
 	assert.Equal(t, "/v1/documents", adminView.AdminInfo.RequestPath)
 	assert.Nil(t, adminView.RootInfo)
 
-	rootView := tasksToDto([]*model.Task{task}, false, common.RoleRootUser)[0]
+	rootView := tasksToDto(testtenant.Context(), []*model.Task{task}, false, common.RoleRootUser)[0]
 	require.NotNil(t, rootView.AdminInfo)
 	require.NotNil(t, rootView.RootInfo)
 	require.NotNil(t, rootView.RootInfo.TaskPlugin)
@@ -79,7 +80,7 @@ func TestTaskLogDTODoesNotInventHistoricalPluginProvenance(t *testing.T) {
 		Platform: "document-parser",
 	}
 
-	adminView := tasksToDto([]*model.Task{task}, false, common.RoleAdminUser)[0]
+	adminView := tasksToDto(testtenant.Context(), []*model.Task{task}, false, common.RoleAdminUser)[0]
 
 	assert.Nil(t, adminView.AdminInfo)
 	assert.Nil(t, adminView.RootInfo)
@@ -94,7 +95,7 @@ func TestTaskLogDTOReplacesLegacyVideoURLWithAvailabilityFlag(t *testing.T) {
 		FailReason: "https://private-upstream.invalid/video.mp4?signature=secret",
 	}
 
-	view := tasksToDto([]*model.Task{task}, false, common.RoleCommonUser)[0]
+	view := tasksToDto(testtenant.Context(), []*model.Task{task}, false, common.RoleCommonUser)[0]
 	assert.True(t, view.LegacyVideoAvailable)
 	assert.Empty(t, view.ResultURL)
 	assert.Empty(t, view.FailReason)
@@ -113,7 +114,7 @@ func TestTaskLogDTOKeepsFailureReasonAndDoesNotMarkPluginTaskLegacy(t *testing.T
 		Status:     model.TaskStatusFailure,
 		FailReason: "provider rejected the request",
 	}
-	failedView := tasksToDto([]*model.Task{failed}, false, common.RoleCommonUser)[0]
+	failedView := tasksToDto(testtenant.Context(), []*model.Task{failed}, false, common.RoleCommonUser)[0]
 	assert.Equal(t, "provider rejected the request", failedView.FailReason)
 	assert.False(t, failedView.LegacyVideoAvailable)
 
@@ -130,7 +131,7 @@ func TestTaskLogDTOKeepsFailureReasonAndDoesNotMarkPluginTaskLegacy(t *testing.T
 			},
 		},
 	}
-	pluginView := tasksToDto([]*model.Task{pluginTask}, false, common.RoleCommonUser)[0]
+	pluginView := tasksToDto(testtenant.Context(), []*model.Task{pluginTask}, false, common.RoleCommonUser)[0]
 	assert.False(t, pluginView.LegacyVideoAvailable)
 	assert.Empty(t, pluginView.ResultURL)
 	assert.Empty(t, pluginView.FailReason)

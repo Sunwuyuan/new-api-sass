@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,9 +65,9 @@ func TestGetAllFlowQuotaDatesUsesAdminDimensions(t *testing.T) {
 	setupFlowControllerTestDB(t)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Set("role", common.RoleAdminUser)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=bob", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=bob", nil)
 
 	GetAllFlowQuotaDates(ctx)
 
@@ -84,9 +84,9 @@ func TestGetAllFlowQuotaDatesUsesRootDimensions(t *testing.T) {
 	setupFlowControllerTestDB(t)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Set("role", common.RoleRootUser)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=alice", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/api/data/flow?start_timestamp=1000&end_timestamp=2000&username=alice", nil)
 
 	GetAllFlowQuotaDates(ctx)
 
@@ -103,9 +103,9 @@ func TestGetUserFlowQuotaDatesRestrictsToAuthenticatedUser(t *testing.T) {
 	setupFlowControllerTestDB(t)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Set("id", 1)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=1000&end_timestamp=2000", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=1000&end_timestamp=2000", nil)
 
 	GetUserFlowQuotaDates(ctx)
 
@@ -121,9 +121,9 @@ func TestGetUserFlowQuotaDatesRejectsInvalidTimeRange(t *testing.T) {
 	setupFlowControllerTestDB(t)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Set("id", 1)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=bad&end_timestamp=2000", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/api/data/flow/self?start_timestamp=bad&end_timestamp=2000", nil)
 
 	GetUserFlowQuotaDates(ctx)
 

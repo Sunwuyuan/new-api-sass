@@ -14,16 +14,16 @@ func GetSubscription(c *gin.Context) {
 	var err error
 	var token *model.Token
 	var expiredTime int64
-	if common.DisplayTokenStatEnabled {
+	if common.TenantState(c.Request.Context()).DisplayTokenStatEnabled {
 		tokenId := c.GetInt("token_id")
-		token, err = model.GetTokenById(tokenId)
+		token, err = model.GetTokenById(c.Request.Context(), tokenId)
 		expiredTime = token.ExpiredTime
 		remainQuota = token.RemainQuota
 		usedQuota = token.UsedQuota
 	} else {
 		userId := c.GetInt("id")
-		remainQuota, err = model.GetUserQuota(userId, false)
-		usedQuota, err = model.GetUserUsedQuota(userId)
+		remainQuota, err = model.GetUserQuota(c.Request.Context(), userId, false)
+		usedQuota, err = model.GetUserUsedQuota(c.Request.Context(), userId)
 	}
 	if expiredTime <= 0 {
 		expiredTime = 0
@@ -45,13 +45,13 @@ func GetSubscription(c *gin.Context) {
 	// - USD: 直接除以 QuotaPerUnit
 	// - CNY: 先转 USD 再乘汇率
 	// - TOKENS: 直接使用 tokens 数量
-	switch operation_setting.GetQuotaDisplayType() {
+	switch operation_setting.GetQuotaDisplayType(c.Request.Context()) {
 	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		amount = amount / common.TenantState(c.Request.Context()).QuotaPerUnit * operation_setting.TenantState(c.Request.Context()).USDExchangeRate
 	case operation_setting.QuotaDisplayTypeTokens:
 		// amount 保持 tokens 数值
 	default:
-		amount = amount / common.QuotaPerUnit
+		amount = amount / common.TenantState(c.Request.Context()).QuotaPerUnit
 	}
 	if token != nil && token.UnlimitedQuota {
 		amount = 100000000
@@ -72,13 +72,13 @@ func GetUsage(c *gin.Context) {
 	var quota int
 	var err error
 	var token *model.Token
-	if common.DisplayTokenStatEnabled {
+	if common.TenantState(c.Request.Context()).DisplayTokenStatEnabled {
 		tokenId := c.GetInt("token_id")
-		token, err = model.GetTokenById(tokenId)
+		token, err = model.GetTokenById(c.Request.Context(), tokenId)
 		quota = token.UsedQuota
 	} else {
 		userId := c.GetInt("id")
-		quota, err = model.GetUserUsedQuota(userId)
+		quota, err = model.GetUserUsedQuota(c.Request.Context(), userId)
 	}
 	if err != nil {
 		openAIError := types.OpenAIError{
@@ -91,13 +91,13 @@ func GetUsage(c *gin.Context) {
 		return
 	}
 	amount := float64(quota)
-	switch operation_setting.GetQuotaDisplayType() {
+	switch operation_setting.GetQuotaDisplayType(c.Request.Context()) {
 	case operation_setting.QuotaDisplayTypeCNY:
-		amount = amount / common.QuotaPerUnit * operation_setting.USDExchangeRate
+		amount = amount / common.TenantState(c.Request.Context()).QuotaPerUnit * operation_setting.TenantState(c.Request.Context()).USDExchangeRate
 	case operation_setting.QuotaDisplayTypeTokens:
 		// tokens 保持原值
 	default:
-		amount = amount / common.QuotaPerUnit
+		amount = amount / common.TenantState(c.Request.Context()).QuotaPerUnit
 	}
 	usage := OpenAIUsageResponse{
 		Object:     "list",

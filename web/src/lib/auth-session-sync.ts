@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { tenantStorage, tenantKey } from '@/lib/tenant'
+
 export type AuthSessionSyncEvent = {
   kind: 'authenticated' | 'signed_out'
   sid: string
@@ -24,7 +26,7 @@ export type AuthSessionSyncEvent = {
   timestamp: number
 }
 
-const AUTH_SYNC_CHANNEL = 'new-api:auth-session'
+const AUTH_SYNC_CHANNEL = tenantKey('auth-session')
 const AUTH_SYNC_STORAGE_KEY = 'new-api:auth-session:event'
 
 function randomIdentifier(): string {
@@ -70,8 +72,8 @@ export function publishAuthSessionEvent(
   }
 
   try {
-    window.localStorage.setItem(AUTH_SYNC_STORAGE_KEY, JSON.stringify(event))
-    window.localStorage.removeItem(AUTH_SYNC_STORAGE_KEY)
+    tenantStorage.setItem(AUTH_SYNC_STORAGE_KEY, JSON.stringify(event))
+    tenantStorage.removeItem(AUTH_SYNC_STORAGE_KEY)
   } catch {
     // Cross-tab synchronization is best-effort when storage is unavailable.
   }
@@ -105,7 +107,9 @@ export function subscribeAuthSessionEvents(
   }
 
   const handleStorage = (event: StorageEvent) => {
-    if (event.key !== AUTH_SYNC_STORAGE_KEY || !event.newValue) return
+    if (event.key !== tenantKey(AUTH_SYNC_STORAGE_KEY) || !event.newValue) {
+      return
+    }
     try {
       deliver(JSON.parse(event.newValue))
     } catch {

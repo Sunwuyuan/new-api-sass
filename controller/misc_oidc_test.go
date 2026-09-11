@@ -6,21 +6,21 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/setting/system_setting"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetStatusReturnsEffectiveOIDCDisplayName(t *testing.T) {
-	settings := system_setting.GetOIDCSettings()
+	settings := system_setting.GetOIDCSettings(testtenant.Context())
 	originalDisplayName := settings.DisplayName
-	originalOptionMap := common.OptionMap
+	originalOptionMap := common.TenantState(testtenant.Context()).OptionMap
 	t.Cleanup(func() {
 		settings.DisplayName = originalDisplayName
-		common.OptionMap = originalOptionMap
+		common.TenantState(testtenant.Context()).OptionMap = originalOptionMap
 	})
-	common.OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
 
 	tests := []struct {
 		name        string
@@ -43,8 +43,8 @@ func TestGetStatusReturnsEffectiveOIDCDisplayName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			settings.DisplayName = tt.displayName
 			response := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(response)
-			context.Request = httptest.NewRequest(http.MethodGet, "/api/status", nil)
+			context, _ := testtenant.CreateTestContext(response)
+			context.Request = testtenant.NewRequest(http.MethodGet, "/api/status", nil)
 
 			GetStatus(context)
 

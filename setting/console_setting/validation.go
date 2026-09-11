@@ -1,5 +1,7 @@
 package console_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"net/url"
@@ -36,7 +38,7 @@ func exceedsMaxCharacters(s string, max int) bool {
 	return len(utf16.Encode([]rune(s))) > max
 }
 
-func validateURL(urlStr string, index int, itemType string) error {
+func validateURL(tenantCtx context.Context, urlStr string, index int, itemType string) error {
 	if !urlRegex.MatchString(urlStr) {
 		return fmt.Errorf("第%d个%s的URL格式不正确", index, itemType)
 	}
@@ -46,7 +48,7 @@ func validateURL(urlStr string, index int, itemType string) error {
 	return nil
 }
 
-func checkDangerousContent(content string, index int, itemType string) error {
+func checkDangerousContent(tenantCtx context.Context, content string, index int, itemType string) error {
 	lower := strings.ToLower(content)
 	for _, d := range dangerousChars {
 		if strings.Contains(lower, d) {
@@ -65,26 +67,26 @@ func getJSONList(jsonStr string) []map[string]interface{} {
 	return list
 }
 
-func ValidateConsoleSettings(settingsStr string, settingType string) error {
+func ValidateConsoleSettings(tenantCtx context.Context, settingsStr string, settingType string) error {
 	if settingsStr == "" {
 		return nil
 	}
 
 	switch settingType {
 	case "ApiInfo":
-		return validateApiInfo(settingsStr)
+		return validateApiInfo(tenantCtx, settingsStr)
 	case "Announcements":
 		return validateAnnouncements(settingsStr)
 	case "FAQ":
 		return validateFAQ(settingsStr)
 	case "UptimeKumaGroups":
-		return validateUptimeKumaGroups(settingsStr)
+		return validateUptimeKumaGroups(tenantCtx, settingsStr)
 	default:
 		return fmt.Errorf("未知的设置类型：%s", settingType)
 	}
 }
 
-func validateApiInfo(apiInfoStr string) error {
+func validateApiInfo(tenantCtx context.Context, apiInfoStr string) error {
 	apiInfoList, err := parseJSONArray(apiInfoStr, "API信息")
 	if err != nil {
 		return err
@@ -112,7 +114,7 @@ func validateApiInfo(apiInfoStr string) error {
 			return fmt.Errorf("第%d个API信息缺少颜色字段", i+1)
 		}
 
-		if err := validateURL(urlStr, i+1, "API信息"); err != nil {
+		if err := validateURL(tenantCtx, urlStr, i+1, "API信息"); err != nil {
 			return err
 		}
 
@@ -130,18 +132,18 @@ func validateApiInfo(apiInfoStr string) error {
 			return fmt.Errorf("第%d个API信息的颜色值不合法", i+1)
 		}
 
-		if err := checkDangerousContent(description, i+1, "API信息"); err != nil {
+		if err := checkDangerousContent(tenantCtx, description, i+1, "API信息"); err != nil {
 			return err
 		}
-		if err := checkDangerousContent(route, i+1, "API信息"); err != nil {
+		if err := checkDangerousContent(tenantCtx, route, i+1, "API信息"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func GetApiInfo() []map[string]interface{} {
-	return getJSONList(GetConsoleSetting().ApiInfo)
+func GetApiInfo(tenantCtx context.Context) []map[string]interface{} {
+	return getJSONList(GetConsoleSetting(tenantCtx).ApiInfo)
 }
 
 func validateAnnouncements(announcementsStr string) error {
@@ -228,19 +230,19 @@ func getPublishTime(item map[string]interface{}) time.Time {
 	return time.Time{}
 }
 
-func GetAnnouncements() []map[string]interface{} {
-	list := getJSONList(GetConsoleSetting().Announcements)
+func GetAnnouncements(tenantCtx context.Context) []map[string]interface{} {
+	list := getJSONList(GetConsoleSetting(tenantCtx).Announcements)
 	sort.SliceStable(list, func(i, j int) bool {
 		return getPublishTime(list[i]).After(getPublishTime(list[j]))
 	})
 	return list
 }
 
-func GetFAQ() []map[string]interface{} {
-	return getJSONList(GetConsoleSetting().FAQ)
+func GetFAQ(tenantCtx context.Context) []map[string]interface{} {
+	return getJSONList(GetConsoleSetting(tenantCtx).FAQ)
 }
 
-func validateUptimeKumaGroups(groupsStr string) error {
+func validateUptimeKumaGroups(tenantCtx context.Context, groupsStr string) error {
 	groups, err := parseJSONArray(groupsStr, "Uptime Kuma分组配置")
 	if err != nil {
 		return err
@@ -274,7 +276,7 @@ func validateUptimeKumaGroups(groupsStr string) error {
 			description = ""
 		}
 
-		if err := validateURL(urlStr, i+1, "分组"); err != nil {
+		if err := validateURL(tenantCtx, urlStr, i+1, "分组"); err != nil {
 			return err
 		}
 
@@ -295,16 +297,16 @@ func validateUptimeKumaGroups(groupsStr string) error {
 			return fmt.Errorf("第%d个分组的Slug只能包含字母、数字、下划线和连字符", i+1)
 		}
 
-		if err := checkDangerousContent(description, i+1, "分组"); err != nil {
+		if err := checkDangerousContent(tenantCtx, description, i+1, "分组"); err != nil {
 			return err
 		}
-		if err := checkDangerousContent(categoryName, i+1, "分组"); err != nil {
+		if err := checkDangerousContent(tenantCtx, categoryName, i+1, "分组"); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func GetUptimeKumaGroups() []map[string]interface{} {
-	return getJSONList(GetConsoleSetting().UptimeKumaGroups)
+func GetUptimeKumaGroups(tenantCtx context.Context) []map[string]interface{} {
+	return getJSONList(GetConsoleSetting(tenantCtx).UptimeKumaGroups)
 }

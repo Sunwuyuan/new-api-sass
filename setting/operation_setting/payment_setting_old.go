@@ -5,6 +5,8 @@ This file is the old version of the payment settings file. If you need to add ne
 
 package operation_setting
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/common"
 )
@@ -36,21 +38,25 @@ var PayMethods = []map[string]string{
 	},
 }
 
-func UpdatePayMethodsByJsonString(jsonString string) error {
-	PayMethods = make([]map[string]string, 0)
-	return common.Unmarshal([]byte(jsonString), &PayMethods)
+func UpdatePayMethodsByJsonString(tenantCtx context.Context, jsonString string) error {
+	methods := make([]map[string]string, 0)
+	if err := common.Unmarshal([]byte(jsonString), &methods); err != nil {
+		return err
+	}
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.PayMethods = methods })
+	return nil
 }
 
-func PayMethods2JsonString() string {
-	jsonBytes, err := common.Marshal(PayMethods)
+func PayMethods2JsonString(tenantCtx context.Context) string {
+	jsonBytes, err := common.Marshal(TenantState(tenantCtx).PayMethods)
 	if err != nil {
 		return "[]"
 	}
 	return string(jsonBytes)
 }
 
-func ContainsPayMethod(method string) bool {
-	for _, payMethod := range PayMethods {
+func ContainsPayMethod(tenantCtx context.Context, method string) bool {
+	for _, payMethod := range TenantState(tenantCtx).PayMethods {
 		if payMethod["type"] == method {
 			return true
 		}

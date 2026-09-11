@@ -32,7 +32,7 @@ func rewriteTaskPluginJSONModel(c *gin.Context, spelling string) error {
 	if err != nil {
 		return err
 	}
-	newStorage, err := common.CreateBodyStorage(patched)
+	newStorage, err := common.CreateBodyStorage(c.Request.Context(), patched)
 	if err != nil {
 		return err
 	}

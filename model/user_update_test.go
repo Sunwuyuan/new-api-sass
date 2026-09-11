@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -15,6 +16,8 @@ import (
 func setupUserUpdateTestState(t *testing.T) {
 	t.Helper()
 	truncateTables(t)
+	require.NoError(t, DB.AutoMigrate(&tenant.Workspace{}))
+	require.NoError(t, DB.Where("id = ?", 1).FirstOrCreate(&tenant.Workspace{ID: 1, Slug: "test", Name: "Test", Status: "active", PlanID: 1}).Error)
 	require.NoError(t, DB.Exec("DELETE FROM users").Error)
 
 	oldRedisEnabled := common.RedisEnabled
@@ -61,7 +64,7 @@ func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing
 	user.SetAccessToken("old-token")
 	require.NoError(t, DB.Create(&user).Error)
 
-	staleUser, err := GetUserById(user.Id, true)
+	staleUser, err := GetUserById(testtenant.Context(), user.Id, true)
 	require.NoError(t, err)
 
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).Updates(map[string]any{
@@ -75,7 +78,7 @@ func TestUserUpdateDoesNotOverwriteConcurrentAccountingOrTokenChanges(t *testing
 	}).Error)
 
 	staleUser.DisplayName = "after"
-	require.NoError(t, staleUser.Update(false))
+	require.NoError(t, staleUser.Update(testtenant.Context(), false))
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
@@ -111,10 +114,10 @@ func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 	require.NoError(t, DB.Create(&user).Error)
 	require.NoError(t, DB.Create(&channel).Error)
 
-	UpdateUserUsedQuota(user.Id, -200)
-	UpdateUserUsedQuota(user.Id, 50)
-	UpdateChannelUsedQuota(channel.Id, -200)
-	UpdateChannelUsedQuota(channel.Id, 50)
+	UpdateUserUsedQuota(testtenant.Context(), user.Id, -200)
+	UpdateUserUsedQuota(testtenant.Context(), user.Id, 50)
+	UpdateChannelUsedQuota(testtenant.Context(), channel.Id, -200)
+	UpdateChannelUsedQuota(testtenant.Context(), channel.Id, 50)
 
 	var got User
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
@@ -125,10 +128,10 @@ func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 	assert.Equal(t, int64(850), gotChannel.UsedQuota)
 
 	common.BatchUpdateEnabled = true
-	UpdateUserUsedQuota(user.Id, 400)
-	UpdateUserUsedQuota(user.Id, -100)
-	UpdateChannelUsedQuota(channel.Id, 400)
-	UpdateChannelUsedQuota(channel.Id, -100)
+	UpdateUserUsedQuota(testtenant.Context(), user.Id, 400)
+	UpdateUserUsedQuota(testtenant.Context(), user.Id, -100)
+	UpdateChannelUsedQuota(testtenant.Context(), channel.Id, 400)
+	UpdateChannelUsedQuota(testtenant.Context(), channel.Id, -100)
 
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
 	assert.Equal(t, 850, got.UsedQuota, "batch deltas must remain queued until flush")
@@ -136,7 +139,7 @@ func TestUsageAccountingSupportsSignedDirectAndBatchDeltas(t *testing.T) {
 	require.NoError(t, DB.Select("used_quota").First(&gotChannel, channel.Id).Error)
 	assert.Equal(t, int64(850), gotChannel.UsedQuota, "batch deltas must remain queued until flush")
 
-	batchUpdate()
+	batchUpdate(testtenant.Context())
 	require.NoError(t, DB.Select("used_quota", "request_count").First(&got, user.Id).Error)
 	assert.Equal(t, 1150, got.UsedQuota)
 	assert.Equal(t, 3, got.RequestCount)
@@ -165,7 +168,7 @@ func TestUpdateUserAccessTokenOnlyUpdatesAccessToken(t *testing.T) {
 		"display_name": "concurrent-update",
 	}).Error)
 
-	require.NoError(t, UpdateUserAccessToken(user.Id, "rotated-token"))
+	require.NoError(t, UpdateUserAccessToken(testtenant.Context(), user.Id, "rotated-token"))
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
@@ -189,7 +192,7 @@ func TestUpdateUserAccessTokenRejectsSoftDeletedUser(t *testing.T) {
 	require.NoError(t, DB.Create(&user).Error)
 	require.NoError(t, DB.Delete(&user).Error)
 
-	err := UpdateUserAccessToken(user.Id, "orphaned-token")
+	err := UpdateUserAccessToken(testtenant.Context(), user.Id, "orphaned-token")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 
 	var got User
@@ -217,7 +220,7 @@ func TestUpdateUserSettingOnlyUpdatesSetting(t *testing.T) {
 		"request_count": gorm.Expr("request_count + ?", 1),
 	}).Error)
 
-	require.NoError(t, UpdateUserSetting(user.Id, dto.UserSetting{Language: "zh"}))
+	require.NoError(t, UpdateUserSetting(testtenant.Context(), user.Id, dto.UserSetting{Language: "zh"}))
 
 	var got User
 	require.NoError(t, DB.First(&got, user.Id).Error)
@@ -237,14 +240,14 @@ func TestEnsureEmailAvailableRejectsExistingEmailCaseInsensitive(t *testing.T) {
 		Status:   common.UserStatusEnabled,
 	}).Error)
 
-	err := EnsureEmailAvailable(" taken@example.COM ", 0)
+	err := EnsureEmailAvailable(testtenant.Context(), " taken@example.COM ", 0)
 	require.ErrorIs(t, err, ErrEmailAlreadyTaken)
 
-	user, err := GetUniqueUserByEmail("TAKEN@example.com")
+	user, err := GetUniqueUserByEmail(testtenant.Context(), "TAKEN@example.com")
 	require.NoError(t, err)
 	assert.Equal(t, "existing", user.Username)
 
-	require.NoError(t, EnsureEmailAvailable("taken@example.com", user.Id))
+	require.NoError(t, EnsureEmailAvailable(testtenant.Context(), "taken@example.com", user.Id))
 }
 
 func TestInsertRejectsDuplicateEmailWithoutUniqueIndex(t *testing.T) {
@@ -264,7 +267,7 @@ func TestInsertRejectsDuplicateEmailWithoutUniqueIndex(t *testing.T) {
 		Status:   common.UserStatusEnabled,
 	}
 
-	err := user.Insert(0)
+	err := user.Insert(testtenant.Context(), 0)
 	require.ErrorIs(t, err, ErrEmailAlreadyTaken)
 
 	var count int64
@@ -281,7 +284,7 @@ func TestInsertKeepsBlankPasswordForPasswordlessUser(t *testing.T) {
 		Status:   common.UserStatusEnabled,
 	}
 
-	require.NoError(t, user.Insert(0))
+	require.NoError(t, user.Insert(testtenant.Context(), 0))
 
 	var stored User
 	require.NoError(t, DB.Where("username = ?", user.Username).First(&stored).Error)
@@ -298,9 +301,9 @@ func TestUpdateUserBindColumnOnlyTouchesTheBindingColumn(t *testing.T) {
 		"group":  "vip",
 	}).Error)
 
-	require.NoError(t, UpdateUserBindColumn(user.Id, "github_id", "gh-12345"))
+	require.NoError(t, UpdateUserBindColumn(testtenant.Context(), user.Id, "github_id", "gh-12345"))
 
-	reloaded, err := GetUserById(user.Id, true)
+	reloaded, err := GetUserById(testtenant.Context(), user.Id, true)
 	require.NoError(t, err)
 	assert.Equal(t, "gh-12345", reloaded.GitHubId)
 	assert.Equal(t, common.RoleAdminUser, reloaded.Role)
@@ -314,9 +317,9 @@ func TestUpdateUserBindColumnPreservesRestrictiveChange(t *testing.T) {
 	user := createUserBindTestUser(t)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", user.Id).
 		Update("status", common.UserStatusDisabled).Error)
-	require.NoError(t, UpdateUserBindColumn(user.Id, "wechat_id", "wx-open-id"))
+	require.NoError(t, UpdateUserBindColumn(testtenant.Context(), user.Id, "wechat_id", "wx-open-id"))
 
-	reloaded, err := GetUserById(user.Id, true)
+	reloaded, err := GetUserById(testtenant.Context(), user.Id, true)
 	require.NoError(t, err)
 	assert.Equal(t, "wx-open-id", reloaded.WeChatId)
 	assert.Equal(t, common.UserStatusDisabled, reloaded.Status)
@@ -327,10 +330,10 @@ func TestUpdateUserBindColumnRejectsNonWhitelistedColumns(t *testing.T) {
 
 	user := createUserBindTestUser(t)
 	for _, column := range []string{"role", "status", "group", "quota", "username", "password", "id"} {
-		assert.Error(t, UpdateUserBindColumn(user.Id, column, "1"), "column %s must be rejected", column)
+		assert.Error(t, UpdateUserBindColumn(testtenant.Context(), user.Id, column, "1"), "column %s must be rejected", column)
 	}
-	assert.Error(t, UpdateUserBindColumn(user.Id, "github_id; DROP TABLE users", "x"))
-	assert.Error(t, UpdateUserBindColumn(0, "github_id", "x"))
+	assert.Error(t, UpdateUserBindColumn(testtenant.Context(), user.Id, "github_id; DROP TABLE users", "x"))
+	assert.Error(t, UpdateUserBindColumn(testtenant.Context(), 0, "github_id", "x"))
 }
 
 func TestValidateAndFillRejectsPasswordlessUser(t *testing.T) {
@@ -346,7 +349,7 @@ func TestValidateAndFillRejectsPasswordlessUser(t *testing.T) {
 		Username: "passwordless-user",
 		Password: "NewPassword123",
 	}
-	err := loginUser.ValidateAndFill()
+	err := loginUser.ValidateAndFill(testtenant.Context())
 	require.ErrorIs(t, err, ErrInvalidCredentials)
 
 	var stored User
@@ -372,7 +375,7 @@ func TestResetUserPasswordByEmailRequiresSingleActiveMatch(t *testing.T) {
 		Status:   common.UserStatusEnabled,
 	}).Error)
 
-	err := ResetUserPasswordByEmail("legacy@example.com", "NewPassword123")
+	err := ResetUserPasswordByEmail(testtenant.Context(), "legacy@example.com", "NewPassword123")
 	require.ErrorIs(t, err, ErrEmailAmbiguous)
 
 	var duplicates []User
@@ -389,12 +392,12 @@ func TestResetUserPasswordByEmailRequiresSingleActiveMatch(t *testing.T) {
 		Status:   common.UserStatusEnabled,
 	}).Error)
 
-	require.NoError(t, ResetUserPasswordByEmail("UNIQUE@example.com", "NewPassword123"))
+	require.NoError(t, ResetUserPasswordByEmail(testtenant.Context(), "UNIQUE@example.com", "NewPassword123"))
 
 	var unique User
 	require.NoError(t, DB.Where("username = ?", "unique").First(&unique).Error)
 	assert.True(t, common.ValidatePasswordAndHash("NewPassword123", unique.Password))
 
-	err = ResetUserPasswordByEmail("missing@example.com", "NewPassword123")
+	err = ResetUserPasswordByEmail(testtenant.Context(), "missing@example.com", "NewPassword123")
 	require.True(t, errors.Is(err, ErrEmailNotFound))
 }

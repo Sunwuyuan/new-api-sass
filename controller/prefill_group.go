@@ -12,7 +12,7 @@ import (
 // GetPrefillGroups 获取预填组列表，可通过 ?type=xxx 过滤
 func GetPrefillGroups(c *gin.Context) {
 	groupType := c.Query("type")
-	groups, err := model.GetAllPrefillGroups(groupType)
+	groups, err := model.GetAllPrefillGroups(c.Request.Context(), groupType)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -32,7 +32,7 @@ func CreatePrefillGroup(c *gin.Context) {
 		return
 	}
 	// 创建前检查名称
-	if dup, err := model.IsPrefillGroupNameDuplicated(0, g.Name); err != nil {
+	if dup, err := model.IsPrefillGroupNameDuplicated(c.Request.Context(), 0, g.Name); err != nil {
 		common.ApiError(c, err)
 		return
 	} else if dup {
@@ -40,7 +40,7 @@ func CreatePrefillGroup(c *gin.Context) {
 		return
 	}
 
-	if err := g.Insert(); err != nil {
+	if err := g.Insert(c.Request.Context()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -59,7 +59,7 @@ func UpdatePrefillGroup(c *gin.Context) {
 		return
 	}
 	// 名称冲突检查
-	if dup, err := model.IsPrefillGroupNameDuplicated(g.Id, g.Name); err != nil {
+	if dup, err := model.IsPrefillGroupNameDuplicated(c.Request.Context(), g.Id, g.Name); err != nil {
 		common.ApiError(c, err)
 		return
 	} else if dup {
@@ -67,7 +67,7 @@ func UpdatePrefillGroup(c *gin.Context) {
 		return
 	}
 
-	if err := g.Update(); err != nil {
+	if err := g.Update(c.Request.Context()); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -82,7 +82,7 @@ func DeletePrefillGroup(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err := model.DeletePrefillGroupByID(id); err != nil {
+	if err := model.DeletePrefillGroupByID(c.Request.Context(), id); err != nil {
 		common.ApiError(c, err)
 		return
 	}

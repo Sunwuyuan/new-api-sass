@@ -12,8 +12,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
+
 	relaychannel "github.com/QuantumNous/new-api/relay/channel"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
@@ -56,12 +58,12 @@ func setupGenericTaskTest(t *testing.T) *model.Task {
 
 func allowPrivateTaskMediaTest(t *testing.T) {
 	t.Helper()
-	originalFetchSetting := *system_setting.GetFetchSetting()
-	system_setting.GetFetchSetting().EnableSSRFProtection = true
-	system_setting.GetFetchSetting().AllowPrivateIp = true
-	system_setting.GetFetchSetting().AllowedPorts = []string{"1-65535"}
-	t.Cleanup(func() { *system_setting.GetFetchSetting() = originalFetchSetting })
-	service.InitHttpClient()
+	originalFetchSetting := *system_setting.GetFetchSetting(testtenant.Context())
+	system_setting.GetFetchSetting(testtenant.Context()).EnableSSRFProtection = true
+	system_setting.GetFetchSetting(testtenant.Context()).AllowPrivateIp = true
+	system_setting.GetFetchSetting(testtenant.Context()).AllowedPorts = []string{"1-65535"}
+	t.Cleanup(func() { *system_setting.GetFetchSetting(testtenant.Context()) = originalFetchSetting })
+	service.InitHttpClient(testtenant.Context())
 }
 
 func TestGetTaskDoesNotProjectArtifacts(t *testing.T) {
@@ -76,10 +78,10 @@ func TestGetTaskDoesNotProjectArtifacts(t *testing.T) {
 	require.NoError(t, model.DB.Save(task).Error)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set("id", 7)
 	c.Params = gin.Params{{Key: "key", Value: task.TaskID}}
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID, nil)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID, nil)
 
 	GetTask(c)
 
@@ -94,10 +96,10 @@ func TestGetTaskDoesNotProjectArtifacts(t *testing.T) {
 func TestGetTaskArtifactsReturnsEmptyForLegacyTask(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set("id", task.UserId)
 	c.Params = gin.Params{{Key: "key", Value: task.TaskID}}
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID+"/artifacts", nil)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID+"/artifacts", nil)
 
 	GetTaskArtifacts(c)
 
@@ -115,14 +117,14 @@ func TestGetTaskArtifactsReturnsEmptyForLegacyTask(t *testing.T) {
 func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 	task := setupGenericTaskTest(t)
 
-	commonUser, _ := gin.CreateTestContext(httptest.NewRecorder())
+	commonUser, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	commonUser.Set("id", 8)
 	commonUser.Set("role", common.RoleCommonUser)
 	_, exists, err := getTaskForArtifactRequest(commonUser, task.TaskID)
 	require.NoError(t, err)
 	assert.False(t, exists)
 
-	admin, _ := gin.CreateTestContext(httptest.NewRecorder())
+	admin, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	admin.Set("id", 8)
 	admin.Set("role", common.RoleAdminUser)
 	found, exists, err := getTaskForArtifactRequest(admin, task.TaskID)
@@ -130,7 +132,7 @@ func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 	require.True(t, exists)
 	assert.Equal(t, task.TaskID, found.TaskID)
 
-	apiToken, _ := gin.CreateTestContext(httptest.NewRecorder())
+	apiToken, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	apiToken.Set("id", 8)
 	apiToken.Set("role", common.RoleRootUser)
 	apiToken.Set("token_id", 99)
@@ -142,23 +144,23 @@ func TestTaskArtifactAuthorizationKeepsForeignTasksHidden(t *testing.T) {
 func TestDashboardTaskArtifactsReturnsLegacyCapabilityWithoutUpstreamURL(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	previousSecret := common.CryptoSecret
-	previousPublicAddress := system_setting.TaskPublicAddress
+	previousPublicAddress := system_setting.TenantState(testtenant.Context()).TaskPublicAddress
 	common.CryptoSecret = "controller-task-artifact-access-secret"
-	system_setting.TaskPublicAddress = "https://gateway.example/prefix"
+	system_setting.TenantState(testtenant.Context()).TaskPublicAddress = "https://gateway.example/prefix"
 	t.Cleanup(func() {
 		common.CryptoSecret = previousSecret
-		system_setting.TaskPublicAddress = previousPublicAddress
+		system_setting.TenantState(testtenant.Context()).TaskPublicAddress = previousPublicAddress
 	})
 	task.Action = constant.TaskActionTextToVideo
 	task.FailReason = "https://upstream.invalid/private-video.mp4?signature=secret"
 	require.NoError(t, model.DB.Save(task).Error)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set("id", task.UserId)
 	c.Set("role", common.RoleCommonUser)
 	c.Params = gin.Params{{Key: "task_id", Value: task.TaskID}}
-	c.Request = httptest.NewRequest(http.MethodGet, "/api/task/"+task.TaskID+"/artifacts", nil)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/api/task/"+task.TaskID+"/artifacts", nil)
 
 	GetDashboardTaskArtifacts(c)
 
@@ -177,7 +179,7 @@ func TestDashboardTaskArtifactsReturnsLegacyCapabilityWithoutUpstreamURL(t *test
 	contentURL, err := url.Parse(response.Data.LegacyContentURL)
 	require.NoError(t, err)
 	assert.Equal(t, "/prefix/v1/tasks/"+task.TaskID+"/artifacts/video/content", contentURL.Path)
-	assert.True(t, service.VerifyTaskArtifactAccess(
+	assert.True(t, service.VerifyTaskArtifactAccess(testtenant.Context(),
 		contentURL.Query().Get(service.TaskArtifactAccessQueryParameter),
 		task.TaskID,
 		"video",
@@ -196,13 +198,13 @@ func TestTaskArtifactAccessRequiresActiveOwner(t *testing.T) {
 		Update("status", common.UserStatusDisabled).Error)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(middleware.TaskArtifactAccessContextKey, true)
 	c.Params = gin.Params{
 		{Key: "key", Value: task.TaskID},
 		{Key: "artifact_key", Value: "video"},
 	}
-	c.Request = httptest.NewRequest(
+	c.Request = testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/tasks/"+task.TaskID+"/artifacts/video/content",
 		nil,
@@ -230,13 +232,13 @@ func TestTaskArtifactAccessRejectsAmbiguousHistoricalTaskID(t *testing.T) {
 	}).Error)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(middleware.TaskArtifactAccessContextKey, true)
 	c.Params = gin.Params{
 		{Key: "key", Value: task.TaskID},
 		{Key: "artifact_key", Value: "video"},
 	}
-	c.Request = httptest.NewRequest(
+	c.Request = testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/tasks/"+task.TaskID+"/artifacts/video/content",
 		nil,
@@ -266,13 +268,13 @@ func TestLegacyVideoArtifactContentUsesGetResultURL(t *testing.T) {
 	require.NoError(t, model.DB.Save(task).Error)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(middleware.TaskArtifactAccessContextKey, true)
 	c.Params = gin.Params{
 		{Key: "key", Value: task.TaskID},
 		{Key: "artifact_key", Value: "video"},
 	}
-	c.Request = httptest.NewRequest(
+	c.Request = testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/tasks/"+task.TaskID+"/artifacts/video/content",
 		nil,
@@ -320,13 +322,13 @@ func TestDisabledArtifactStorePreservesPluginUpstreamContent(t *testing.T) {
 	require.False(t, service.GetTaskArtifactStore().Enabled())
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(middleware.TaskArtifactAccessContextKey, true)
 	c.Params = gin.Params{
 		{Key: "key", Value: task.TaskID},
 		{Key: "artifact_key", Value: "video"},
 	}
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID+"/artifacts/video/content", nil)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/v1/tasks/"+task.TaskID+"/artifacts/video/content", nil)
 	c.Request.Header.Set("Range", "bytes=0-13")
 
 	TaskArtifactContent(c)
@@ -379,8 +381,8 @@ func TestProxyTaskMediaForwardsRangeAndFiltersResponseHeaders(t *testing.T) {
 	allowPrivateTaskMediaTest(t)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/tasks/task_generic/artifacts/video-main/content", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/v1/tasks/task_generic/artifacts/video-main/content", nil)
 	c.Request.Header.Set("Range", "bytes=0-3")
 
 	err := proxyTaskMedia(c, task, &relaychannel.TaskContentRequest{
@@ -416,8 +418,8 @@ func TestProxyTaskMediaPassesThroughUnsatisfiedRange(t *testing.T) {
 	allowPrivateTaskMediaTest(t)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 
 	require.NoError(t, proxyTaskMedia(c, task, &relaychannel.TaskContentRequest{
 		URL: upstream.URL, Method: http.MethodGet,
@@ -437,7 +439,7 @@ func TestTaskMediaResponseHeaderTimeoutDoesNotTruncateBody(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	request, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	request, err := testtenant.HTTPRequest(http.MethodGet, upstream.URL, nil)
 	require.NoError(t, err)
 	response, err := doTaskMediaRequest(upstream.Client(), request, 20*time.Millisecond)
 	require.NoError(t, err)
@@ -454,7 +456,7 @@ func TestTaskMediaResponseHeaderTimeoutCancelsBeforeHeaders(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	request, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	request, err := testtenant.HTTPRequest(http.MethodGet, upstream.URL, nil)
 	require.NoError(t, err)
 	_, err = doTaskMediaRequest(upstream.Client(), request, 10*time.Millisecond)
 	assert.ErrorIs(t, err, context.DeadlineExceeded)
@@ -464,16 +466,16 @@ func TestWriteVideoDataURLStreamsAndSupportsHead(t *testing.T) {
 	const dataURL = "data:video/mp4;base64,Y29tcGxldGUtYm9keQ=="
 
 	getRecorder := httptest.NewRecorder()
-	getContext, _ := gin.CreateTestContext(getRecorder)
-	getContext.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	getContext, _ := testtenant.CreateTestContext(getRecorder)
+	getContext.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 	require.NoError(t, writeVideoDataURL(getContext, dataURL))
 	assert.Equal(t, http.StatusOK, getRecorder.Code)
 	assert.Equal(t, "complete-body", getRecorder.Body.String())
 	assert.Equal(t, "13", getRecorder.Header().Get("Content-Length"))
 
 	headRecorder := httptest.NewRecorder()
-	headContext, _ := gin.CreateTestContext(headRecorder)
-	headContext.Request = httptest.NewRequest(http.MethodHead, "/content", nil)
+	headContext, _ := testtenant.CreateTestContext(headRecorder)
+	headContext.Request = testtenant.NewRequest(http.MethodHead, "/content", nil)
 	require.NoError(t, writeVideoDataURL(headContext, dataURL))
 	assert.Equal(t, http.StatusOK, headRecorder.Code)
 	assert.Empty(t, headRecorder.Body.String())
@@ -486,8 +488,8 @@ func TestWriteVideoDataURLRejectsOversizedPayloadBeforeDecode(t *testing.T) {
 	t.Cleanup(func() { taskMediaDataURLMaxEncodedBytes = previousLimit })
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 
 	err := writeVideoDataURL(c, "data:video/mp4;base64,"+strings.Repeat("A", 64))
 
@@ -511,8 +513,8 @@ func TestProxyTaskMediaAllowsOnlyCredentiallessCrossOriginRedirect(t *testing.T)
 	allowPrivateTaskMediaTest(t)
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 	c.Request.Header.Set("Range", "bytes=0-3")
 
 	err := proxyTaskMedia(c, task, &relaychannel.TaskContentRequest{
@@ -526,8 +528,8 @@ func TestProxyTaskMediaAllowsOnlyCredentiallessCrossOriginRedirect(t *testing.T)
 
 	destinationRange = ""
 	rejectedRecorder := httptest.NewRecorder()
-	rejectedContext, _ := gin.CreateTestContext(rejectedRecorder)
-	rejectedContext.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	rejectedContext, _ := testtenant.CreateTestContext(rejectedRecorder)
+	rejectedContext.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 	err = proxyTaskMedia(rejectedContext, task, &relaychannel.TaskContentRequest{
 		URL: source.URL, Method: http.MethodGet,
 		Headers: map[string]string{"Authorization": "Bearer provider-secret"},
@@ -558,8 +560,8 @@ func TestTaskMediaRequestHeaderPolicy(t *testing.T) {
 func TestCredentiallessTaskMediaDescriptorRejectsCredentialsAndBody(t *testing.T) {
 	task := setupGenericTaskTest(t)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/content", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/content", nil)
 
 	for _, descriptor := range []*relaychannel.TaskContentRequest{
 		{URL: "https://example.com/video", Method: http.MethodPost, Credentialless: true},
@@ -574,8 +576,8 @@ func TestCredentiallessTaskMediaDescriptorRejectsCredentialsAndBody(t *testing.T
 }
 
 func TestSelfTaskMediaURLGuard(t *testing.T) {
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodGet, "https://gateway.example/v1/videos/task-1/content", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodGet, "https://gateway.example/v1/videos/task-1/content", nil)
 	c.Request.Host = "gateway.example"
 
 	selfURL, err := url.Parse("https://gateway.example/v1/videos/task-1/content")

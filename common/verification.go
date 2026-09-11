@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"strings"
 	"sync"
@@ -32,22 +34,22 @@ func GenerateVerificationCode(length int) string {
 	return code[:length]
 }
 
-func RegisterVerificationCodeWithKey(key string, code string, purpose string) {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	verificationMap[purpose+key] = verificationValue{
+func RegisterVerificationCodeWithKey(tenantCtx context.Context, key string, code string, purpose string) {
+	TenantState(tenantCtx).verificationMutex.Lock()
+	defer TenantState(tenantCtx).verificationMutex.Unlock()
+	TenantState(tenantCtx).verificationMap[purpose+key] = verificationValue{
 		code: code,
 		time: time.Now(),
 	}
-	if len(verificationMap) > verificationMapMaxSize {
-		removeExpiredPairs()
+	if len(TenantState(tenantCtx).verificationMap) > TenantState(tenantCtx).verificationMapMaxSize {
+		removeExpiredPairs(tenantCtx)
 	}
 }
 
-func VerifyCodeWithKey(key string, code string, purpose string) bool {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	value, okay := verificationMap[purpose+key]
+func VerifyCodeWithKey(tenantCtx context.Context, key string, code string, purpose string) bool {
+	TenantState(tenantCtx).verificationMutex.Lock()
+	defer TenantState(tenantCtx).verificationMutex.Unlock()
+	value, okay := TenantState(tenantCtx).verificationMap[purpose+key]
 	now := time.Now()
 	if !okay || int(now.Sub(value.time).Seconds()) >= VerificationValidMinutes*60 {
 		return false
@@ -55,18 +57,18 @@ func VerifyCodeWithKey(key string, code string, purpose string) bool {
 	return code == value.code
 }
 
-func DeleteKey(key string, purpose string) {
-	verificationMutex.Lock()
-	defer verificationMutex.Unlock()
-	delete(verificationMap, purpose+key)
+func DeleteKey(tenantCtx context.Context, key string, purpose string) {
+	TenantState(tenantCtx).verificationMutex.Lock()
+	defer TenantState(tenantCtx).verificationMutex.Unlock()
+	delete(TenantState(tenantCtx).verificationMap, purpose+key)
 }
 
 // no lock inside, so the caller must lock the verificationMap before calling!
-func removeExpiredPairs() {
+func removeExpiredPairs(tenantCtx context.Context) {
 	now := time.Now()
-	for key := range verificationMap {
-		if int(now.Sub(verificationMap[key].time).Seconds()) >= VerificationValidMinutes*60 {
-			delete(verificationMap, key)
+	for key := range TenantState(tenantCtx).verificationMap {
+		if int(now.Sub(TenantState(tenantCtx).verificationMap[key].time).Seconds()) >= VerificationValidMinutes*60 {
+			delete(TenantState(tenantCtx).verificationMap, key)
 		}
 	}
 }

@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import (
 	"errors"
 	"net"
@@ -29,10 +31,10 @@ var ErrPasskeyRPIDUnavailable = errors.New("This Passkey domain is not available
 
 // PasskeySettingsSnapshot includes the effective defaults without sharing a
 // mutable settings pointer with a WebAuthn ceremony.
-func PasskeySettingsSnapshot() PasskeySettings {
-	common.OptionMapRWMutex.RLock()
-	settings, serverAddress := defaultPasskeySettings, ServerAddress
-	common.OptionMapRWMutex.RUnlock()
+func PasskeySettingsSnapshot(tenantCtx context.Context) PasskeySettings {
+	common.TenantState(tenantCtx).OptionMapRWMutex.RLock()
+	settings, serverAddress := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("passkey").(*PasskeySettings))), TenantState(tenantCtx).ServerAddress
+	common.TenantState(tenantCtx).OptionMapRWMutex.RUnlock()
 	return settings.WithDefaults(serverAddress)
 }
 
@@ -147,8 +149,8 @@ func init() {
 	config.GlobalConfig.Register("passkey", &defaultPasskeySettings)
 }
 
-func GetPasskeySettings() *PasskeySettings {
-	return &defaultPasskeySettings
+func GetPasskeySettings(tenantCtx context.Context) *PasskeySettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("passkey").(*PasskeySettings)
 }
 
 func (s PasskeySettings) WithDefaults(serverAddress string) PasskeySettings {

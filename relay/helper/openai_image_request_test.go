@@ -12,8 +12,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/gin-gonic/gin"
@@ -39,8 +42,8 @@ func TestLegacyDalleValidationAndPricesRemainCompatible(t *testing.T) {
 		{body: `{"model":"dall-e-2","size":"1024x1792"}`, invalid: true},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(tc.body))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(tc.body))
 			c.Request.Header.Set("Content-Type", "application/json")
 			request, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesGenerations)
 			if tc.invalid {
@@ -76,8 +79,8 @@ func TestGetAndValidOpenAIImageRequestMultipartStream(t *testing.T) {
 		require.NoError(t, writer.Close())
 		originalBody := body.String()
 
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/edits", &body)
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		return c, originalBody
 	}
@@ -99,7 +102,7 @@ func TestGetAndValidOpenAIImageRequestMultipartStream(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "true", url.Values(form.Value).Get("stream"))
 		require.Len(t, form.File["image"], 1)
-		billing, err := ResolveImageBillingRequestInput(c, &relaycommon.RelayInfo{Request: req}, billingexpr.RequestInput{})
+		billing, err := ResolveImageBillingRequestInput(c, &relaycommon.RelayInfo{Context: testtenant.Context(), Request: req}, billingexpr.RequestInput{})
 		require.NoError(t, err)
 		require.Equal(t, 1, *billing.ImageCount)
 		require.NotContains(t, string(billing.Body), "fake image")
@@ -134,8 +137,8 @@ func TestImageBillingRequestUsesValidatedProviderCount(t *testing.T) {
 		{`{"model":"z-image","n":0}`, constant.ChannelTypeAli, 1, false},
 		{`{"model":"gpt-image-2","n":2,"parameters":{"n":0}}`, constant.ChannelTypeOpenAI, 2, false},
 	} {
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(tc.body))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(tc.body))
 		c.Request.Header.Set("Content-Type", "application/json")
 		common.SetContextKey(c, constant.ContextKeyChannelType, tc.channel)
 		request, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesGenerations)
@@ -144,7 +147,7 @@ func TestImageBillingRequestUsesValidatedProviderCount(t *testing.T) {
 			continue
 		}
 		require.NoError(t, err)
-		input, err := ResolveImageBillingRequestInput(c, &relaycommon.RelayInfo{Request: request}, billingexpr.RequestInput{})
+		input, err := ResolveImageBillingRequestInput(c, &relaycommon.RelayInfo{Context: testtenant.Context(), Request: request}, billingexpr.RequestInput{})
 		require.NoError(t, err)
 		require.Equal(t, tc.count, *input.ImageCount)
 		cost, _, err := billingexpr.RunExprWithRequest(`tier("image", fixed(0.04)) * image_count`, billingexpr.TokenParams{}, input)
@@ -160,8 +163,8 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	newJSONContext := func(t *testing.T, body string) *gin.Context {
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(body))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", bytes.NewBufferString(body))
 		c.Request.Header.Set("Content-Type", "application/json")
 		return c
 	}
@@ -230,8 +233,8 @@ func TestGetAndValidOpenAIImageRequestNBounds(t *testing.T) {
 		require.NoError(t, writer.WriteField("n", "-22904832"))
 		require.NoError(t, writer.Close())
 
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/edits", &body)
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 
 		_, err := GetAndValidOpenAIImageRequest(c, relayconstant.RelayModeImagesEdits)

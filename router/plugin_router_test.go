@@ -14,6 +14,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -185,7 +186,7 @@ func TestPluginSSEFlushesWithoutFallbackBuffering(t *testing.T) {
 		func(c *gin.Context) { c.String(http.StatusOK, "fallback") },
 	)
 
-	request := httptest.NewRequest(http.MethodGet, "/vendor/stream", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/vendor/stream", nil)
 	request.Header.Set("Accept-Encoding", "gzip")
 	recorder := httptest.NewRecorder()
 	outer.ServeHTTP(recorder, request)
@@ -237,7 +238,7 @@ func TestPluginInnerContextImportsRequestMetadataAndTrustedProxyConfig(t *testin
 	outer, registry := newPluginRouterTestWithProxies(t, []*jsplugin.LoadedPlugin{plugin}, handlers, []string{"127.0.0.0/8"})
 	outer.NoRoute((&pluginRouteDispatcher{registry: registry}).dispatch)
 
-	request := httptest.NewRequest(http.MethodGet, "/vendor/context", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/vendor/context", nil)
 	request.RemoteAddr = "127.0.0.1:1234"
 	request.Header.Set("X-Forwarded-For", "203.0.113.20")
 	recorder := httptest.NewRecorder()
@@ -744,7 +745,7 @@ func TestProductionPluginNativeQueryTraversesInnerRouter(t *testing.T) {
 		},
 	}).Error)
 
-	kling, found := jsplugin.DefaultRegistry.Get("kling")
+	kling, found := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling")
 	require.True(t, found)
 	authenticatedProductionHandlers := func(
 		generation *jsplugin.RoutingGeneration,
@@ -769,7 +770,7 @@ func TestProductionPluginNativeQueryTraversesInnerRouter(t *testing.T) {
 	outer, registry := newPluginRouterTest(t, []*jsplugin.LoadedPlugin{kling}, authenticatedProductionHandlers)
 	outer.NoRoute((&pluginRouteDispatcher{registry: registry}).dispatch)
 
-	request := httptest.NewRequest(http.MethodGet, "/kling/v1/videos/text2video/task_native_router", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/kling/v1/videos/text2video/task_native_router", nil)
 	recorder := httptest.NewRecorder()
 	outer.ServeHTTP(recorder, request)
 
@@ -813,7 +814,7 @@ func newPluginRouterTestWithProxies(
 }
 
 func newOuterPluginTestEngine() *gin.Engine {
-	outer := gin.New()
+	outer := testtenant.NewRouter()
 	outer.Use(func(c *gin.Context) {
 		c.Set(common.RequestIdKey, "request-phase-two")
 		c.Set(string(constant.ContextKeyLanguage), "zh-CN")
@@ -881,13 +882,13 @@ export function parseTaskResult() { return {}; }
 
 func performPluginRequest(handler http.Handler, method, path string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(method, path, strings.NewReader(""))
+	request := testtenant.NewRequest(method, path, strings.NewReader(""))
 	handler.ServeHTTP(recorder, request)
 	return recorder
 }
 
 func TestWebFallbackDoesNotCacheMissingAPIOrAssets(t *testing.T) {
-	outer := gin.New()
+	outer := testtenant.NewRouter()
 	SetWebRouter(outer, WebAssets{IndexPage: []byte("dashboard")}, func(c *gin.Context) { c.Next() })
 	for _, path := range []string{"/api/user/token/status", "/api/audit/self?p=1", "/v1/missing", "/assets/missing.js"} {
 		t.Run(path, func(t *testing.T) {
@@ -905,7 +906,7 @@ func TestWebFallbackDoesNotCacheMissingAPIOrAssets(t *testing.T) {
 }
 
 func TestSecurityRoutesDisableCachingBeforeAuthentication(t *testing.T) {
-	outer := gin.New()
+	outer := testtenant.NewRouter()
 	SetApiRouter(outer)
 	for _, path := range []string{"/api/user/token/status", "/api/user/token", "/api/audit/self", "/api/audit"} {
 		t.Run(path, func(t *testing.T) {

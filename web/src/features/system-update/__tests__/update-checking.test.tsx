@@ -41,6 +41,7 @@ import { api } from '@/lib/api'
 import { createAppQueryClient } from '@/lib/query-client'
 import { ROLE } from '@/lib/roles'
 import { STATUS_QUERY_KEY } from '@/lib/status-query'
+import { tenantKey, tenantStorage } from '@/lib/tenant'
 import { useAuthStore } from '@/stores/auth-store'
 
 import { useSystemUpdatePreferencesStore, useSystemUpdateStore } from '../store'
@@ -454,14 +455,14 @@ describe('version notification preferences', () => {
     act(() => first.result.current.setIgnored(true))
     expect(first.result.current.hasUpdate).toBe(true)
     expect(first.result.current.shouldNotify).toBe(false)
-    const saved = localStorage.getItem('system-update-preferences:v1')
+    const saved = tenantStorage.getItem('system-update-preferences:v1')
     expect(saved).not.toBeNull()
     first.unmount()
     client.clear()
     useSystemUpdateStore.setState({ snapshot: null })
     useSystemUpdateStore.persist.clearStorage()
     useSystemUpdatePreferencesStore.setState({ ignoredVersionsByUserId: {} })
-    localStorage.setItem('system-update-preferences:v1', String(saved))
+    tenantStorage.setItem('system-update-preferences:v1', String(saved))
     await useSystemUpdatePreferencesStore.persist.rehydrate()
     client = createAppQueryClient()
     client.setQueryData(STATUS_QUERY_KEY, { version: 'v1.0.0-rc.35' })
@@ -543,10 +544,10 @@ describe('version notification preferences', () => {
       version: 0,
     })
     act(() => {
-      localStorage.setItem('system-update-preferences:v1', saved)
+      tenantStorage.setItem('system-update-preferences:v1', saved)
       window.dispatchEvent(
         new StorageEvent('storage', {
-          key: 'system-update-preferences:v1',
+          key: tenantKey('system-update-preferences:v1'),
           newValue: saved,
         })
       )
@@ -554,10 +555,10 @@ describe('version notification preferences', () => {
     expect(first.result.current.shouldNotify).toBe(false)
     expect(second.result.current.shouldNotify).toBe(false)
     act(() => {
-      localStorage.removeItem('system-update-preferences:v1')
+      tenantStorage.removeItem('system-update-preferences:v1')
       window.dispatchEvent(
         new StorageEvent('storage', {
-          key: 'system-update-preferences:v1',
+          key: tenantKey('system-update-preferences:v1'),
           newValue: null,
         })
       )
@@ -585,7 +586,7 @@ describe('version notification preferences', () => {
           throw new Error('storage blocked')
         })
       } else {
-        localStorage.setItem(
+        tenantStorage.setItem(
           'system-update-preferences:v1',
           state === 'corrupt'
             ? '{bad json'
@@ -631,10 +632,10 @@ describe('update cache and scheduling', () => {
     await waitFor(() => expect(first.result.current.hasUpdate).toBe(true))
     first.unmount()
     client.clear()
-    const saved = localStorage.getItem('system-update:v1')
+    const saved = tenantStorage.getItem('system-update:v1')
     expect(saved).not.toBeNull()
     useSystemUpdateStore.setState({ snapshot: null })
-    localStorage.setItem('system-update:v1', String(saved))
+    tenantStorage.setItem('system-update:v1', String(saved))
     await useSystemUpdateStore.persist.rehydrate()
     client = createAppQueryClient()
     client.setQueryData(STATUS_QUERY_KEY, { version: 'v1.0.0-rc.35' })
@@ -647,10 +648,10 @@ describe('update cache and scheduling', () => {
     'keeps checking when persisted storage is %s',
     async (state) => {
       if (state === 'corrupt') {
-        localStorage.setItem('system-update:v1', '{bad json')
+        tenantStorage.setItem('system-update:v1', '{bad json')
         await useSystemUpdateStore.persist.rehydrate()
       } else if (state === 'future') {
-        localStorage.setItem(
+        tenantStorage.setItem(
           'system-update:v1',
           JSON.stringify({
             state: {

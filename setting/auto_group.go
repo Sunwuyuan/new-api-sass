@@ -1,5 +1,7 @@
 package setting
 
+import context "context"
+
 import (
 	"fmt"
 	"slices"
@@ -23,29 +25,33 @@ func init() {
 	maxTokenAutoGroups.Store(DefaultMaxTokenAutoGroups)
 }
 
-func ContainsAutoGroup(group string) bool {
-	return slices.Contains(autoGroups, group)
+func ContainsAutoGroup(tenantCtx context.Context, group string) bool {
+	return slices.Contains(TenantState(tenantCtx).autoGroups, group)
 }
 
-func UpdateAutoGroupsByJsonString(jsonString string) error {
-	autoGroups = make([]string, 0)
-	return common.Unmarshal([]byte(jsonString), &autoGroups)
+func UpdateAutoGroupsByJsonString(tenantCtx context.Context, jsonString string) error {
+	groups := make([]string, 0)
+	if err := common.Unmarshal([]byte(jsonString), &groups); err != nil {
+		return err
+	}
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.autoGroups = groups })
+	return nil
 }
 
-func AutoGroups2JsonString() string {
-	jsonBytes, err := common.Marshal(autoGroups)
+func AutoGroups2JsonString(tenantCtx context.Context) string {
+	jsonBytes, err := common.Marshal(TenantState(tenantCtx).autoGroups)
 	if err != nil {
 		return "[]"
 	}
 	return string(jsonBytes)
 }
 
-func GetAutoGroups() []string {
-	return autoGroups
+func GetAutoGroups(tenantCtx context.Context) []string {
+	return slices.Clone(TenantState(tenantCtx).autoGroups)
 }
 
-func GetMaxTokenAutoGroups() int {
-	return int(maxTokenAutoGroups.Load())
+func GetMaxTokenAutoGroups(tenantCtx context.Context) int {
+	return int(TenantState(tenantCtx).maxTokenAutoGroups.Load())
 }
 
 func ValidateMaxTokenAutoGroups(value string) error {
@@ -56,11 +62,11 @@ func ValidateMaxTokenAutoGroups(value string) error {
 	return nil
 }
 
-func UpdateMaxTokenAutoGroups(value string) error {
+func UpdateMaxTokenAutoGroups(tenantCtx context.Context, value string) error {
 	if err := ValidateMaxTokenAutoGroups(value); err != nil {
 		return err
 	}
 	maxCount, _ := strconv.Atoi(value)
-	maxTokenAutoGroups.Store(int64(maxCount))
+	TenantState(tenantCtx).maxTokenAutoGroups.Store(int64(maxCount))
 	return nil
 }

@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"fmt"
 	"os"
@@ -36,7 +38,7 @@ func FatalLog(v ...any) {
 	os.Exit(1)
 }
 
-func LogStartupSuccess(startTime time.Time, port string) {
+func LogStartupSuccess(tenantCtx context.Context, startTime time.Time, port string) {
 	duration := time.Since(startTime)
 	durationMs := duration.Milliseconds()
 

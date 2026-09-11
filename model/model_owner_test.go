@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,7 +129,7 @@ func TestGetPreferredModelOwnerChannelTypes(t *testing.T) {
 			clearPreferredOwnerTables(t)
 			tt.setup(t)
 
-			owners, err := GetPreferredModelOwnerChannelTypes([]string{modelName}, tt.groups)
+			owners, err := GetPreferredModelOwnerChannelTypes(testtenant.Context(), []string{modelName}, tt.groups)
 			require.NoError(t, err)
 
 			got, ok := owners[modelName]

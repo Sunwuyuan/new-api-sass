@@ -18,6 +18,7 @@ const (
 )
 
 type HybridCacheConfig[V any] struct {
+	Context   context.Context
 	Namespace Namespace
 
 	// Redis is used when RedisEnabled returns true (or RedisEnabled is nil) and Redis is not nil.
@@ -31,7 +32,8 @@ type HybridCacheConfig[V any] struct {
 
 // HybridCache is a small helper that uses Redis when enabled, otherwise falls back to in-memory hot cache.
 type HybridCache[V any] struct {
-	ns Namespace
+	ctx context.Context
+	ns  Namespace
 
 	redis        *redis.Client
 	redisCodec   ValueCodec[V]
@@ -43,7 +45,11 @@ type HybridCache[V any] struct {
 }
 
 func NewHybridCache[V any](cfg HybridCacheConfig[V]) *HybridCache[V] {
+	if cfg.Context == nil {
+		cfg.Context = context.Background()
+	}
 	return &HybridCache[V]{
+		ctx:          context.WithoutCancel(cfg.Context),
 		ns:           cfg.Namespace,
 		redis:        cfg.Redis,
 		redisCodec:   cfg.RedisCodec,
@@ -85,7 +91,7 @@ func (c *HybridCache[V]) Get(key string) (value V, found bool, err error) {
 	}
 
 	if c.redisOn() {
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRedisOpTimeout)
+		ctx, cancel := context.WithTimeout(c.ctx, defaultRedisOpTimeout)
 		defer cancel()
 
 		raw, e := c.redis.Get(ctx, full).Result()
@@ -119,7 +125,7 @@ func (c *HybridCache[V]) SetWithTTL(key string, v V, ttl time.Duration) error {
 		if err != nil {
 			return err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRedisOpTimeout)
+		ctx, cancel := context.WithTimeout(c.ctx, defaultRedisOpTimeout)
 		defer cancel()
 		return c.redis.Set(ctx, full, raw, ttl).Err()
 	}
@@ -137,7 +143,7 @@ func (c *HybridCache[V]) Keys() ([]string, error) {
 }
 
 func (c *HybridCache[V]) scanKeys(match string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRedisScanTimeout)
+	ctx, cancel := context.WithTimeout(c.ctx, defaultRedisScanTimeout)
 	defer cancel()
 
 	var cursor uint64
@@ -247,7 +253,7 @@ func (c *HybridCache[V]) DeleteMany(keys []string) (map[string]bool, error) {
 	}
 
 	if c.redisOn() {
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRedisDelTimeout)
+		ctx, cancel := context.WithTimeout(c.ctx, defaultRedisDelTimeout)
 		defer cancel()
 
 		pipe := c.redis.Pipeline()

@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"sort"
@@ -37,33 +39,33 @@ var alwaysSkipRetryCodes = map[types.ErrorCode]struct{}{
 	types.ErrorCodeBadResponseBody: {},
 }
 
-func AutomaticDisableStatusCodesToString() string {
-	return statusCodeRangesToString(AutomaticDisableStatusCodeRanges)
+func AutomaticDisableStatusCodesToString(tenantCtx context.Context) string {
+	return statusCodeRangesToString(TenantState(tenantCtx).AutomaticDisableStatusCodeRanges)
 }
 
-func AutomaticDisableStatusCodesFromString(s string) error {
+func AutomaticDisableStatusCodesFromString(tenantCtx context.Context, s string) error {
 	ranges, err := ParseHTTPStatusCodeRanges(s)
 	if err != nil {
 		return err
 	}
-	AutomaticDisableStatusCodeRanges = ranges
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.AutomaticDisableStatusCodeRanges = ranges })
 	return nil
 }
 
-func ShouldDisableByStatusCode(code int) bool {
-	return shouldMatchStatusCodeRanges(AutomaticDisableStatusCodeRanges, code)
+func ShouldDisableByStatusCode(tenantCtx context.Context, code int) bool {
+	return shouldMatchStatusCodeRanges(TenantState(tenantCtx).AutomaticDisableStatusCodeRanges, code)
 }
 
-func AutomaticRetryStatusCodesToString() string {
-	return statusCodeRangesToString(AutomaticRetryStatusCodeRanges)
+func AutomaticRetryStatusCodesToString(tenantCtx context.Context) string {
+	return statusCodeRangesToString(TenantState(tenantCtx).AutomaticRetryStatusCodeRanges)
 }
 
-func AutomaticRetryStatusCodesFromString(s string) error {
+func AutomaticRetryStatusCodesFromString(tenantCtx context.Context, s string) error {
 	ranges, err := ParseHTTPStatusCodeRanges(s)
 	if err != nil {
 		return err
 	}
-	AutomaticRetryStatusCodeRanges = ranges
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.AutomaticRetryStatusCodeRanges = ranges })
 	return nil
 }
 
@@ -77,11 +79,11 @@ func IsAlwaysSkipRetryCode(errorCode types.ErrorCode) bool {
 	return exists
 }
 
-func ShouldRetryByStatusCode(code int) bool {
+func ShouldRetryByStatusCode(tenantCtx context.Context, code int) bool {
 	if IsAlwaysSkipRetryStatusCode(code) {
 		return false
 	}
-	return shouldMatchStatusCodeRanges(AutomaticRetryStatusCodeRanges, code)
+	return shouldMatchStatusCodeRanges(TenantState(tenantCtx).AutomaticRetryStatusCodeRanges, code)
 }
 
 func statusCodeRangesToString(ranges []StatusCodeRange) string {

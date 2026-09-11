@@ -1,5 +1,7 @@
 package perf_metrics_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type PerfMetricsSetting struct {
@@ -20,12 +22,12 @@ func init() {
 	config.GlobalConfig.Register("perf_metrics_setting", &perfMetricsSetting)
 }
 
-func GetSetting() PerfMetricsSetting {
-	return perfMetricsSetting
+func GetSetting(tenantCtx context.Context) PerfMetricsSetting {
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("perf_metrics_setting").(*PerfMetricsSetting)))
 }
 
-func GetBucketSeconds() int64 {
-	switch perfMetricsSetting.BucketTime {
+func GetBucketSeconds(tenantCtx context.Context) int64 {
+	switch (*(config.GlobalConfig.ForTenant(tenantCtx).Get("perf_metrics_setting").(*PerfMetricsSetting))).BucketTime {
 	case "minute":
 		return 60
 	case "5min":
@@ -37,9 +39,9 @@ func GetBucketSeconds() int64 {
 	}
 }
 
-func GetFlushIntervalMinutes() int {
-	if perfMetricsSetting.FlushInterval < 1 {
+func GetFlushIntervalMinutes(tenantCtx context.Context) int {
+	if (*(config.GlobalConfig.ForTenant(tenantCtx).Get("perf_metrics_setting").(*PerfMetricsSetting))).FlushInterval < 1 {
 		return 1
 	}
-	return perfMetricsSetting.FlushInterval
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("perf_metrics_setting").(*PerfMetricsSetting))).FlushInterval
 }

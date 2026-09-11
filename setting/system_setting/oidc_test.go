@@ -42,6 +42,7 @@ func TestOIDCSettings_DisplayNamePersistenceRoundTrip(t *testing.T) {
 
 	settings.DisplayName = ""
 	require.NoError(t, manager.LoadFromDB(saved))
+	settings = manager.Get("oidc").(*OIDCSettings)
 	assert.Equal(t, "  Acme SSO  ", settings.DisplayName)
 	assert.Equal(t, "Acme SSO", settings.GetEffectiveDisplayName())
 }

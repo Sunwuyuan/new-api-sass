@@ -34,8 +34,8 @@ type ssrfProtectedRoundTripper struct {
 	transports map[string]*http.Transport
 }
 
-func currentFetchProtection() (*common.SSRFProtection, bool, error) {
-	fetchSetting := system_setting.GetFetchSetting()
+func currentFetchProtection(tenantCtx context.Context) (*common.SSRFProtection, bool, error) {
+	fetchSetting := system_setting.GetFetchSetting(tenantCtx)
 	if !fetchSetting.EnableSSRFProtection {
 		return nil, false, nil
 	}
@@ -55,15 +55,15 @@ func currentFetchProtection() (*common.SSRFProtection, bool, error) {
 	return protection, true, nil
 }
 
-func newProtectedFetchHTTPClient() *http.Client {
-	return newProtectedFetchHTTPClientWithDialer(nil, nil, nil)
+func newProtectedFetchHTTPClient(tenantCtx context.Context) *http.Client {
+	return newProtectedFetchHTTPClientWithDialer(tenantCtx, nil, nil, nil)
 }
 
-func newProtectedFetchHTTPClientWithDialer(resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error)) *http.Client {
-	return newProtectedFetchHTTPClientWithProxy(resolver, dialContext, getProtection, http.ProxyFromEnvironment)
+func newProtectedFetchHTTPClientWithDialer(tenantCtx context.Context, resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error)) *http.Client {
+	return newProtectedFetchHTTPClientWithProxy(tenantCtx, resolver, dialContext, getProtection, http.ProxyFromEnvironment)
 }
 
-func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error), proxy func(*http.Request) (*url.URL, error)) *http.Client {
+func newProtectedFetchHTTPClientWithProxy(tenantCtx context.Context, resolver ssrfResolver, dialContext func(ctx context.Context, network, address string) (net.Conn, error), getProtection func() (*common.SSRFProtection, bool, error), proxy func(*http.Request) (*url.URL, error)) *http.Client {
 	if resolver == nil {
 		resolver = net.DefaultResolver
 	}
@@ -75,7 +75,7 @@ func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext fun
 		dialContext = netDialer.DialContext
 	}
 	if getProtection == nil {
-		getProtection = currentFetchProtection
+		getProtection = func() (*common.SSRFProtection, bool, error) { return currentFetchProtection(tenantCtx) }
 	}
 	if proxy == nil {
 		proxy = http.ProxyFromEnvironment
@@ -89,7 +89,9 @@ func newProtectedFetchHTTPClientWithProxy(resolver ssrfResolver, dialContext fun
 			proxy:         proxy,
 			transports:    make(map[string]*http.Transport),
 		},
-		CheckRedirect: checkProtectedFetchRedirect,
+		CheckRedirect: func(arg0 *http.Request, arg1 []*http.Request) error {
+			return checkProtectedFetchRedirect(tenantCtx, arg0, arg1)
+		},
 	}
 	if common.RelayTimeout != 0 {
 		client.Timeout = time.Duration(common.RelayTimeout) * time.Second
@@ -101,7 +103,7 @@ func (t *ssrfProtectedRoundTripper) RoundTrip(req *http.Request) (*http.Response
 	if req == nil || req.URL == nil {
 		return nil, fmt.Errorf("invalid request")
 	}
-	if err := ValidateSSRFProtectedFetchURL(req.URL.String()); err != nil {
+	if err := ValidateSSRFProtectedFetchURL(req.Context(), req.URL.String()); err != nil {
 		return nil, err
 	}
 

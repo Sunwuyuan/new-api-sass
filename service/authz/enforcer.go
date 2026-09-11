@@ -1,5 +1,7 @@
 package authz
 
+import context "context"
+
 import (
 	"fmt"
 	"sync"
@@ -50,29 +52,29 @@ func Init(db *gorm.DB) error {
 	}
 	e.EnableAutoSave(true)
 
-	enforcerMu.Lock()
-	enforcer = e
-	enforcerMu.Unlock()
+	TenantState(db.Statement.Context).enforcerMu.Lock()
+	TenantState(db.Statement.Context).enforcer = e
+	TenantState(db.Statement.Context).enforcerMu.Unlock()
 
 	if !common.IsMasterNode {
 		return nil
 	}
-	return seedDefaultPolicies()
+	return seedDefaultPolicies(db.Statement.Context)
 }
 
-func currentEnforcer() *casbin.SyncedEnforcer {
-	enforcerMu.RLock()
-	defer enforcerMu.RUnlock()
-	return enforcer
+func currentEnforcer(tenantCtx context.Context) *casbin.SyncedEnforcer {
+	TenantState(tenantCtx).enforcerMu.RLock()
+	defer TenantState(tenantCtx).enforcerMu.RUnlock()
+	return TenantState(tenantCtx).enforcer
 }
 
-func ReloadPolicy() error {
-	enforcerMu.Lock()
-	defer enforcerMu.Unlock()
-	if enforcer == nil {
+func ReloadPolicy(tenantCtx context.Context) error {
+	TenantState(tenantCtx).enforcerMu.Lock()
+	defer TenantState(tenantCtx).enforcerMu.Unlock()
+	if TenantState(tenantCtx).enforcer == nil {
 		return fmt.Errorf("authz enforcer is not initialized")
 	}
-	return enforcer.LoadPolicy()
+	return TenantState(tenantCtx).enforcer.LoadPolicy()
 }
 
 // StartPolicySync periodically reloads the authorization policy from the database.
@@ -81,13 +83,13 @@ func ReloadPolicy() error {
 // snapshot refreshed afterwards. Without this loop other instances in a
 // multi-node deployment would keep serving stale permissions (including not
 // honoring a revoked grant) until restart. Mirrors model.SyncOptions polling.
-func StartPolicySync(frequency int) {
+func StartPolicySync(tenantCtx context.Context, frequency int) {
 	if frequency <= 0 {
 		return
 	}
 	for {
 		time.Sleep(time.Duration(frequency) * time.Second)
-		if err := ReloadPolicy(); err != nil {
+		if err := ReloadPolicy(tenantCtx); err != nil {
 			common.SysError("failed to reload authz policy: " + err.Error())
 		}
 	}

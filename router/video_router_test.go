@@ -7,6 +7,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -93,10 +94,10 @@ func TestGetOpenAIVideoRouteRendersJimengTask(t *testing.T) {
 	})
 	require.NoError(t, database.Create(task).Error)
 
-	engine := gin.New()
+	engine := testtenant.NewRouter()
 	SetVideoRouter(engine)
 	SetTaskPluginProtocolRouter(engine)
-	request := httptest.NewRequest(http.MethodGet, "/v1/videos/task_jimeng_public", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/v1/videos/task_jimeng_public", nil)
 	request.Header.Set("Authorization", "Bearer sk-jimengfetch")
 	recorder := httptest.NewRecorder()
 
@@ -132,7 +133,7 @@ func TestGetOpenAIVideoRouteRendersJimengTask(t *testing.T) {
 		{name: "bearer accepted", authorization: "Bearer sk-jimengfetch", wantStatus: http.StatusOK},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			request := httptest.NewRequest(
+			request := testtenant.NewRequest(
 				http.MethodGet,
 				"/v1/videos/task_jimeng_public/content"+testCase.query,
 				nil,

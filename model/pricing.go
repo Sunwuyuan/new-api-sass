@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"fmt"
 	"strings"
@@ -76,45 +78,45 @@ var (
 	modelSupportEndpointsLock = sync.RWMutex{}
 )
 
-func GetPricing() []Pricing {
-	if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
-		updatePricingLock.Lock()
-		defer updatePricingLock.Unlock()
+func GetPricing(tenantCtx context.Context) []Pricing {
+	if time.Since(TenantState(tenantCtx).lastGetPricingTime) > time.Minute*1 || len(TenantState(tenantCtx).pricingMap) == 0 {
+		TenantState(tenantCtx).updatePricingLock.Lock()
+		defer TenantState(tenantCtx).updatePricingLock.Unlock()
 		// Double check after acquiring the lock
-		if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
-			modelSupportEndpointsLock.Lock()
-			defer modelSupportEndpointsLock.Unlock()
-			updatePricing()
+		if time.Since(TenantState(tenantCtx).lastGetPricingTime) > time.Minute*1 || len(TenantState(tenantCtx).pricingMap) == 0 {
+			TenantState(tenantCtx).modelSupportEndpointsLock.Lock()
+			defer TenantState(tenantCtx).modelSupportEndpointsLock.Unlock()
+			updatePricing(tenantCtx)
 		}
 	}
-	return pricingMap
+	return TenantState(tenantCtx).pricingMap
 }
 
-func InvalidatePricingCache() {
-	updatePricingLock.Lock()
-	defer updatePricingLock.Unlock()
+func InvalidatePricingCache(tenantCtx context.Context) {
+	TenantState(tenantCtx).updatePricingLock.Lock()
+	defer TenantState(tenantCtx).updatePricingLock.Unlock()
 
-	pricingMap = nil
-	vendorsList = nil
-	lastGetPricingTime = time.Time{}
+	TenantState(tenantCtx).pricingMap = nil
+	TenantState(tenantCtx).vendorsList = nil
+	TenantState(tenantCtx).lastGetPricingTime = time.Time{}
 }
 
 // GetVendors 返回当前定价接口使用到的供应商信息
-func GetVendors() []PricingVendor {
-	if time.Since(lastGetPricingTime) > time.Minute*1 || len(pricingMap) == 0 {
+func GetVendors(tenantCtx context.Context) []PricingVendor {
+	if time.Since(TenantState(tenantCtx).lastGetPricingTime) > time.Minute*1 || len(TenantState(tenantCtx).pricingMap) == 0 {
 		// 保证先刷新一次
-		GetPricing()
+		GetPricing(tenantCtx)
 	}
-	return vendorsList
+	return TenantState(tenantCtx).vendorsList
 }
 
-func GetModelSupportEndpointTypes(model string) []constant.EndpointType {
+func GetModelSupportEndpointTypes(tenantCtx context.Context, model string) []constant.EndpointType {
 	if model == "" {
 		return make([]constant.EndpointType, 0)
 	}
-	modelSupportEndpointsLock.RLock()
-	defer modelSupportEndpointsLock.RUnlock()
-	if endpoints, ok := modelSupportEndpointTypes[model]; ok {
+	TenantState(tenantCtx).modelSupportEndpointsLock.RLock()
+	defer TenantState(tenantCtx).modelSupportEndpointsLock.RUnlock()
+	if endpoints, ok := TenantState(tenantCtx).modelSupportEndpointTypes[model]; ok {
 		return endpoints
 	}
 	return make([]constant.EndpointType, 0)
@@ -138,7 +140,7 @@ func getPricingEndpointTypesForAbility(ability AbilityWithChannel, advancedCusto
 // The returned configs are pointers shared with the channel cache; they are
 // replaced wholesale on update and never mutated in place, so reading them after
 // RUnlock is safe.
-func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[int]*dto.AdvancedCustomConfig {
+func loadPricingAdvancedCustomConfigs(tenantCtx context.Context, enableAbilities []AbilityWithChannel) map[int]*dto.AdvancedCustomConfig {
 	channelIDs := make([]int, 0)
 	seen := make(map[int]struct{})
 	for _, ability := range enableAbilities {
@@ -157,10 +159,10 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 
 	configs := make(map[int]*dto.AdvancedCustomConfig, len(channelIDs))
 	if common.MemoryCacheEnabled {
-		channelSyncLock.RLock()
-		defer channelSyncLock.RUnlock()
+		TenantState(tenantCtx).channelSyncLock.RLock()
+		defer TenantState(tenantCtx).channelSyncLock.RUnlock()
 		for _, channelID := range channelIDs {
-			if config := channel2advancedCustomConfig[channelID]; config != nil {
+			if config := TenantState(tenantCtx).channel2advancedCustomConfig[channelID]; config != nil {
 				configs[channelID] = config
 			}
 		}
@@ -168,7 +170,7 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 	}
 
 	for _, channelID := range channelIDs {
-		channel, err := CacheGetChannel(channelID)
+		channel, err := CacheGetChannel(tenantCtx, channelID)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("load advanced custom channel settings error: channel_id=%d, error=%v", channelID, err))
 			continue
@@ -176,7 +178,7 @@ func loadPricingAdvancedCustomConfigs(enableAbilities []AbilityWithChannel) map[
 		if channel.Type != constant.ChannelTypeAdvancedCustom {
 			continue
 		}
-		if config := channel.GetOtherSettings().AdvancedCustom; config != nil {
+		if config := channel.GetOtherSettings(tenantCtx).AdvancedCustom; config != nil {
 			configs[channelID] = config
 		}
 	}
@@ -190,16 +192,16 @@ func appendPricingEndpoint(endpoints []string, endpoint string) []string {
 	return append(endpoints, endpoint)
 }
 
-func updatePricing() {
+func updatePricing(tenantCtx context.Context) {
 	//modelRatios := common.GetModelRatios()
-	enableAbilities, err := GetAllEnableAbilityWithChannels()
+	enableAbilities, err := GetAllEnableAbilityWithChannels(tenantCtx)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("GetAllEnableAbilityWithChannels error: %v", err))
 		return
 	}
 	// 预加载模型元数据与供应商一次，避免循环查询
 	var allMeta []Model
-	_ = DB.Find(&allMeta).Error
+	_ = DB.WithContext(tenantCtx).Find(&allMeta).Error
 	names := make([]string, 0, len(enableAbilities))
 	for _, ability := range enableAbilities {
 		names = append(names, ability.Model)
@@ -208,7 +210,7 @@ func updatePricing() {
 
 	// 预加载供应商
 	var vendors []Vendor
-	_ = DB.Find(&vendors).Error
+	_ = DB.WithContext(tenantCtx).Find(&vendors).Error
 	vendorMap := make(map[int]*Vendor)
 	for i := range vendors {
 		vendorMap[vendors[i].Id] = &vendors[i]
@@ -218,9 +220,9 @@ func updatePricing() {
 	initDefaultVendorMapping(metaMap, vendorMap, enableAbilities)
 
 	// 构建对前端友好的供应商列表
-	vendorsList = make([]PricingVendor, 0, len(vendorMap))
+	TenantState(tenantCtx).vendorsList = make([]PricingVendor, 0, len(vendorMap))
 	for _, v := range vendorMap {
-		vendorsList = append(vendorsList, PricingVendor{
+		TenantState(tenantCtx).vendorsList = append(TenantState(tenantCtx).vendorsList, PricingVendor{
 			ID:          v.Id,
 			Name:        v.Name,
 			Description: v.Description,
@@ -241,7 +243,7 @@ func updatePricing() {
 
 	//这里使用切片而不是Set，因为一个模型可能支持多个端点类型，并且第一个端点是优先使用端点
 	modelSupportEndpointsStr := make(map[string][]string)
-	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(enableAbilities)
+	advancedCustomConfigs := loadPricingAdvancedCustomConfigs(tenantCtx, enableAbilities)
 
 	// 先根据已有能力填充原生端点
 	for _, ability := range enableAbilities {
@@ -275,24 +277,24 @@ func updatePricing() {
 		}
 	}
 
-	modelSupportEndpointTypes = make(map[string][]constant.EndpointType)
+	TenantState(tenantCtx).modelSupportEndpointTypes = make(map[string][]constant.EndpointType)
 	for model, endpoints := range modelSupportEndpointsStr {
 		supportedEndpoints := make([]constant.EndpointType, 0)
 		for _, endpointStr := range endpoints {
 			endpointType := constant.EndpointType(endpointStr)
 			supportedEndpoints = append(supportedEndpoints, endpointType)
 		}
-		modelSupportEndpointTypes[model] = supportedEndpoints
+		TenantState(tenantCtx).modelSupportEndpointTypes[model] = supportedEndpoints
 	}
 
 	// 构建全局 supportedEndpointMap（默认 + 自定义覆盖）
-	supportedEndpointMap = make(map[string]common.EndpointInfo)
+	TenantState(tenantCtx).supportedEndpointMap = make(map[string]common.EndpointInfo)
 	// 1. 默认端点
-	for _, endpoints := range modelSupportEndpointTypes {
+	for _, endpoints := range TenantState(tenantCtx).modelSupportEndpointTypes {
 		for _, et := range endpoints {
 			if info, ok := common.GetDefaultEndpointInfo(et); ok {
-				if _, exists := supportedEndpointMap[string(et)]; !exists {
-					supportedEndpointMap[string(et)] = info
+				if _, exists := TenantState(tenantCtx).supportedEndpointMap[string(et)]; !exists {
+					TenantState(tenantCtx).supportedEndpointMap[string(et)] = info
 				}
 			}
 		}
@@ -307,7 +309,7 @@ func updatePricing() {
 			for k, v := range raw {
 				switch val := v.(type) {
 				case string:
-					supportedEndpointMap[k] = common.EndpointInfo{Path: val, Method: "POST"}
+					TenantState(tenantCtx).supportedEndpointMap[k] = common.EndpointInfo{Path: val, Method: "POST"}
 				case map[string]any:
 					ep := common.EndpointInfo{Method: "POST"}
 					if p, ok := val["path"].(string); ok {
@@ -316,7 +318,7 @@ func updatePricing() {
 					if m, ok := val["method"].(string); ok {
 						ep.Method = strings.ToUpper(m)
 					}
-					supportedEndpointMap[k] = ep
+					TenantState(tenantCtx).supportedEndpointMap[k] = ep
 				default:
 					// ignore unsupported types
 				}
@@ -324,13 +326,13 @@ func updatePricing() {
 		}
 	}
 
-	pricingMap = make([]Pricing, 0)
-	pluginGeneration := jsplugin.DefaultRegistry.Generation()
+	TenantState(tenantCtx).pricingMap = make([]Pricing, 0)
+	pluginGeneration := jsplugin.TenantState(tenantCtx).DefaultRegistry.Generation()
 	for model, groups := range modelGroupsMap {
 		pricing := Pricing{
 			ModelName:              model,
 			EnableGroup:            groups.Items(),
-			SupportedEndpointTypes: modelSupportEndpointTypes[model],
+			SupportedEndpointTypes: TenantState(tenantCtx).modelSupportEndpointTypes[model],
 		}
 
 		// 补充模型元数据（描述、标签、供应商、状态）
@@ -344,41 +346,41 @@ func updatePricing() {
 			pricing.Tags = meta.Tags
 			pricing.VendorID = meta.VendorID
 		}
-		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
+		modelPrice, findPrice := ratio_setting.GetModelPrice(tenantCtx, model, false)
 		if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
 		} else {
-			modelRatio, _, _ := ratio_setting.GetModelRatio(model)
+			modelRatio, _, _ := ratio_setting.GetModelRatio(tenantCtx, model)
 			pricing.ModelRatio = modelRatio
-			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(model)
+			pricing.CompletionRatio = ratio_setting.GetCompletionRatio(tenantCtx, model)
 			pricing.QuotaType = 0
 		}
-		if cacheRatio, ok := ratio_setting.GetCacheRatio(model); ok {
+		if cacheRatio, ok := ratio_setting.GetCacheRatio(tenantCtx, model); ok {
 			pricing.CacheRatio = &cacheRatio
 		}
-		if createCacheRatio, ok := ratio_setting.GetCreateCacheRatio(model); ok {
+		if createCacheRatio, ok := ratio_setting.GetCreateCacheRatio(tenantCtx, model); ok {
 			pricing.CreateCacheRatio = &createCacheRatio
 		}
-		if imageRatio, ok := ratio_setting.GetImageRatio(model); ok {
+		if imageRatio, ok := ratio_setting.GetImageRatio(tenantCtx, model); ok {
 			pricing.ImageRatio = &imageRatio
 		}
-		if ratio_setting.ContainsAudioRatio(model) {
-			audioRatio := ratio_setting.GetAudioRatio(model)
+		if ratio_setting.ContainsAudioRatio(tenantCtx, model) {
+			audioRatio := ratio_setting.GetAudioRatio(tenantCtx, model)
 			pricing.AudioRatio = &audioRatio
 		}
-		if ratio_setting.ContainsAudioCompletionRatio(model) {
-			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
+		if ratio_setting.ContainsAudioCompletionRatio(tenantCtx, model) {
+			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(tenantCtx, model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+		if billingMode := billing_setting.GetBillingMode(tenantCtx, model); billingMode == "tiered_expr" {
+			if expr, ok := billing_setting.GetBillingExpr(tenantCtx, model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
 			}
-		} else if target, resolved := ResolveTaskModelAlias(pluginGeneration, model); resolved && target.Declared != "" {
-			if tailMode := billing_setting.GetBillingMode(target.Declared); tailMode == "tiered_expr" {
-				if expr, ok := billing_setting.GetBillingExpr(target.Declared); ok && strings.TrimSpace(expr) != "" {
+		} else if target, resolved := ResolveTaskModelAlias(tenantCtx, pluginGeneration, model); resolved && target.Declared != "" {
+			if tailMode := billing_setting.GetBillingMode(tenantCtx, target.Declared); tailMode == "tiered_expr" {
+				if expr, ok := billing_setting.GetBillingExpr(tenantCtx, target.Declared); ok && strings.TrimSpace(expr) != "" {
 					pricing.BillingMode = tailMode
 					pricing.BillingExpr = expr
 				}
@@ -387,7 +389,7 @@ func updatePricing() {
 		usageModel := model
 		plugin, ok := pluginGeneration.GetByModel(model)
 		if !ok {
-			if target, resolved := ResolveTaskModelAlias(pluginGeneration, model); resolved {
+			if target, resolved := ResolveTaskModelAlias(tenantCtx, pluginGeneration, model); resolved {
 				plugin, ok = pluginGeneration.Get(target.PluginKey)
 				usageModel = target.Declared
 			}
@@ -400,7 +402,7 @@ func updatePricing() {
 		providers := pluginGeneration.PluginsByModel(model)
 		hasProviderOverride := false
 		for _, provider := range providers {
-			if _, configured := billing_setting.GetPluginBillingExpr(provider.Meta.Key, model); configured {
+			if _, configured := billing_setting.GetPluginBillingExpr(tenantCtx, provider.Meta.Key, model); configured {
 				hasProviderOverride = true
 				break
 			}
@@ -411,9 +413,9 @@ func updatePricing() {
 				if schema == nil {
 					schema = map[string]jsplugin.UsageFieldSchema{}
 				}
-				expression, hasExpression := billing_setting.ResolveTaskBillingExpr(provider.Meta.Key, model, "")
+				expression, hasExpression := billing_setting.ResolveTaskBillingExpr(tenantCtx, provider.Meta.Key, model, "")
 				mode := billing_setting.BillingModeRatio
-				if hasExpression || billing_setting.GetBillingMode(model) == billing_setting.BillingModeTieredExpr {
+				if hasExpression || billing_setting.GetBillingMode(tenantCtx, model) == billing_setting.BillingModeTieredExpr {
 					mode = billing_setting.BillingModeTieredExpr
 				}
 				if mode == billing_setting.BillingModeTieredExpr && !billing_setting.TaskExprCompatible(expression, schema) {
@@ -426,28 +428,28 @@ func updatePricing() {
 				})
 			}
 		}
-		pricingMap = append(pricingMap, pricing)
+		TenantState(tenantCtx).pricingMap = append(TenantState(tenantCtx).pricingMap, pricing)
 	}
 
 	// 防止大更新后数据不通用
-	if len(pricingMap) > 0 {
-		pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
+	if len(TenantState(tenantCtx).pricingMap) > 0 {
+		TenantState(tenantCtx).pricingMap[0].PricingVersion = "5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"
 	}
 
 	// 刷新缓存映射，供高并发快速查询
-	modelEnableGroupsLock.Lock()
-	modelEnableGroups = make(map[string][]string)
-	modelQuotaTypeMap = make(map[string]int)
-	for _, p := range pricingMap {
-		modelEnableGroups[p.ModelName] = p.EnableGroup
-		modelQuotaTypeMap[p.ModelName] = p.QuotaType
+	TenantState(tenantCtx).modelEnableGroupsLock.Lock()
+	TenantState(tenantCtx).modelEnableGroups = make(map[string][]string)
+	TenantState(tenantCtx).modelQuotaTypeMap = make(map[string]int)
+	for _, p := range TenantState(tenantCtx).pricingMap {
+		TenantState(tenantCtx).modelEnableGroups[p.ModelName] = p.EnableGroup
+		TenantState(tenantCtx).modelQuotaTypeMap[p.ModelName] = p.QuotaType
 	}
-	modelEnableGroupsLock.Unlock()
+	TenantState(tenantCtx).modelEnableGroupsLock.Unlock()
 
-	lastGetPricingTime = time.Now()
+	TenantState(tenantCtx).lastGetPricingTime = time.Now()
 }
 
 // GetSupportedEndpointMap 返回全局端点到路径的映射
-func GetSupportedEndpointMap() map[string]common.EndpointInfo {
-	return supportedEndpointMap
+func GetSupportedEndpointMap(tenantCtx context.Context) map[string]common.EndpointInfo {
+	return TenantState(tenantCtx).supportedEndpointMap
 }

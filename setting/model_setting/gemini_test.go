@@ -1,16 +1,19 @@
 package model_setting
 
 import (
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	"testing"
 
+	config "github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGeminiSafetySettingsReadNormalization(t *testing.T) {
-	original := geminiSettings.SafetySettings
+	original := (config.GlobalConfig.ForTenant(testtenant.Context()).Get("gemini").(*GeminiSettings)).SafetySettings
 	t.Cleanup(func() {
-		geminiSettings.SafetySettings = original
+		(config.GlobalConfig.ForTenant(testtenant.Context()).Get("gemini").(*GeminiSettings)).SafetySettings = original
 	})
 
 	tests := []struct {
@@ -62,9 +65,9 @@ func TestGeminiSafetySettingsReadNormalization(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			geminiSettings.SafetySettings = test.settings
+			(config.GlobalConfig.ForTenant(testtenant.Context()).Get("gemini").(*GeminiSettings)).SafetySettings = test.settings
 
-			assert.Equal(t, test.want, GetGeminiSafetySetting(test.key))
+			assert.Equal(t, test.want, GetGeminiSafetySetting(testtenant.Context(), test.key))
 		})
 	}
 }

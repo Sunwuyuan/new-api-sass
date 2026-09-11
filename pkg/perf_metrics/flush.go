@@ -1,5 +1,7 @@
 package perfmetrics
 
+import context "context"
+
 import (
 	"fmt"
 	"strconv"
@@ -10,22 +12,22 @@ import (
 	"github.com/QuantumNous/new-api/setting/perf_metrics_setting"
 )
 
-func flushLoop() {
+func flushLoop(tenantCtx context.Context) {
 	for {
-		interval := perf_metrics_setting.GetFlushIntervalMinutes()
+		interval := perf_metrics_setting.GetFlushIntervalMinutes(tenantCtx)
 		time.Sleep(time.Duration(interval) * time.Minute)
-		setting := perf_metrics_setting.GetSetting()
+		setting := perf_metrics_setting.GetSetting(tenantCtx)
 		if !setting.Enabled {
 			continue
 		}
-		flushCompletedBuckets()
-		cleanupExpiredMetrics(setting.RetentionDays)
+		flushCompletedBuckets(tenantCtx)
+		cleanupExpiredMetrics(tenantCtx, setting.RetentionDays)
 	}
 }
 
-func flushCompletedBuckets() {
-	currentBucket := bucketStart(time.Now().Unix())
-	hotBuckets.Range(func(key, value any) bool {
+func flushCompletedBuckets(tenantCtx context.Context) {
+	currentBucket := bucketStart(tenantCtx, time.Now().Unix())
+	TenantRuntime(tenantCtx).hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
 		if k.bucketTs >= currentBucket {
 			return true
@@ -34,11 +36,11 @@ func flushCompletedBuckets() {
 		bucket := value.(*atomicBucket)
 		drained := bucket.drain()
 		if drained.requestCount == 0 {
-			deleteOldEmptyBucket(k, key)
+			deleteOldEmptyBucket(tenantCtx, k, key)
 			return true
 		}
 
-		err := model.UpsertPerfMetric(&model.PerfMetric{
+		err := model.UpsertPerfMetric(tenantCtx, &model.PerfMetric{
 			ModelName:      k.model,
 			Group:          k.group,
 			BucketTs:       k.bucketTs,
@@ -56,23 +58,23 @@ func flushCompletedBuckets() {
 			return true
 		}
 
-		deleteOldEmptyBucket(k, key)
+		deleteOldEmptyBucket(tenantCtx, k, key)
 		return true
 	})
 }
 
-func deleteOldEmptyBucket(k bucketKey, rawKey any) {
-	if k.bucketTs < bucketStart(time.Now().Add(-24*time.Hour).Unix()) {
-		hotBuckets.Delete(rawKey)
+func deleteOldEmptyBucket(tenantCtx context.Context, k bucketKey, rawKey any) {
+	if k.bucketTs < bucketStart(tenantCtx, time.Now().Add(-24*time.Hour).Unix()) {
+		TenantRuntime(tenantCtx).hotBuckets.Delete(rawKey)
 	}
 }
 
-func cleanupExpiredMetrics(retentionDays int) {
+func cleanupExpiredMetrics(tenantCtx context.Context, retentionDays int) {
 	if retentionDays <= 0 {
 		return
 	}
 	cutoff := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour).Unix()
-	if err := model.DeletePerfMetricsBefore(cutoff); err != nil {
+	if err := model.DeletePerfMetricsBefore(tenantCtx, cutoff); err != nil {
 		common.SysError("failed to cleanup expired perf metrics: " + err.Error())
 	}
 }
@@ -96,3 +98,5 @@ func parseRedisInt(value string) int64 {
 	parsed, _ := strconv.ParseInt(value, 10, 64)
 	return parsed
 }
+
+func FlushTenant(ctx context.Context) { flushCompletedBuckets(ctx) }

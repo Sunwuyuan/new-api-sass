@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -37,15 +38,15 @@ func TestPricingCarriesTaskUsageSchemaAndRefreshesWithPluginGeneration(t *testin
   seconds: {type: "number", unit: "second", description: "Estimated duration."},
   action: {enum:["video"],enumLabels:{video:{en:"Generate video",zh:"生成视频"}}}
 }`)
-	_, err := jsplugin.DefaultRegistry.Register(initialSource, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(initialSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(pluginKey) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(pluginKey) })
 
 	insertPricingEndpointChannel(t, 901, constant.ChannelTypeTaskPlugin, dto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 901, "pricing-usage-model")
 	insertPricingEndpointAbility(t, 901, "ordinary-model")
 
-	initialPricing := pricingByModel(GetPricing())
+	initialPricing := pricingByModel(GetPricing(testtenant.Context()))
 	require.Contains(t, initialPricing, "pricing-usage-model")
 	require.Contains(t, initialPricing, "ordinary-model")
 	assert.Equal(t, "second", initialPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Unit)
@@ -57,11 +58,11 @@ func TestPricingCarriesTaskUsageSchemaAndRefreshesWithPluginGeneration(t *testin
   seconds: {type: "number", unit: "second", description: "Measured duration."},
   clips: {type: "number", unit: "count", description: "Generated clip count."}
 }`)
-	_, err = jsplugin.DefaultRegistry.Register(updatedSource, jsplugin.Options{})
+	_, err = jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(updatedSource, jsplugin.Options{})
 	require.NoError(t, err)
-	lastGetPricingTime = time.Now().Add(-2 * time.Minute)
+	TenantState(testtenant.Context()).lastGetPricingTime = time.Now().Add(-2 * time.Minute)
 
-	refreshedPricing := pricingByModel(GetPricing())
+	refreshedPricing := pricingByModel(GetPricing(testtenant.Context()))
 	require.Len(t, refreshedPricing["pricing-usage-model"].BillingUsageSchema, 2)
 	assert.Equal(t, "Measured duration.", refreshedPricing["pricing-usage-model"].BillingUsageSchema["seconds"].Description["en"])
 	assert.Equal(t, "count", refreshedPricing["pricing-usage-model"].BillingUsageSchema["clips"].Unit)
@@ -73,9 +74,9 @@ func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
 	source := pricingUsagePluginSource("1.0.0", `{
   seconds: {type: "number", unit: "second", description: "Estimated duration."}
 }`)
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(pluginKey) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(pluginKey) })
 
 	mapping := `{"alias-model":"pricing-usage-model"}`
 	channel := &Channel{
@@ -90,23 +91,23 @@ func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
 	require.NoError(t, DB.Create(channel).Error)
 	insertPricingEndpointAbility(t, 910, "alias-model")
 	insertPricingEndpointAbility(t, 910, "pricing-usage-model")
-	InitChannelCache()
+	InitChannelCache(testtenant.Context())
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode": `{"pricing-usage-model":"tiered_expr","alias-own-expr":"tiered_expr"}`,
 		"billing_setting.billing_expr": `{"pricing-usage-model":"u(\"seconds\")","alias-own-expr":"u(\"seconds\") * 2"}`,
 	}))
-	InvalidatePricingCache()
+	InvalidatePricingCache(testtenant.Context())
 
-	pricing := pricingByModel(GetPricing())
+	pricing := pricingByModel(GetPricing(testtenant.Context()))
 	require.Contains(t, pricing, "alias-model")
 	require.Contains(t, pricing, "pricing-usage-model")
 	assert.Equal(t, "second", pricing["alias-model"].BillingUsageSchema["seconds"].Unit)
@@ -128,10 +129,10 @@ func TestPricingAliasCarriesPluginUsageSchemaAndTailExpr(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(own).Error)
 	insertPricingEndpointAbility(t, 911, "alias-own-expr")
-	InitChannelCache()
-	InvalidatePricingCache()
+	InitChannelCache(testtenant.Context())
+	InvalidatePricingCache(testtenant.Context())
 
-	refreshed := pricingByModel(GetPricing())
+	refreshed := pricingByModel(GetPricing(testtenant.Context()))
 	assert.Equal(t, `u("seconds") * 2`, refreshed["alias-own-expr"].BillingExpr)
 	assert.Equal(t, "second", refreshed["alias-own-expr"].BillingUsageSchema["seconds"].Unit)
 }
@@ -164,9 +165,9 @@ export function parseSubmitResponse(){return {};}
 export function buildQueryRequest(){return {};}
 export function parseTaskResult(){return {};}
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 	for index, mapping := range []string{
 		`{"image-alias":"profile-image","video-alias":"profile-video","ambiguous-alias":"profile-image"}`,
 		`{"ambiguous-alias":"profile-video"}`,
@@ -180,10 +181,10 @@ export function parseTaskResult(){return {};}
 			insertPricingEndpointAbility(t, id, name)
 		}
 	}
-	InitChannelCache()
-	pricing := pricingByModel(GetPricing())
+	InitChannelCache(testtenant.Context())
+	pricing := pricingByModel(GetPricing(testtenant.Context()))
 	names := []string{"profile-image", "profile-video", "image-alias", "video-alias", "ambiguous-alias"}
-	snapshot, err := GetModelPricingSnapshot(names)
+	snapshot, err := GetModelPricingSnapshot(testtenant.Context(), names)
 	require.NoError(t, err)
 	entries := make(map[string]ModelPricingEntry, len(snapshot.Entries))
 	for _, entry := range snapshot.Entries {
@@ -204,42 +205,42 @@ export function parseTaskResult(){return {};}
 			assert.Equal(t, expected, pricing[tc.name].BillingUsageSchema)
 			assert.Equal(t, expected, entries[tc.name].UsageSchema)
 			assert.Len(t, pricing[tc.name].BillingUsageExamples, tc.wantExamples)
-			require.NoError(t, ValidateModelPricing(tc.name, PricingValues{"billing_setting.billing_expr": `u("` + tc.field + `")`}))
-			require.ErrorContains(t, ValidateModelPricing(tc.name, PricingValues{"billing_setting.billing_expr": `u("missing")`}), "not declared")
+			require.NoError(t, ValidateModelPricing(testtenant.Context(), tc.name, PricingValues{"billing_setting.billing_expr": `u("` + tc.field + `")`}))
+			require.ErrorContains(t, ValidateModelPricing(testtenant.Context(), tc.name, PricingValues{"billing_setting.billing_expr": `u("missing")`}), "not declared")
 		})
 	}
-	require.ErrorContains(t, ValidateModelPricing("profile-image", PricingValues{"billing_setting.billing_expr": `u("seconds")`}), "not declared")
-	require.ErrorContains(t, ValidateModelPricing("video-alias", PricingValues{"billing_setting.billing_expr": `u("image_count")`}), "not declared")
+	require.ErrorContains(t, ValidateModelPricing(testtenant.Context(), "profile-image", PricingValues{"billing_setting.billing_expr": `u("seconds")`}), "not declared")
+	require.ErrorContains(t, ValidateModelPricing(testtenant.Context(), "video-alias", PricingValues{"billing_setting.billing_expr": `u("image_count")`}), "not declared")
 
 	updated := strings.Replace(source, `version:"1.0.0"`, `version:"1.1.0"`, 1)
 	updated = strings.Replace(updated, `image_count:{type:"number",unit:"count"}`, `images:{type:"number",unit:"count"}`, 1)
-	_, err = jsplugin.DefaultRegistry.Register(updated, jsplugin.Options{})
+	_, err = jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(updated, jsplugin.Options{})
 	require.NoError(t, err)
-	InvalidatePricingCache()
-	refreshed := pricingByModel(GetPricing())
+	InvalidatePricingCache(testtenant.Context())
+	refreshed := pricingByModel(GetPricing(testtenant.Context()))
 	assert.Equal(t, map[string]jsplugin.UsageFieldSchema{"images": {Type: "number", Unit: "count"}}, refreshed["image-alias"].BillingUsageSchema)
 	assert.Equal(t, "second", refreshed["profile-video"].BillingUsageSchema["seconds"].Unit)
 }
 
 func TestPricingSharedPluginVariantsUseEachSchemaAndExpression(t *testing.T) {
 	resetPricingEndpointTestTables(t)
-	saved := config.GlobalConfig.ExportAllConfigs()
-	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
+	saved := config.GlobalConfig.ForTenant(testtenant.Context()).ExportAllConfigs()
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved)) })
 	for _, spec := range []struct{ key, field, unit string }{{"pricing-alpha", "seconds", "second"}, {"pricing-beta", "credits", "credit"}} {
 		source := strings.ReplaceAll(pricingUsagePluginSource("1.0.0", `{`+spec.field+`:{type:"number",unit:"`+spec.unit+`"}}`), "pricing-usage-probe", spec.key)
-		_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+		_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 		require.NoError(t, err)
-		t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(spec.key) })
+		t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(spec.key) })
 	}
 	insertPricingEndpointChannel(t, 930, constant.ChannelTypeTaskPlugin, dto.ChannelOtherSettings{})
 	insertPricingEndpointAbility(t, 930, "pricing-usage-model")
 	const expression = `tier("base", u("seconds") * 0.4)`
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode":          `{"pricing-usage-model":"tiered_expr"}`,
 		"billing_setting.billing_expr":          `{"pricing-usage-model":"tier(\"base\", u(\"seconds\") * 0.4)"}`,
 		billing_setting.PluginBillingExprOption: `{}`,
 	}))
-	prices := pricingByModel(GetPricing())
+	prices := pricingByModel(GetPricing(testtenant.Context()))
 	variants := prices["pricing-usage-model"].BillingPluginVariants
 	require.Len(t, variants, 2)
 	assert.Equal(t, "pricing-alpha", variants[0].PluginKey)
@@ -250,46 +251,48 @@ func TestPricingSharedPluginVariantsUseEachSchemaAndExpression(t *testing.T) {
 	assert.Equal(t, expression, prices["pricing-usage-model"].BillingExpr)
 	assert.Contains(t, prices["pricing-usage-model"].BillingUsageSchema, "seconds")
 	draft := PricingValues{"billing_setting.billing_expr": expression}
-	require.ErrorContains(t, ValidateModelPricing("pricing-usage-model", draft), "plugin pricing-beta")
+	require.ErrorContains(t, ValidateModelPricing(testtenant.Context(), "pricing-usage-model", draft), "plugin pricing-beta")
 	draft[billing_setting.PluginBillingExprOption] = map[string]any{"pricing-beta": `tier("beta", u("credits") * 2)`}
-	require.NoError(t, ValidateModelPricing("pricing-usage-model", draft))
+	require.NoError(t, ValidateModelPricing(testtenant.Context(), "pricing-usage-model", draft))
 	for _, invalid := range []any{map[string]any{"missing": "1"}, map[string]any{"pricing-beta": float64(1)}, map[string]any{"pricing-beta": `u("seconds")`}, map[string]any(nil), []any{}, "invalid"} {
 		draft[billing_setting.PluginBillingExprOption] = invalid
-		assert.Error(t, ValidateModelPricing("pricing-usage-model", draft))
+		assert.Error(t, ValidateModelPricing(testtenant.Context(), "pricing-usage-model", draft))
 	}
 	draft = PricingValues{
 		"billing_setting.billing_expr":          "invalid expression(",
 		billing_setting.PluginBillingExprOption: map[string]any{"pricing-alpha": expression, "pricing-beta": `u("credits")`},
 	}
-	require.ErrorContains(t, ValidateModelPricing("pricing-usage-model", draft), "compile")
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.ErrorContains(t, ValidateModelPricing(testtenant.Context(), "pricing-usage-model", draft), "compile")
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		billing_setting.PluginBillingExprOption: `{"pricing-beta::pricing-usage-model":"tier(\"beta\", u(\"credits\") * 2)"}`,
 	}))
-	InvalidatePricingCache()
-	priced := pricingByModel(GetPricing())["pricing-usage-model"].BillingPluginVariants
+	InvalidatePricingCache(testtenant.Context())
+	priced := pricingByModel(GetPricing(testtenant.Context()))["pricing-usage-model"].BillingPluginVariants
 	require.Len(t, priced, 2)
 	assert.Equal(t, `tier("beta", u("credits") * 2)`, priced[1].BillingExpr)
-	previousPrice := ratio_setting.ModelPrice2JSONString()
-	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(previousPrice)) })
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"pricing-usage-model":0.25}`))
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{"billing_setting.billing_mode": `{"pricing-usage-model":"ratio"}`}))
-	InvalidatePricingCache()
-	mixed := pricingByModel(GetPricing())["pricing-usage-model"].BillingPluginVariants
+	previousPrice := ratio_setting.ModelPrice2JSONString(testtenant.Context())
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), previousPrice))
+	})
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), `{"pricing-usage-model":0.25}`))
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{"billing_setting.billing_mode": `{"pricing-usage-model":"ratio"}`}))
+	InvalidatePricingCache(testtenant.Context())
+	mixed := pricingByModel(GetPricing(testtenant.Context()))["pricing-usage-model"].BillingPluginVariants
 	require.Len(t, mixed, 2)
 	assert.Equal(t, billing_setting.BillingModeRatio, mixed[0].BillingMode)
 	assert.Equal(t, billing_setting.BillingModeTieredExpr, mixed[1].BillingMode)
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: `{}`}))
-	InvalidatePricingCache()
-	perCall := pricingByModel(GetPricing())["pricing-usage-model"]
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: `{}`}))
+	InvalidatePricingCache(testtenant.Context())
+	perCall := pricingByModel(GetPricing(testtenant.Context()))["pricing-usage-model"]
 	assert.Empty(t, perCall.BillingPluginVariants)
 	assert.Equal(t, 1, perCall.QuotaType)
 	assert.Equal(t, 0.25, perCall.ModelPrice)
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		billing_setting.PluginBillingExprOption: `{"pricing-beta::pricing-usage-model":"tier(\"beta\", u(\"credits\") * 2)"}`,
 	}))
-	require.NoError(t, jsplugin.DefaultRegistry.Unregister("pricing-alpha"))
-	InvalidatePricingCache()
-	single := pricingByModel(GetPricing())["pricing-usage-model"]
+	require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("pricing-alpha"))
+	InvalidatePricingCache(testtenant.Context())
+	single := pricingByModel(GetPricing(testtenant.Context()))["pricing-usage-model"]
 	require.Len(t, single.BillingPluginVariants, 1)
 	assert.Equal(t, "pricing-beta", single.BillingPluginVariants[0].PluginKey)
 	assert.Equal(t, `tier("beta", u("credits") * 2)`, single.BillingPluginVariants[0].BillingExpr)

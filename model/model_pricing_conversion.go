@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"maps"
@@ -33,14 +35,14 @@ type ModelPricingDescription struct {
 	BillingDetails LegacyBillingDetails `json:"billing_details"`
 }
 
-func legacyInputPricePerMillion(ratio float64) (decimal.Decimal, error) {
-	if common.QuotaPerUnit <= 0 || math.IsInf(common.QuotaPerUnit, 0) || math.IsNaN(common.QuotaPerUnit) {
+func legacyInputPricePerMillion(tenantCtx context.Context, ratio float64) (decimal.Decimal, error) {
+	if common.TenantState(tenantCtx).QuotaPerUnit <= 0 || math.IsInf(common.TenantState(tenantCtx).QuotaPerUnit, 0) || math.IsNaN(common.TenantState(tenantCtx).QuotaPerUnit) {
 		return decimal.Zero, errors.New("invalid quota unit")
 	}
 	if ratio < 0 || math.IsInf(ratio, 0) || math.IsNaN(ratio) {
 		return decimal.Zero, errors.New("input ratio must be finite and non-negative")
 	}
-	return decimal.NewFromFloat(ratio).Mul(decimal.NewFromInt(1_000_000)).Div(decimal.NewFromFloat(common.QuotaPerUnit)), nil
+	return decimal.NewFromFloat(ratio).Mul(decimal.NewFromInt(1_000_000)).Div(decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)), nil
 }
 
 type LegacyPricingRule struct {
@@ -60,7 +62,7 @@ type LegacyBillingDetails struct {
 	ConflictingAudioPrices bool                `json:"-"`
 }
 
-func ResolveLegacyBillingDetails(name string, effective, configured PricingValues) LegacyBillingDetails {
+func ResolveLegacyBillingDetails(tenantCtx context.Context, name string, effective, configured PricingValues) LegacyBillingDetails {
 	details := LegacyBillingDetails{}
 	if effective["billing_setting.billing_mode"] == billing_setting.BillingModeTieredExpr {
 		return details
@@ -74,7 +76,7 @@ func ResolveLegacyBillingDetails(name string, effective, configured PricingValue
 	if !priced {
 		return details
 	}
-	base, err := legacyInputPricePerMillion(ratio)
+	base, err := legacyInputPricePerMillion(tenantCtx, ratio)
 	if err != nil {
 		return details
 	}
@@ -141,11 +143,11 @@ func ResolveCacheWriteMode(name string, configured PricingValues) CacheWriteMode
 	return CacheWriteNone
 }
 
-func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPricingConversion, error) {
+func PreviewModelPricingConversion(tenantCtx context.Context, name string, draft PricingValues) (*ModelPricingConversion, error) {
 	if draft == nil {
 		return nil, errors.New("pricing draft is required")
 	}
-	if err := ValidateModelPricing(name, draft); err != nil {
+	if err := ValidateModelPricing(tenantCtx, name, draft); err != nil {
 		return nil, err
 	}
 	if draft["billing_setting.billing_mode"] == billing_setting.BillingModeTieredExpr {
@@ -156,15 +158,15 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 	legacyDraft := make(PricingValues, len(draft)+1)
 	maps.Copy(legacyDraft, draft)
 	legacyDraft["billing_setting.billing_mode"] = billing_setting.BillingModeRatio
-	effective, err := PreviewModelPricing(name, legacyDraft)
+	effective, err := PreviewModelPricing(tenantCtx, name, legacyDraft)
 	if err != nil {
 		return nil, err
 	}
-	if err := ValidateModelPricing(name, effective); err != nil {
+	if err := ValidateModelPricing(tenantCtx, name, effective); err != nil {
 		return nil, err
 	}
 	_, fixedPrice := effective["ModelPrice"]
-	preview := &ModelPricingConversion{ModelPricingDescription: ModelPricingDescription{Effective: effective, BillingDetails: ResolveLegacyBillingDetails(name, effective, draft)}}
+	preview := &ModelPricingConversion{ModelPricingDescription: ModelPricingDescription{Effective: effective, BillingDetails: ResolveLegacyBillingDetails(tenantCtx, name, effective, draft)}}
 	if preview.BillingDetails.InvalidAudioPrice {
 		return nil, errors.New("audio prices must be finite")
 	}
@@ -172,19 +174,19 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 		return &ModelPricingConversion{UnsupportedReason: "Gemini and OpenAI audio prices differ for this model. Use separate billing model names to convert them."}, nil
 	}
 
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(tenantCtx).DefaultRegistry.Generation()
 	if _, task := generation.GetByModel(name); task {
 		return &ModelPricingConversion{UnsupportedReason: "Task pricing must be converted manually using the task usage schema."}, nil
 	}
-	if _, task := ResolveTaskModelAlias(generation, name); task {
+	if _, task := ResolveTaskModelAlias(tenantCtx, generation, name); task {
 		return &ModelPricingConversion{UnsupportedReason: "Task pricing must be converted manually using the task usage schema."}, nil
 	}
 
 	// Inspect non-secret routing metadata so aliases cannot disguise a special
 	// settlement path as an ordinary text model.
 	var channels []Channel
-	candidates := DB.Model(&Ability{}).Select("channel_id").Where("model = ?", name)
-	if err := DB.Select("type", "status", "models", "model_mapping").Where("id IN (?)", candidates).Find(&channels).Error; err != nil {
+	candidates := DB.WithContext(tenantCtx).Model(&Ability{}).Select("channel_id").Where("model = ?", name)
+	if err := DB.WithContext(tenantCtx).Select("type", "status", "models", "model_mapping").Where("id IN (?)", candidates).Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	names := []string{name}
@@ -218,7 +220,7 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 			}
 			for _, candidate := range candidates {
 				if mapping[candidate] == "" {
-					mapping[candidate] = mapping[hostreasoning.BaseModelName(candidate)]
+					mapping[candidate] = mapping[hostreasoning.BaseModelName(tenantCtx, candidate)]
 				}
 			}
 			var cycle bool
@@ -243,12 +245,12 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 		if strings.Contains(lower, "realtime") {
 			return &ModelPricingConversion{UnsupportedReason: "Realtime pricing must be converted manually."}, nil
 		}
-		if fixedPrice && ResolveLegacyBillingDetails(modelName, effective, draft).ImageCount {
+		if fixedPrice && ResolveLegacyBillingDetails(tenantCtx, modelName, effective, draft).ImageCount {
 			preview.BillingDetails.ImageCount = true
 		}
 	}
 	var metadata []Model
-	if err := DB.Select("model_name", "name_rule", "endpoints").
+	if err := DB.WithContext(tenantCtx).Select("model_name", "name_rule", "endpoints").
 		Where("model_name IN ? OR name_rule <> ?", names, NameRuleExact).
 		Where("endpoints <> ?", "").Find(&metadata).Error; err != nil {
 		return nil, err
@@ -296,7 +298,7 @@ func PreviewModelPricingConversion(name string, draft PricingValues) (*ModelPric
 			return &ModelPricingConversion{UnsupportedReason: "Configure an input price before converting this model."}, nil
 		}
 		preview.CacheWriteMode = ResolveCacheWriteMode(name, draft)
-		base, err := legacyInputPricePerMillion(ratio)
+		base, err := legacyInputPricePerMillion(tenantCtx, ratio)
 		if err != nil {
 			return nil, err
 		}

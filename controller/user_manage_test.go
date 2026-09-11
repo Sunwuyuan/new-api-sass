@@ -15,13 +15,13 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/i18n"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/alicebob/miniredis/v2"
-	"github.com/go-redis/redis/v8"
-
 	"github.com/gin-gonic/gin"
+	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -82,8 +82,8 @@ func performManageUserRequest(t *testing.T, body string) *httptest.ResponseRecor
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(body))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Set("id", 9999)
 	c.Set("role", common.RoleRootUser)
@@ -125,7 +125,7 @@ func TestManageUserDemoteAdvancesAuthVersionAndRevokesSessionsOnce(t *testing.T)
 	previousMaster := common.IsMasterNode
 	common.IsMasterNode = false
 	t.Cleanup(func() { common.IsMasterNode = previousMaster })
-	require.NoError(t, authz.Init(db))
+	require.NoError(t, authz.Init(db.WithContext(testtenant.Context())))
 
 	now := time.Now().Unix()
 	user := model.User{
@@ -227,7 +227,7 @@ func TestManageUserQuotaRecordsTopupAndAudit(t *testing.T) {
 			require.NoError(t, db.First(&user, user.Id).Error)
 			assert.Equal(t, tc.wantQuota, user.Quota)
 
-			logs, total, err := model.GetAllLogs(model.LogTypeTopup, 0, 0, "", "", "", 0, 20, 0, "", "", "")
+			logs, total, err := model.GetAllLogs(testtenant.Context(), model.LogTypeTopup, 0, 0, "", "", "", 0, 20, 0, "", "", "")
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, total)
 			require.Len(t, logs, 1)
@@ -239,7 +239,7 @@ func TestManageUserQuotaRecordsTopupAndAudit(t *testing.T) {
 			require.NoError(t, common.UnmarshalJsonStr(logs[0].Other, &other))
 			assert.Equal(t, &model.AuditAdminInfo{AdminID: 9999, AdminUsername: "root-operator", AdminRole: common.RoleRootUser, AuthMethod: "session"}, other.AdminInfo)
 
-			logs, total, err = model.GetUserLogs(user.Id, model.LogTypeTopup, 0, 0, "", "", 0, 20, "", "", "")
+			logs, total, err = model.GetUserLogs(testtenant.Context(), user.Id, model.LogTypeTopup, 0, 0, "", "", 0, 20, "", "", "")
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, total)
 			require.Len(t, logs, 1)
@@ -260,7 +260,7 @@ func TestManageUserQuotaRecordsTopupAndAudit(t *testing.T) {
 			assert.Equal(t, "quota-test-request", logs[0].RequestId)
 			assert.Empty(t, logs[0].Ip, "recipient logs must not disclose the administrator IP")
 
-			logs, total, err = model.GetUserLogs(9999, model.LogTypeTopup, 0, 0, "", "", 0, 20, "", "", "")
+			logs, total, err = model.GetUserLogs(testtenant.Context(), 9999, model.LogTypeTopup, 0, 0, "", "", 0, 20, "", "", "")
 			require.NoError(t, err)
 			assert.Zero(t, total)
 			assert.Empty(t, logs)
@@ -397,8 +397,8 @@ func TestManageUserQuotaTargetsAndWalletBounds(t *testing.T) {
 				}))
 			}
 			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(fmt.Sprintf(`{"id":%d,"action":"add_quota","mode":%q,"value":%d}`, tc.targetID, tc.mode, tc.value)))
+			c, _ := testtenant.CreateTestContext(recorder)
+			c.Request = testtenant.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(fmt.Sprintf(`{"id":%d,"action":"add_quota","mode":%q,"value":%d}`, tc.targetID, tc.mode, tc.value)))
 			role := tc.operatorRole
 			if role == 0 {
 				role = common.RoleRootUser
@@ -434,7 +434,7 @@ func TestManageUserQuotaMiddlewareKeepsOneOperationPerRequest(t *testing.T) {
 	pat := "quota-middleware-test-token"
 	operator := model.User{Id: 9999, Username: "root-operator", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, AccessToken: &pat, Quota: 1000}
 	require.NoError(t, db.Create(&operator).Error)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	router.POST("/api/user/manage", middleware.AdminAuth(), ManageUser)
 	for _, tc := range []struct {
@@ -447,7 +447,7 @@ func TestManageUserQuotaMiddlewareKeepsOneOperationPerRequest(t *testing.T) {
 		{`{"id":`, "generic", false},
 	} {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(tc.body))
+		request := testtenant.NewRequest(http.MethodPost, "/api/user/manage", strings.NewReader(tc.body))
 		request.Header.Set("Authorization", "Bearer "+pat)
 		request.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(recorder, request)
@@ -506,7 +506,7 @@ func TestManageUserQuotaConcurrentSnapshots(t *testing.T) {
 	results := make(chan result, 2)
 	for _, value := range []int{10, 20} {
 		go func(value int) {
-			adjustment, err := model.AdjustUserQuota(user.Id, common.RoleRootUser, "add", value)
+			adjustment, err := model.AdjustUserQuota(testtenant.Context(), user.Id, common.RoleRootUser, "add", value)
 			results <- result{adjustment, err, value}
 		}(value)
 	}
@@ -561,10 +561,10 @@ func TestManageUserQuotaCacheUsesCommittedIntegerDifference(t *testing.T) {
 			t.Cleanup(func() { _ = common.RDB.Close(); common.RDB = oldRDB })
 			user := model.User{Username: "cached-quota", Quota: tc.before, AuthVersion: 1}
 			require.NoError(t, db.Create(&user).Error)
-			cache, err := model.GetUserCache(user.Id)
+			cache, err := model.GetUserCache(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			assert.Equal(t, tc.before, cache.Quota)
-			_, err = model.GetUserCache(operator.Id)
+			_, err = model.GetUserCache(testtenant.Context(), operator.Id)
 			require.NoError(t, err)
 			keys := server.Keys()
 			var quotaKey string

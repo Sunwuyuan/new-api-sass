@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ import (
 	"github.com/QuantumNous/new-api/service/authz"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/QuantumNous/new-api/constant"
 
@@ -38,7 +41,7 @@ func GetPasswordEncryptionKey(c *gin.Context) {
 		common.ApiSuccess(c, gin.H{"enabled": false})
 		return
 	}
-	keyID, publicKey := common.PasswordEncryptionPublicKey()
+	keyID, publicKey := common.PasswordEncryptionPublicKey(c.Request.Context())
 	if keyID == "" || publicKey == "" {
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		return
@@ -51,7 +54,7 @@ func GetPasswordEncryptionKey(c *gin.Context) {
 }
 
 func Login(c *gin.Context) {
-	if !common.PasswordLoginEnabled {
+	if !common.TenantState(c.Request.Context()).PasswordLoginEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordLoginDisabled)
 		return
 	}
@@ -68,7 +71,7 @@ func Login(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 			return
 		}
-		password, err = common.DecryptPassword(loginRequest.PasswordEncrypted, loginRequest.EncryptionKeyID)
+		password, err = common.DecryptPassword(c.Request.Context(), loginRequest.PasswordEncrypted, loginRequest.EncryptionKeyID)
 		if err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUserUsernameOrPasswordError)
 			return
@@ -82,7 +85,7 @@ func Login(c *gin.Context) {
 		Username: username,
 		Password: password,
 	}
-	err = user.ValidateAndFill()
+	err = user.ValidateAndFill(c.Request.Context())
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrDatabase):
@@ -146,7 +149,7 @@ func recordLoginAudit(user *model.User, c *gin.Context) {
 // setupLogin evaluates the shared login policy after primary authentication.
 // Only a completed Passkey ceremony may go directly to session issuance.
 func setupLogin(user *model.User, c *gin.Context) {
-	challenge, err := service.StartLoginVerification(user, loginMethodFromContext(c))
+	challenge, err := service.StartLoginVerification(c.Request.Context(), user, loginMethodFromContext(c))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -164,14 +167,14 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 		common.ApiErrorI18n(c, i18n.MsgAuthUserBanned)
 		return
 	}
-	currentUser, err := model.GetSelfUserById(user.Id)
+	currentUser, err := model.GetSelfUserById(c.Request.Context(), user.Id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	var bundle *service.AuthBundle
 	if expectedAuthVersion > 0 {
-		bundle, err = service.CreateLoginSessionAtAuthVersion(
+		bundle, err = service.CreateLoginSessionAtAuthVersion(c.Request.Context(),
 			user.Id,
 			expectedAuthVersion,
 			loginMethodFromContext(c),
@@ -179,7 +182,7 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 			c.Request.UserAgent(),
 		)
 	} else {
-		bundle, err = service.CreateLoginSession(
+		bundle, err = service.CreateLoginSession(c.Request.Context(),
 			user.Id,
 			loginMethodFromContext(c),
 			c.ClientIP(),
@@ -195,7 +198,7 @@ func setupLoginAtAuthVersion(user *model.User, expectedAuthVersion int64, c *gin
 
 func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBundle) {
 	c.Set("login_method", bundle.Session.LoginMethod)
-	model.UpdateUserLastLoginAt(user.Id)
+	model.UpdateUserLastLoginAt(c.Request.Context(), user.Id)
 	service.WriteRefreshCookie(c, bundle.RefreshToken)
 	setAuthNoStore(c)
 	recordLoginAudit(user, c)
@@ -207,17 +210,17 @@ func writeLoginResponse(c *gin.Context, user *model.User, bundle *service.AuthBu
 			"token_type":        bundle.TokenType,
 			"access_expires_at": bundle.AccessExpiresAt,
 			"session":           bundle.Session,
-			"user":              buildSelfUserData(user),
+			"user":              buildSelfUserData(c.Request.Context(), user),
 		},
 	})
 }
 
 func Register(c *gin.Context) {
-	if !common.RegisterEnabled {
+	if !common.TenantState(c.Request.Context()).RegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterDisabled)
 		return
 	}
-	if !common.PasswordRegisterEnabled {
+	if !common.TenantState(c.Request.Context()).PasswordRegisterEnabled {
 		common.ApiErrorI18n(c, i18n.MsgUserPasswordRegisterDisabled)
 		return
 	}
@@ -237,16 +240,16 @@ func Register(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
-	if common.EmailVerificationEnabled {
+	if common.TenantState(c.Request.Context()).EmailVerificationEnabled {
 		if user.Email == "" || user.VerificationCode == "" {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailVerificationRequired)
 			return
 		}
-		if !common.VerifyCodeWithKey(user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
+		if !common.VerifyCodeWithKey(c.Request.Context(), user.Email, user.VerificationCode, common.EmailVerificationPurpose) {
 			common.ApiErrorI18n(c, i18n.MsgUserVerificationCodeError)
 			return
 		}
-		if err := model.EnsureEmailAvailable(user.Email, 0); err != nil {
+		if err := model.EnsureEmailAvailable(c.Request.Context(), user.Email, 0); err != nil {
 			if errors.Is(err, model.ErrEmailAlreadyTaken) {
 				common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 				return
@@ -256,10 +259,10 @@ func Register(c *gin.Context) {
 		}
 	}
 	emailForExistCheck := ""
-	if common.EmailVerificationEnabled {
+	if common.TenantState(c.Request.Context()).EmailVerificationEnabled {
 		emailForExistCheck = user.Email
 	}
-	exist, err := model.CheckUserExistOrDeleted(user.Username, emailForExistCheck)
+	exist, err := model.CheckUserExistOrDeleted(c.Request.Context(), user.Username, emailForExistCheck)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgDatabaseError)
 		common.SysLog(fmt.Sprintf("CheckUserExistOrDeleted error: %v", err))
@@ -270,7 +273,7 @@ func Register(c *gin.Context) {
 		return
 	}
 	affCode := user.AffCode // this code is the inviter's code, not the user's own code
-	inviterId, _ := model.GetUserIdByAffCode(affCode)
+	inviterId, _ := model.GetUserIdByAffCode(c.Request.Context(), affCode)
 	cleanUser := model.User{
 		Username:    user.Username,
 		Password:    user.Password,
@@ -278,10 +281,10 @@ func Register(c *gin.Context) {
 		InviterId:   inviterId,
 		Role:        common.RoleCommonUser, // 明确设置角色为普通用户
 	}
-	if common.EmailVerificationEnabled {
+	if common.TenantState(c.Request.Context()).EmailVerificationEnabled {
 		cleanUser.Email = user.Email
 	}
-	if err := cleanUser.Insert(inviterId); err != nil {
+	if err := cleanUser.Insert(c.Request.Context(), inviterId); err != nil {
 		if errors.Is(err, model.ErrEmailAlreadyTaken) {
 			common.ApiErrorI18n(c, i18n.MsgUserEmailAlreadyTaken)
 			return
@@ -292,7 +295,7 @@ func Register(c *gin.Context) {
 
 	// 获取插入后的用户ID
 	var insertedUser model.User
-	if err := model.DB.Where("username = ?", cleanUser.Username).First(&insertedUser).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).Where("username = ?", cleanUser.Username).First(&insertedUser).Error; err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserRegisterFailed)
 		return
 	}
@@ -316,10 +319,10 @@ func Register(c *gin.Context) {
 			UnlimitedQuota:     true,
 			ModelLimitsEnabled: false,
 		}
-		if setting.DefaultUseAutoGroup {
+		if setting.TenantRuntime(c.Request.Context()).DefaultUseAutoGroup {
 			token.Group = "auto"
 		}
-		if err := token.Insert(); err != nil {
+		if err := token.Insert(c.Request.Context()); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgCreateDefaultTokenErr)
 			return
 		}
@@ -335,7 +338,7 @@ func Register(c *gin.Context) {
 func GetAllUsers(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.GetAllUsers(pageInfo, sortOptions)
+	users, total, err := model.GetAllUsers(c.Request.Context(), pageInfo, sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -365,7 +368,7 @@ func SearchUsers(c *gin.Context) {
 	}
 	pageInfo := common.GetPageQuery(c)
 	sortOptions := model.NewUserSortOptions(c.Query("sort_by"), c.Query("sort_order"))
-	users, total, err := model.SearchUsers(keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
+	users, total, err := model.SearchUsers(c.Request.Context(), keyword, group, role, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), sortOptions)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -387,7 +390,7 @@ func GetUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	user, err := model.GetUserById(id, false)
+	user, err := model.GetUserById(c.Request.Context(), id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -397,7 +400,7 @@ func GetUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionSameLevel)
 		return
 	}
-	user.AdminPermissions = authz.Capabilities(user.Id, user.Role)
+	user.AdminPermissions = authz.Capabilities(c.Request.Context(), user.Id, user.Role)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -416,7 +419,7 @@ func TransferAffQuota(c *gin.Context) {
 	}
 
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
+	user, err := model.GetUserById(c.Request.Context(), id, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -426,7 +429,7 @@ func TransferAffQuota(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	err = user.TransferAffQuotaToQuota(tran.Quota)
+	err = user.TransferAffQuotaToQuota(c.Request.Context(), tran.Quota)
 	if err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUserTransferFailed, map[string]any{"Error": err.Error()})
 		return
@@ -436,14 +439,14 @@ func TransferAffQuota(c *gin.Context) {
 
 func GetAffCode(c *gin.Context) {
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, true)
+	user, err := model.GetUserById(c.Request.Context(), id, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	if user.AffCode == "" {
 		user.AffCode = common.GetRandomString(4)
-		if err := user.Update(false); err != nil {
+		if err := user.Update(c.Request.Context(), false); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
@@ -462,17 +465,17 @@ func GetAffCode(c *gin.Context) {
 func GetSelf(c *gin.Context) {
 	id := c.GetInt("id")
 	userRole := c.GetInt("role")
-	user, err := model.GetSelfUserById(id)
+	user, err := model.GetSelfUserById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	responseData := buildSelfUserData(user)
+	responseData := buildSelfUserData(c.Request.Context(), user)
 	// The authenticated role is loaded from GetUserCache. It should equal the
 	// row role, but use it for capabilities so GetSelf and login/refresh remain
 	// consistent with the authorization decision made for this request.
 	permissions := calculateUserPermissions(userRole)
-	permissions["admin_permissions"] = authz.Capabilities(id, userRole)
+	permissions["admin_permissions"] = authz.Capabilities(c.Request.Context(), id, userRole)
 	responseData["permissions"] = permissions
 
 	c.JSON(http.StatusOK, gin.H{
@@ -486,10 +489,10 @@ func GetSelf(c *gin.Context) {
 // buildSelfUserData is the single safe dashboard-user DTO used by GetSelf,
 // login and refresh. It intentionally excludes password, management PAT and
 // administrator-only remarks.
-func buildSelfUserData(user *model.User) map[string]any {
+func buildSelfUserData(tenantCtx context.Context, user *model.User) map[string]any {
 	userSetting := user.GetSetting()
 	permissions := calculateUserPermissions(user.Role)
-	permissions["admin_permissions"] = authz.Capabilities(user.Id, user.Role)
+	permissions["admin_permissions"] = authz.Capabilities(tenantCtx, user.Id, user.Role)
 	return map[string]any{
 		"id":                user.Id,
 		"username":          user.Username,
@@ -615,12 +618,12 @@ func GetUserModels(c *gin.Context) {
 	if err != nil {
 		id = c.GetInt("id")
 	}
-	user, err := model.GetUserCache(id)
+	user, err := model.GetUserCache(c.Request.Context(), id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	groups := service.GetUserUsableGroups(user.Group)
+	groups := service.GetUserUsableGroups(c.Request.Context(), user.Group)
 	group := c.Query("group")
 	var groupsToQuery []string
 	switch {
@@ -630,7 +633,7 @@ func GetUserModels(c *gin.Context) {
 		}
 	case group == "auto":
 		if _, ok := groups[group]; ok {
-			groupsToQuery = service.GetUserAutoGroup(user.Group)
+			groupsToQuery = service.GetUserAutoGroup(c.Request.Context(), user.Group)
 		}
 	default:
 		if _, ok := groups[group]; ok {
@@ -640,7 +643,7 @@ func GetUserModels(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    service.GetGroupsEnabledModels(groupsToQuery),
+		"data":    service.GetGroupsEnabledModels(c.Request.Context(), groupsToQuery),
 	})
 }
 
@@ -660,7 +663,7 @@ func UpdateUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserInputInvalid, map[string]any{"Error": err.Error()})
 		return
 	}
-	originUser, err := model.GetUserById(updatedUser.Id, false)
+	originUser, err := model.GetUserById(c.Request.Context(), updatedUser.Id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -677,7 +680,7 @@ func UpdateUser(c *gin.Context) {
 	}
 	updatePassword := updatedUser.Password != ""
 	authzTouched := false
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+	if err := model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := updatedUser.EditWithTx(tx, updatePassword); err != nil {
 			return err
 		}
@@ -689,18 +692,18 @@ func UpdateUser(c *gin.Context) {
 		return
 	}
 	if authzTouched {
-		if err := authz.ReloadPolicy(); err != nil {
+		if err := authz.ReloadPolicy(c.Request.Context()); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
 	if updatedUser.AuthVersion > originUser.AuthVersion {
-		if _, err := model.RevokeAllUserSessions(updatedUser.Id, "admin_user_update"); err != nil {
+		if _, err := model.RevokeAllUserSessions(c.Request.Context(), updatedUser.Id, "admin_user_update"); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	if err := model.PublishUserAuthCache(updatedUser.Id); err != nil {
+	if err := model.PublishUserAuthCache(c.Request.Context(), updatedUser.Id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -728,7 +731,7 @@ func AdminClearUserBinding(c *gin.Context) {
 		return
 	}
 
-	user, err := model.GetUserById(id, false)
+	user, err := model.GetUserById(c.Request.Context(), id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -740,7 +743,7 @@ func AdminClearUserBinding(c *gin.Context) {
 		return
 	}
 
-	if err := user.ClearBinding(bindingType); err != nil {
+	if err := user.ClearBinding(c.Request.Context(), bindingType); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -777,7 +780,7 @@ func UpdateSelf(c *gin.Context) {
 	// 检查是否是用户设置更新请求 (sidebar_modules 或 language)
 	if sidebarModules, sidebarExists := requestData["sidebar_modules"]; sidebarExists && !passwordRequested {
 		userId := c.GetInt("id")
-		user, err := model.GetUserById(userId, false)
+		user, err := model.GetUserById(c.Request.Context(), userId, false)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -791,7 +794,7 @@ func UpdateSelf(c *gin.Context) {
 			currentSetting.SidebarModules = sidebarModulesStr
 		}
 
-		if err := model.UpdateUserSetting(user.Id, currentSetting); err != nil {
+		if err := model.UpdateUserSetting(c.Request.Context(), user.Id, currentSetting); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -803,7 +806,7 @@ func UpdateSelf(c *gin.Context) {
 	// 检查是否是语言偏好更新请求
 	if language, langExists := requestData["language"]; langExists && !passwordRequested {
 		userId := c.GetInt("id")
-		user, err := model.GetUserById(userId, false)
+		user, err := model.GetUserById(c.Request.Context(), userId, false)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -817,7 +820,7 @@ func UpdateSelf(c *gin.Context) {
 			currentSetting.Language = langStr
 		}
 
-		if err := model.UpdateUserSetting(user.Id, currentSetting); err != nil {
+		if err := model.UpdateUserSetting(c.Request.Context(), user.Id, currentSetting); err != nil {
 			common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 			return
 		}
@@ -855,7 +858,7 @@ func UpdateSelf(c *gin.Context) {
 			writeSecurityOperationError(c, service.ErrAuthTokenInvalid)
 			return
 		}
-		current, err := model.GetUserById(identity.UserID, true)
+		current, err := model.GetUserById(c.Request.Context(), identity.UserID, true)
 		if err != nil {
 			writeSecurityOperationError(c, err)
 			return
@@ -869,17 +872,17 @@ func UpdateSelf(c *gin.Context) {
 			return
 		}
 		cleanUser.OriginalPassword = user.OriginalPassword
-		if err := model.ChangeUserPassword(identity, &cleanUser, firstPassword); err != nil {
+		if err := model.ChangeUserPassword(c.Request.Context(), identity, &cleanUser, firstPassword); err != nil {
 			writeSecurityOperationError(c, err)
 			return
 		}
 		succeeded = true
-		notificationFailed = service.NotifyAccountSecurityChange(current.Email, "Password updated") != nil
-		if err := model.PublishUserAuthCache(cleanUser.Id); err != nil {
+		notificationFailed = service.NotifyAccountSecurityChange(c.Request.Context(), current.Email, "Password updated") != nil
+		if err := model.PublishUserAuthCache(c.Request.Context(), cleanUser.Id); err != nil {
 			writeSecurityOperationError(c, err)
 			return
 		}
-		bundle, err := service.AdvanceCurrentSessionToUserVersion(identity, "password_changed")
+		bundle, err := service.AdvanceCurrentSessionToUserVersion(c.Request.Context(), identity, "password_changed")
 		if err != nil {
 			writeSecurityOperationError(c, err)
 			return
@@ -898,7 +901,7 @@ func UpdateSelf(c *gin.Context) {
 		})
 		return
 	}
-	if err := cleanUser.Update(false); err != nil {
+	if err := cleanUser.Update(c.Request.Context(), false); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -913,7 +916,7 @@ func DeleteUser(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	originUser, err := model.GetUserById(id, false)
+	originUser, err := model.GetUserById(c.Request.Context(), id, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -923,7 +926,7 @@ func DeleteUser(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUserNoPermissionHigherLevel)
 		return
 	}
-	err = model.HardDeleteUserById(id)
+	err = model.HardDeleteUserById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -949,7 +952,7 @@ func DeleteSelf(c *gin.Context) {
 		return
 	}
 	identity, _ := middleware.GetSessionAuthIdentity(c)
-	if err := model.DeleteUserForSession(identity); err != nil {
+	if err := model.DeleteUserForSession(c.Request.Context(), identity); err != nil {
 		if errors.Is(err, model.ErrCannotDeleteRootUser) {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
 			return
@@ -994,7 +997,7 @@ func CreateUser(c *gin.Context) {
 		Role:        user.Role, // 保持管理员设置的角色
 	}
 	authzTouched := false
-	if err := model.DB.Transaction(func(tx *gorm.DB) error {
+	if err := model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		if err := cleanUser.InsertWithTx(tx, 0); err != nil {
 			return err
 		}
@@ -1006,12 +1009,12 @@ func CreateUser(c *gin.Context) {
 		return
 	}
 	if authzTouched {
-		if err := authz.ReloadPolicy(); err != nil {
+		if err := authz.ReloadPolicy(c.Request.Context()); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	}
-	cleanUser.FinishInsert(0)
+	cleanUser.FinishInsert(c.Request.Context(), 0)
 
 	recordManageAuditFor(c, cleanUser.Id, "user.create", map[string]any{
 		"username": cleanUser.Username,
@@ -1064,7 +1067,7 @@ func ManageUser(c *gin.Context) {
 		Id: req.Id,
 	}
 	// Fill attributes
-	model.DB.Unscoped().Where(&user).First(&user)
+	model.DB.WithContext(c.Request.Context()).Unscoped().Where(&user).First(&user)
 	if user.Id == 0 {
 		common.ApiErrorI18n(c, i18n.MsgUserNotExists)
 		return
@@ -1088,7 +1091,7 @@ func ManageUser(c *gin.Context) {
 			common.ApiErrorI18n(c, i18n.MsgUserCannotDeleteRootUser)
 			return
 		}
-		if err := user.Delete(); err != nil {
+		if err := user.Delete(c.Request.Context()); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": err.Error(),
@@ -1097,7 +1100,7 @@ func ManageUser(c *gin.Context) {
 		}
 		// 删除用户后，强制清理 Redis 中所有该用户令牌的缓存，
 		// 避免已缓存的令牌在 TTL 过期前仍能通过 TokenAuth 校验。
-		if err := model.InvalidateUserTokensCache(user.Id); err != nil {
+		if err := model.InvalidateUserTokensCache(c.Request.Context(), user.Id); err != nil {
 			common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 		}
 		recordManageAuditFor(c, user.Id, "user.manage", map[string]any{
@@ -1136,7 +1139,7 @@ func ManageUser(c *gin.Context) {
 	}
 
 	if req.Action == "demote" {
-		if err := model.DB.Transaction(func(tx *gorm.DB) error {
+		if err := model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 			if err := user.UpdateWithTx(tx, false); err != nil {
 				return err
 			}
@@ -1145,20 +1148,20 @@ func ManageUser(c *gin.Context) {
 			common.ApiError(c, err)
 			return
 		}
-		if err := authz.ReloadPolicy(); err != nil {
+		if err := authz.ReloadPolicy(c.Request.Context()); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		if err := model.PublishUserAuthCache(user.Id); err != nil {
+		if err := model.PublishUserAuthCache(c.Request.Context(), user.Id); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		if _, err := model.RevokeAllUserSessions(user.Id, "admin_demote"); err != nil {
+		if _, err := model.RevokeAllUserSessions(c.Request.Context(), user.Id, "admin_demote"); err != nil {
 			common.ApiError(c, err)
 			return
 		}
 	} else {
-		if err := user.Update(false); err != nil {
+		if err := user.Update(c.Request.Context(), false); err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -1167,7 +1170,7 @@ func ManageUser(c *gin.Context) {
 	// browser sessions exactly once. Only PAT/relay token caches still need an
 	// explicit invalidation; deleting the user hash here would discard the
 	// freshly published auth-version floor.
-	if err := model.InvalidateUserTokensCache(user.Id); err != nil {
+	if err := model.InvalidateUserTokensCache(c.Request.Context(), user.Id); err != nil {
 		common.SysLog(fmt.Sprintf("failed to invalidate tokens cache for user %d: %s", user.Id, err.Error()))
 	}
 	recordManageAuditFor(c, user.Id, "user.manage", map[string]any{
@@ -1218,28 +1221,29 @@ func (l *topUpTryLock) Unlock() {
 	}
 }
 
-func getTopUpLock(userID int) *topUpTryLock {
-	if v, ok := topUpLocks.Load(userID); ok {
+func getTopUpLock(ctx context.Context, userID int) *topUpTryLock {
+	key := tenant.MustKey(ctx, "topup:"+strconv.Itoa(userID))
+	if v, ok := topUpLocks.Load(key); ok {
 		return v.(*topUpTryLock)
 	}
 	topUpCreateLock.Lock()
 	defer topUpCreateLock.Unlock()
-	if v, ok := topUpLocks.Load(userID); ok {
+	if v, ok := topUpLocks.Load(key); ok {
 		return v.(*topUpTryLock)
 	}
 	l := newTopUpTryLock()
-	topUpLocks.Store(userID, l)
+	topUpLocks.Store(key, l)
 	return l
 }
 
 func TopUp(c *gin.Context) {
-	if !operation_setting.IsPaymentComplianceConfirmed() {
+	if !operation_setting.IsPaymentComplianceConfirmed(c.Request.Context()) {
 		common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 		return
 	}
 
 	id := c.GetInt("id")
-	lock := getTopUpLock(id)
+	lock := getTopUpLock(c.Request.Context(), id)
 	if !lock.TryLock() {
 		common.ApiErrorI18n(c, i18n.MsgUserTopUpProcessing)
 		return
@@ -1251,7 +1255,7 @@ func TopUp(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	quota, err := model.Redeem(req.Key, id)
+	quota, err := model.Redeem(c.Request.Context(), req.Key, id)
 	if err != nil {
 		// 不向用户暴露兑换失败的细分原因，避免攻击者根据错误类型判断兑换码状态。
 		common.ApiErrorI18n(c, i18n.MsgRedeemFailed)
@@ -1362,7 +1366,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	userId := c.GetInt("id")
-	user, err := model.GetUserById(userId, true)
+	user, err := model.GetUserById(c.Request.Context(), userId, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -1413,7 +1417,7 @@ func UpdateUserSetting(c *gin.Context) {
 	}
 
 	// 更新用户设置
-	if err := model.UpdateUserSetting(user.Id, settings); err != nil {
+	if err := model.UpdateUserSetting(c.Request.Context(), user.Id, settings); err != nil {
 		common.ApiErrorI18n(c, i18n.MsgUpdateFailed)
 		return
 	}

@@ -1,5 +1,7 @@
 package model_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"slices"
@@ -63,13 +65,13 @@ func init() {
 }
 
 // GetGeminiSettings 获取Gemini配置
-func GetGeminiSettings() *GeminiSettings {
-	return &geminiSettings
+func GetGeminiSettings(tenantCtx context.Context) *GeminiSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("gemini").(*GeminiSettings)
 }
 
 // GetGeminiSafetySetting 获取安全设置
-func GetGeminiSafetySetting(key string) string {
-	settings := geminiSettings.SafetySettings
+func GetGeminiSafetySetting(tenantCtx context.Context, key string) string {
+	settings := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("gemini").(*GeminiSettings))).SafetySettings
 	if value := settings[key]; value != "" {
 		return value
 	}
@@ -101,13 +103,13 @@ func ValidateGeminiSafetySettings(value string) error {
 }
 
 // GetGeminiVersionSetting 获取版本设置
-func GetGeminiVersionSetting(key string) string {
-	if value, ok := geminiSettings.VersionSettings[key]; ok {
+func GetGeminiVersionSetting(tenantCtx context.Context, key string) string {
+	if value, ok := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("gemini").(*GeminiSettings))).VersionSettings[key]; ok {
 		return value
 	}
-	return geminiSettings.VersionSettings["default"]
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("gemini").(*GeminiSettings))).VersionSettings["default"]
 }
 
-func IsGeminiModelSupportImagine(model string) bool {
-	return slices.Contains(geminiSettings.SupportedImagineModels, model)
+func IsGeminiModelSupportImagine(tenantCtx context.Context, model string) bool {
+	return slices.Contains((*(config.GlobalConfig.ForTenant(tenantCtx).Get("gemini").(*GeminiSettings))).SupportedImagineModels, model)
 }

@@ -1,5 +1,7 @@
 package authz
 
+import context "context"
+
 import (
 	"fmt"
 
@@ -19,7 +21,7 @@ func seedBuiltInRoles(db *gorm.DB) error {
 			Sort:        spec.Sort,
 		}
 		if err := db.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "key"}},
+			Columns: []clause.Column{{Name: "tenant_id"}, {Name: "key"}},
 			DoUpdates: clause.AssignmentColumns([]string{
 				"name",
 				"description",
@@ -42,8 +44,8 @@ func resetBuiltInRolePolicies(db *gorm.DB) error {
 	return db.Where("ptype = ? AND v0 IN ?", "p", subjects).Delete(&model.CasbinRule{}).Error
 }
 
-func seedDefaultPolicies() error {
-	e := currentEnforcer()
+func seedDefaultPolicies(tenantCtx context.Context) error {
+	e := currentEnforcer(tenantCtx)
 	if e == nil {
 		return fmt.Errorf("authz enforcer is not initialized")
 	}

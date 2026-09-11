@@ -57,7 +57,7 @@ type Adaptor struct {
 func (a *Adaptor) ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error) {
 	// Vertex AI's generateContent schema does not expose the Gemini API's
 	// function-call identity fields. Strip both sides at this provider boundary.
-	if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
+	if model_setting.GetGeminiSettings(c.Request.Context()).RemoveFunctionResponseIdEnabled {
 		removeFunctionCallIDs(request)
 	}
 	geminiAdaptor := gemini.Adaptor{}
@@ -299,7 +299,7 @@ func (a *Adaptor) ConvertOpenAIRequest(c *gin.Context, info *relaycommon.RelayIn
 		if !ok {
 			return nil, fmt.Errorf("expected Gemini generateContent request, got %T", result.Value)
 		}
-		if model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
+		if model_setting.GetGeminiSettings(c.Request.Context()).RemoveFunctionResponseIdEnabled {
 			removeFunctionCallIDs(geminiRequest)
 		}
 		c.Set("request_model", request.Model)

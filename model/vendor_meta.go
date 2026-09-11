@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/common"
 
@@ -13,6 +15,7 @@ import (
 // 本表同样遵循 3NF 设计范式
 
 type Vendor struct {
+	TenantID    int64          `json:"-" gorm:"not null;index;uniqueIndex:uk_vendor_name_delete_at,priority:1"`
 	ModelCount  int64          `json:"model_count" gorm:"-"`
 	Version     string         `json:"version,omitempty" gorm:"-"`
 	Id          int            `json:"id"`
@@ -26,9 +29,9 @@ type Vendor struct {
 }
 
 // Insert 创建新的供应商记录
-func (v *Vendor) Insert() error {
+func (v *Vendor) Insert(tenantCtx context.Context) error {
 	v.Id = 0
-	err := metadataTransaction(func(tx *gorm.DB) error {
+	err := metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		if err := validateVendorMetadata(tx, v); err != nil {
 			return err
 		}
@@ -38,24 +41,24 @@ func (v *Vendor) Insert() error {
 	})
 	if err == nil {
 		v.Version = VendorRecordVersion(v)
-		RefreshPricing()
+		RefreshPricing(tenantCtx)
 	}
 	return err
 }
 
 // IsVendorNameDuplicated 检查供应商名称是否重复（排除自身 ID）
-func IsVendorNameDuplicated(id int, name string) (bool, error) {
+func IsVendorNameDuplicated(tenantCtx context.Context, id int, name string) (bool, error) {
 	if name == "" {
 		return false, nil
 	}
 	var cnt int64
-	err := DB.Model(&Vendor{}).Where("name = ? AND id <> ?", name, id).Count(&cnt).Error
+	err := DB.WithContext(tenantCtx).Model(&Vendor{}).Where("name = ? AND id <> ?", name, id).Count(&cnt).Error
 	return cnt > 0, err
 }
 
 // Update 更新供应商记录
-func (v *Vendor) Update() error {
-	err := metadataTransaction(func(tx *gorm.DB) error {
+func (v *Vendor) Update(tenantCtx context.Context) error {
+	err := metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		var saved Vendor
 		if err := tx.First(&saved, v.Id).Error; err != nil {
 			return err
@@ -71,22 +74,24 @@ func (v *Vendor) Update() error {
 	})
 	if err == nil {
 		v.Version = VendorRecordVersion(v)
-		RefreshPricing()
+		RefreshPricing(tenantCtx)
 	}
 	return err
 }
 
 // Delete rejects referenced vendors rather than leaving orphaned model records.
-func (v *Vendor) Delete() error { return DeleteVendors([]int{v.Id}) }
+func (v *Vendor) Delete(tenantCtx context.Context) error {
+	return DeleteVendors(tenantCtx, []int{v.Id})
+}
 
 // GetVendorByID 根据 ID 获取供应商
-func GetVendorByID(id int) (*Vendor, error) {
+func GetVendorByID(tenantCtx context.Context, id int) (*Vendor, error) {
 	var v Vendor
-	err := DB.First(&v, id).Error
+	err := DB.WithContext(tenantCtx).First(&v, id).Error
 	if err != nil {
 		return nil, err
 	}
-	if err := DB.Model(&Model{}).Where("vendor_id = ?", id).Count(&v.ModelCount).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&Model{}).Where("vendor_id = ?", id).Count(&v.ModelCount).Error; err != nil {
 		return nil, err
 	}
 	v.Version = VendorRecordVersion(&v)
@@ -94,20 +99,20 @@ func GetVendorByID(id int) (*Vendor, error) {
 }
 
 // GetAllVendors 获取全部供应商（分页）
-func GetAllVendors(offset int, limit int) ([]*Vendor, error) {
-	vendors, _, err := SearchVendors("", offset, limit)
+func GetAllVendors(tenantCtx context.Context, offset int, limit int) ([]*Vendor, error) {
+	vendors, _, err := SearchVendors(tenantCtx, "", offset, limit)
 	return vendors, err
 }
 
 // SearchVendors filters persisted vendor records and counts actual model assignments.
-func SearchVendors(keyword string, offset, limit int, association ...string) ([]*Vendor, int64, error) {
-	db := DB.Model(&Vendor{})
+func SearchVendors(tenantCtx context.Context, keyword string, offset, limit int, association ...string) ([]*Vendor, int64, error) {
+	db := DB.WithContext(tenantCtx).Model(&Vendor{})
 	if keyword != "" {
 		like := "%" + keyword + "%"
 		db = db.Where("name LIKE ? OR description LIKE ?", like, like)
 	}
 	if len(association) > 0 {
-		references := DB.Model(&Model{}).Select("1").Where("models.vendor_id = vendors.id")
+		references := DB.WithContext(tenantCtx).Model(&Model{}).Select("1").Where("models.vendor_id = vendors.id")
 		switch association[0] {
 		case "linked":
 			db = db.Where("EXISTS (?)", references)
@@ -123,7 +128,7 @@ func SearchVendors(keyword string, offset, limit int, association ...string) ([]
 	if err := db.Offset(offset).Limit(limit).Order("id DESC").Find(&vendors).Error; err != nil {
 		return nil, 0, err
 	}
-	counts, err := GetVendorModelCounts()
+	counts, err := GetVendorModelCounts(tenantCtx)
 	if err != nil {
 		return nil, 0, err
 	}

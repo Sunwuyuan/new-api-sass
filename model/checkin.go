@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"math/rand"
@@ -12,6 +14,7 @@ import (
 
 // Checkin 签到记录
 type Checkin struct {
+	TenantID     int64  `json:"-" gorm:"not null;index;uniqueIndex:idx_user_checkin_date,priority:1"`
 	Id           int    `json:"id" gorm:"primaryKey;autoIncrement"`
 	UserId       int    `json:"user_id" gorm:"not null;uniqueIndex:idx_user_checkin_date"`
 	CheckinDate  string `json:"checkin_date" gorm:"type:varchar(10);not null;uniqueIndex:idx_user_checkin_date"` // 格式: YYYY-MM-DD
@@ -30,9 +33,9 @@ func (Checkin) TableName() string {
 }
 
 // GetUserCheckinRecords 获取用户在指定日期范围内的签到记录
-func GetUserCheckinRecords(userId int, startDate, endDate string) ([]Checkin, error) {
+func GetUserCheckinRecords(tenantCtx context.Context, userId int, startDate, endDate string) ([]Checkin, error) {
 	var records []Checkin
-	err := DB.Where("user_id = ? AND checkin_date >= ? AND checkin_date <= ?",
+	err := DB.WithContext(tenantCtx).Where("user_id = ? AND checkin_date >= ? AND checkin_date <= ?",
 		userId, startDate, endDate).
 		Order("checkin_date DESC").
 		Find(&records).Error
@@ -40,10 +43,10 @@ func GetUserCheckinRecords(userId int, startDate, endDate string) ([]Checkin, er
 }
 
 // HasCheckedInToday 检查用户今天是否已签到
-func HasCheckedInToday(userId int) (bool, error) {
+func HasCheckedInToday(tenantCtx context.Context, userId int) (bool, error) {
 	today := time.Now().Format("2006-01-02")
 	var count int64
-	err := DB.Model(&Checkin{}).
+	err := DB.WithContext(tenantCtx).Model(&Checkin{}).
 		Where("user_id = ? AND checkin_date = ?", userId, today).
 		Count(&count).Error
 	return count > 0, err
@@ -52,14 +55,14 @@ func HasCheckedInToday(userId int) (bool, error) {
 // UserCheckin 执行用户签到
 // MySQL 和 PostgreSQL 使用事务保证原子性
 // SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
-func UserCheckin(userId int) (*Checkin, error) {
-	setting := operation_setting.GetCheckinSetting()
+func UserCheckin(tenantCtx context.Context, userId int) (*Checkin, error) {
+	setting := operation_setting.GetCheckinSetting(tenantCtx)
 	if !setting.Enabled {
 		return nil, errors.New("签到功能未启用")
 	}
 
 	// 检查今天是否已签到
-	hasChecked, err := HasCheckedInToday(userId)
+	hasChecked, err := HasCheckedInToday(tenantCtx, userId)
 	if err != nil {
 		return nil, err
 	}
@@ -84,16 +87,16 @@ func UserCheckin(userId int) (*Checkin, error) {
 	// 根据数据库类型选择不同的策略
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		// SQLite 不支持嵌套事务，使用顺序操作 + 手动回滚
-		return userCheckinWithoutTransaction(checkin, userId, quotaAwarded)
+		return userCheckinWithoutTransaction(tenantCtx, checkin, userId, quotaAwarded)
 	}
 
 	// MySQL 和 PostgreSQL 支持事务，使用事务保证原子性
-	return userCheckinWithTransaction(checkin, userId, quotaAwarded)
+	return userCheckinWithTransaction(tenantCtx, checkin, userId, quotaAwarded)
 }
 
 // userCheckinWithTransaction 使用事务执行签到（适用于 MySQL 和 PostgreSQL）
-func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
-	err := DB.Transaction(func(tx *gorm.DB) error {
+func userCheckinWithTransaction(tenantCtx context.Context, checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		// 步骤1: 创建签到记录
 		// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
 		if err := tx.Create(checkin).Error; err != nil {
@@ -115,25 +118,25 @@ func userCheckinWithTransaction(checkin *Checkin, userId int, quotaAwarded int) 
 
 	// 事务成功后，异步更新缓存
 	go func() {
-		_ = cacheIncrUserQuota(userId, int64(quotaAwarded))
+		_ = cacheIncrUserQuota(tenantCtx, userId, int64(quotaAwarded))
 	}()
 
 	return checkin, nil
 }
 
 // userCheckinWithoutTransaction 不使用事务执行签到（适用于 SQLite）
-func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
+func userCheckinWithoutTransaction(tenantCtx context.Context, checkin *Checkin, userId int, quotaAwarded int) (*Checkin, error) {
 	// 步骤1: 创建签到记录
 	// 数据库有唯一约束 (user_id, checkin_date)，可以防止并发重复签到
-	if err := DB.Create(checkin).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Create(checkin).Error; err != nil {
 		return nil, errors.New("签到失败，请稍后重试")
 	}
 
 	// 步骤2: 增加用户额度
 	// 使用 db=true 强制直接写入数据库，不使用批量更新
-	if err := IncreaseUserQuota(userId, quotaAwarded, true); err != nil {
+	if err := IncreaseUserQuota(tenantCtx, userId, quotaAwarded, true); err != nil {
 		// 如果增加额度失败，需要回滚签到记录
-		DB.Delete(checkin)
+		DB.WithContext(tenantCtx).Delete(checkin)
 		return nil, errors.New("签到失败：更新额度出错")
 	}
 
@@ -141,12 +144,12 @@ func userCheckinWithoutTransaction(checkin *Checkin, userId int, quotaAwarded in
 }
 
 // GetUserCheckinStats 获取用户签到统计信息
-func GetUserCheckinStats(userId int, month string) (map[string]any, error) {
+func GetUserCheckinStats(tenantCtx context.Context, userId int, month string) (map[string]any, error) {
 	// 获取指定月份的所有签到记录
 	startDate := month + "-01"
 	endDate := month + "-31"
 
-	records, err := GetUserCheckinRecords(userId, startDate, endDate)
+	records, err := GetUserCheckinRecords(tenantCtx, userId, startDate, endDate)
 	if err != nil {
 		return nil, err
 	}
@@ -161,13 +164,13 @@ func GetUserCheckinStats(userId int, month string) (map[string]any, error) {
 	}
 
 	// 检查今天是否已签到
-	hasCheckedToday, _ := HasCheckedInToday(userId)
+	hasCheckedToday, _ := HasCheckedInToday(tenantCtx, userId)
 
 	// 获取用户所有时间的签到统计
 	var totalCheckins int64
 	var totalQuota int64
-	DB.Model(&Checkin{}).Where("user_id = ?", userId).Count(&totalCheckins)
-	DB.Model(&Checkin{}).Where("user_id = ?", userId).Select("COALESCE(SUM(quota_awarded), 0)").Scan(&totalQuota)
+	DB.WithContext(tenantCtx).Model(&Checkin{}).Where("user_id = ?", userId).Count(&totalCheckins)
+	DB.WithContext(tenantCtx).Model(&Checkin{}).Where("user_id = ?", userId).Select("COALESCE(SUM(quota_awarded), 0)").Scan(&totalQuota)
 
 	return map[string]any{
 		"total_quota":      totalQuota,      // 所有时间累计获得的额度

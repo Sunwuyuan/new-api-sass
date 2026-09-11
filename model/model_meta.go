@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"sort"
@@ -33,6 +35,7 @@ type BoundChannel struct {
 }
 
 type Model struct {
+	TenantID           int64          `json:"-" gorm:"not null;index;uniqueIndex:uk_model_name_delete_at,priority:1"`
 	Id                 int            `json:"id"`
 	ModelName          string         `json:"model_name" gorm:"size:128;not null;uniqueIndex:uk_model_name_delete_at,priority:1"`
 	Description        string         `json:"description,omitempty" gorm:"type:text"`
@@ -101,9 +104,9 @@ func resolveModelMetadata(records []Model, names []string) map[string]*Model {
 
 // FillModelSquareStates applies the same metadata policy as the public catalog
 // to live routes, then aggregates concrete models for metadata rule rows.
-func FillModelSquareStates(rows []*Model, configured map[string][]int, connections []ModelConnection) error {
+func FillModelSquareStates(tenantCtx context.Context, rows []*Model, configured map[string][]int, connections []ModelConnection) error {
 	var metadata []Model
-	if err := DB.Find(&metadata).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Find(&metadata).Error; err != nil {
 		return err
 	}
 	nameSet := make(map[string]struct{}, len(configured))
@@ -173,9 +176,9 @@ func FillModelSquareStates(rows []*Model, configured map[string][]int, connectio
 }
 
 // GetConfiguredModelChannels includes disabled channels and reads no credentials.
-func GetConfiguredModelChannels() (map[string][]int, error) {
+func GetConfiguredModelChannels(tenantCtx context.Context) (map[string][]int, error) {
 	var channels []Channel
-	if err := DB.Select("id", "models").Find(&channels).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Select("id", "models").Find(&channels).Error; err != nil {
 		return nil, err
 	}
 	configured := make(map[string][]int)
@@ -189,20 +192,20 @@ func GetConfiguredModelChannels() (map[string][]int, error) {
 
 // SearchModelsWithChannels augments metadata with concrete configured names.
 // Synthetic rows never persist and never affect the public pricing catalog.
-func SearchModelsWithChannels(keyword, vendor, status, syncOfficial string, offset, limit int) ([]*Model, int64, error) {
-	records, _, err := SearchModels(keyword, vendor, status, syncOfficial, 0, -1)
+func SearchModelsWithChannels(tenantCtx context.Context, keyword, vendor, status, syncOfficial string, offset, limit int) ([]*Model, int64, error) {
+	records, _, err := SearchModels(tenantCtx, keyword, vendor, status, syncOfficial, 0, -1)
 	if err != nil {
 		return nil, 0, err
 	}
 	_, filterStatus := parseModelStatusFilter(status)
 	_, filterSync := parseModelSyncFilter(syncOfficial)
 	if !filterStatus && !filterSync && (vendor == "" || vendor == "0") {
-		configured, err := GetConfiguredModelChannels()
+		configured, err := GetConfiguredModelChannels(tenantCtx)
 		if err != nil {
 			return nil, 0, err
 		}
 		var exactNames []string
-		if err := DB.Model(&Model{}).Where("name_rule = ?", NameRuleExact).Pluck("model_name", &exactNames).Error; err != nil {
+		if err := DB.WithContext(tenantCtx).Model(&Model{}).Where("name_rule = ?", NameRuleExact).Pluck("model_name", &exactNames).Error; err != nil {
 			return nil, 0, err
 		}
 		for _, name := range exactNames {
@@ -233,8 +236,8 @@ func SearchModelsWithChannels(keyword, vendor, status, syncOfficial string, offs
 	return records[offset:end], int64(total), nil
 }
 
-func (mi *Model) Insert() error {
-	return metadataTransaction(func(tx *gorm.DB) error {
+func (mi *Model) Insert(tenantCtx context.Context) error {
+	return metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		if err := validateModelVendor(tx, mi.VendorID); err != nil {
 			return err
 		}
@@ -249,17 +252,17 @@ func (mi *Model) Insert() error {
 	})
 }
 
-func IsModelNameDuplicated(id int, name string) (bool, error) {
+func IsModelNameDuplicated(tenantCtx context.Context, id int, name string) (bool, error) {
 	if name == "" {
 		return false, nil
 	}
 	var cnt int64
-	err := DB.Model(&Model{}).Where("model_name = ? AND id <> ?", name, id).Count(&cnt).Error
+	err := DB.WithContext(tenantCtx).Model(&Model{}).Where("model_name = ? AND id <> ?", name, id).Count(&cnt).Error
 	return cnt > 0, err
 }
 
-func (mi *Model) Update() error {
-	return metadataTransaction(func(tx *gorm.DB) error {
+func (mi *Model) Update(tenantCtx context.Context) error {
+	return metadataTransaction(tenantCtx, func(tx *gorm.DB) error {
 		if err := validateModelVendor(tx, mi.VendorID); err != nil {
 			return err
 		}
@@ -269,8 +272,8 @@ func (mi *Model) Update() error {
 	})
 }
 
-func (mi *Model) Delete() error {
-	_, err := DeleteModelMetadata([]int{mi.Id}, false, false)
+func (mi *Model) Delete(tenantCtx context.Context) error {
+	_, err := DeleteModelMetadata(tenantCtx, []int{mi.Id}, false, false)
 	return err
 }
 
@@ -282,7 +285,7 @@ type ModelDeleteResult struct {
 // DeleteModelMetadata optionally removes exact model names from every channel.
 // Channel removal requires exact-match metadata records. Pricing removal
 // clears the selected names without expanding metadata matching rules.
-func DeleteModelMetadata(ids []int, removeFromChannels, removePricing bool) (ModelDeleteResult, error) {
+func DeleteModelMetadata(tenantCtx context.Context, ids []int, removeFromChannels, removePricing bool) (ModelDeleteResult, error) {
 	result := ModelDeleteResult{}
 	if len(ids) == 0 || len(ids) > 1000 {
 		return result, errors.New("select between 1 and 1000 models")
@@ -353,9 +356,9 @@ func DeleteModelMetadata(ids []int, removeFromChannels, removePricing bool) (Mod
 		// Use the pricing mutation path so both option persistence and runtime
 		// publication stay serialized with ordinary pricing saves. All database
 		// writes share one transaction; runtime prices publish only after commit.
-		metadataMutationMu.Lock()
-		defer metadataMutationMu.Unlock()
-		err = mutateModelPricingOptions(func(tx *gorm.DB, values map[string]map[string]any) error {
+		TenantState(tenantCtx).metadataMutationMu.Lock()
+		defer TenantState(tenantCtx).metadataMutationMu.Unlock()
+		err = mutateModelPricingOptions(tenantCtx, func(tx *gorm.DB, values map[string]map[string]any) error {
 			if err := lockMetadataMutation(tx); err != nil {
 				return err
 			}
@@ -370,24 +373,24 @@ func DeleteModelMetadata(ids []int, removeFromChannels, removePricing bool) (Mod
 			return nil
 		})
 	} else {
-		err = metadataTransaction(deleteRecords)
+		err = metadataTransaction(tenantCtx, deleteRecords)
 	}
 	if err != nil {
 		return ModelDeleteResult{}, err
 	}
 	if result.UpdatedChannels > 0 {
-		InitChannelCache()
+		InitChannelCache(tenantCtx)
 	}
-	RefreshPricing()
+	RefreshPricing(tenantCtx)
 	return result, nil
 }
 
-func GetVendorModelCounts() (map[int64]int64, error) {
+func GetVendorModelCounts(tenantCtx context.Context) (map[int64]int64, error) {
 	var stats []struct {
 		VendorID int64
 		Count    int64
 	}
-	if err := DB.Model(&Model{}).
+	if err := DB.WithContext(tenantCtx).Model(&Model{}).
 		Select("vendor_id as vendor_id, count(*) as count").
 		Group("vendor_id").
 		Scan(&stats).Error; err != nil {
@@ -400,8 +403,8 @@ func GetVendorModelCounts() (map[int64]int64, error) {
 	return m, nil
 }
 
-func GetAllModels(offset int, limit int) ([]*Model, error) {
-	models, _, err := SearchModels("", "", "", "", offset, limit)
+func GetAllModels(tenantCtx context.Context, offset int, limit int) ([]*Model, error) {
+	models, _, err := SearchModels(tenantCtx, "", "", "", "", offset, limit)
 	return models, err
 }
 
@@ -411,9 +414,9 @@ type ModelConnection struct {
 	ChannelName string `json:"channel_name"`
 }
 
-func GetModelConnections() ([]ModelConnection, error) {
+func GetModelConnections(tenantCtx context.Context) ([]ModelConnection, error) {
 	var connections []ModelConnection
-	err := DB.Table("abilities").
+	err := DB.WithContext(tenantCtx).Table("abilities").
 		Select("abilities.*, channels.type as channel_type, channels.name as channel_name").
 		Joins("JOIN channels ON abilities.channel_id = channels.id").
 		Where("abilities.enabled = ? AND channels.status = ?", true, common.ChannelStatusEnabled).
@@ -439,7 +442,7 @@ func normalizeLookupValues(values []string) []string {
 	return normalized
 }
 
-func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (map[string]int, error) {
+func GetPreferredModelOwnerChannelTypes(tenantCtx context.Context, modelNames []string, groups []string) (map[string]int, error) {
 	result := make(map[string]int)
 	modelNames = normalizeLookupValues(modelNames)
 	if len(modelNames) == 0 {
@@ -452,7 +455,7 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	}
 	var rows []row
 
-	query := DB.Table("abilities").
+	query := DB.WithContext(tenantCtx).Table("abilities").
 		Select("abilities.model as model, channels.type as channel_type").
 		Joins("JOIN channels ON abilities.channel_id = channels.id").
 		Where("abilities.model IN ? AND abilities.enabled = ? AND channels.status = ?", modelNames, true, common.ChannelStatusEnabled).
@@ -478,9 +481,9 @@ func GetPreferredModelOwnerChannelTypes(modelNames []string, groups []string) (m
 	return result, nil
 }
 
-func SearchModels(keyword string, vendor string, status string, syncOfficial string, offset int, limit int) ([]*Model, int64, error) {
+func SearchModels(tenantCtx context.Context, keyword string, vendor string, status string, syncOfficial string, offset int, limit int) ([]*Model, int64, error) {
 	var models []*Model
-	db := DB.Model(&Model{})
+	db := DB.WithContext(tenantCtx).Model(&Model{})
 	if keyword != "" {
 		like := "%" + keyword + "%"
 		db = db.Where("model_name LIKE ? OR description LIKE ? OR tags LIKE ?", like, like, like)

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -49,7 +50,7 @@ func TestSecurityAccountDeletionRequiresScopedProof(t *testing.T) {
 			case "expired":
 				require.NoError(t, model.DB.Model(&model.AuthFlow{}).Where("purpose = ?", model.AuthFlowPurposeSecurityProof).Update("expires_at", time.Now().Add(-time.Minute)).Error)
 			case "consumed":
-				_, err := service.ConsumeOperationProof(proof, identity, operation)
+				_, err := service.ConsumeOperationProof(testtenant.Context(), proof, identity, operation)
 				require.NoError(t, err)
 			case "other session", "other account":
 				userID := user.Id
@@ -58,23 +59,23 @@ func TestSecurityAccountDeletionRequiresScopedProof(t *testing.T) {
 					require.NoError(t, model.DB.Create(other).Error)
 					userID = other.Id
 				}
-				bundle, err := service.CreateLoginSession(userID, "password", "127.0.0.1", scenario)
+				bundle, err := service.CreateLoginSession(testtenant.Context(), userID, "password", "127.0.0.1", scenario)
 				require.NoError(t, err)
-				identity, err = service.ParseAccessToken(bundle.AccessToken)
+				identity, err = service.ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 				require.NoError(t, err)
 			case "password disabled":
-				previous := common.PasswordLoginEnabled
-				common.PasswordLoginEnabled = false
-				t.Cleanup(func() { common.PasswordLoginEnabled = previous })
+				previous := common.TenantState(testtenant.Context()).PasswordLoginEnabled
+				common.TenantState(testtenant.Context()).PasswordLoginEnabled = false
+				t.Cleanup(func() { common.TenantState(testtenant.Context()).PasswordLoginEnabled = previous })
 			case "factor added":
 				require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
 			}
 			response := securityEnrollmentRequest("DELETE", "/api/user/self", "", proof, identity, DeleteSelf)
 			assert.Equal(t, http.StatusForbidden, response.Code, response.Body.String())
-			stored, err := model.GetUserById(user.Id, false)
+			stored, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			assert.Equal(t, identity.UserAuthVersion, stored.AuthVersion)
-			_, _, err = service.ValidateLoginSession(originalIdentity)
+			_, _, err = service.ValidateLoginSession(testtenant.Context(), originalIdentity)
 			assert.NoError(t, err)
 			var audit model.AuditLog
 			require.NoError(t, model.LOG_DB.Where("action = ?", "user.account_delete").Last(&audit).Error)
@@ -94,8 +95,8 @@ func TestSecurityAccountDeletionAcceptsEitherFactorAndRevokesSessions(t *testing
 			user, identity := setupSecurityEnrollmentTest(t)
 			if method == "oauth" {
 				require.NoError(t, model.DB.Model(user).Updates(map[string]any{"password": "", "github_id": "linked-user"}).Error)
-				oauth.Register("account-delete-oauth", &enrollmentOAuthProvider{externalID: "linked-user"})
-				t.Cleanup(func() { oauth.Unregister("account-delete-oauth") })
+				oauth.Register(testtenant.Context(), "account-delete-oauth", &enrollmentOAuthProvider{externalID: "linked-user"})
+				t.Cleanup(func() { oauth.Unregister(testtenant.Context(), "account-delete-oauth") })
 			}
 			if method == "2fa" || method == "passkey" {
 				newSecurityLoginPasskey(t, user.Id)
@@ -104,17 +105,17 @@ func TestSecurityAccountDeletionAcceptsEitherFactorAndRevokesSessions(t *testing
 					locked := time.Now().Add(time.Minute)
 					factor.LockedUntil = &locked
 				} else {
-					system_setting.GetPasskeySettings().Enabled = false
+					system_setting.GetPasskeySettings(testtenant.Context()).Enabled = false
 				}
 				require.NoError(t, model.DB.Create(factor).Error)
 			}
-			requirements, err := service.GetVerificationRequirements(identity, service.VerificationScopeAccountDelete)
+			requirements, err := service.GetVerificationRequirements(testtenant.Context(), identity, service.VerificationScopeAccountDelete)
 			require.NoError(t, err)
-			_, err = service.RequireVerificationMethod(identity, service.VerificationScopeAccountDelete, method)
+			_, err = service.RequireVerificationMethod(testtenant.Context(), identity, service.VerificationScopeAccountDelete, method)
 			require.NoError(t, err)
 			if method == "2fa" || method == "passkey" {
 				assert.Len(t, requirements.Methods, 2)
-				_, err = service.RequireVerificationMethod(identity, service.VerificationScopeAccountDelete, "password")
+				_, err = service.RequireVerificationMethod(testtenant.Context(), identity, service.VerificationScopeAccountDelete, "password")
 				assert.ErrorIs(t, err, service.ErrProofMethod)
 			}
 			proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountDelete}, method)
@@ -124,13 +125,13 @@ func TestSecurityAccountDeletionAcceptsEitherFactorAndRevokesSessions(t *testing
 					input.Code, err = totp.GenerateCode("JBSWY3DPEHPK3PXP", time.Now())
 					require.NoError(t, err)
 				}
-				verified, err := service.VerifySecurityInput(identity, input)
+				verified, err := service.VerifySecurityInput(testtenant.Context(), identity, input)
 				require.NoError(t, err)
 				proof = verified.ProofToken
 			}
-			otherSession, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "second-session")
+			otherSession, err := service.CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "second-session")
 			require.NoError(t, err)
-			require.NoError(t, model.UpdateUserAccessToken(user.Id, "account-delete-access-token"))
+			require.NoError(t, model.UpdateUserAccessToken(testtenant.Context(), user.Id, "account-delete-access-token"))
 			response := securityEnrollmentRequest("DELETE", "/api/user/self", "", proof, identity, DeleteSelf)
 			var result securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
@@ -141,18 +142,18 @@ func TestSecurityAccountDeletionAcceptsEitherFactorAndRevokesSessions(t *testing
 			require.NoError(t, model.DB.Unscoped().First(&deleted, user.Id).Error)
 			assert.True(t, deleted.DeletedAt.Valid)
 			assert.Equal(t, user.AuthVersion+1, deleted.AuthVersion)
-			_, _, err = service.ValidateLoginSession(identity)
+			_, _, err = service.ValidateLoginSession(testtenant.Context(), identity)
 			assert.Error(t, err)
-			otherIdentity, err := service.ParseAccessToken(otherSession.AccessToken)
+			otherIdentity, err := service.ParseAccessToken(testtenant.Context(), otherSession.AccessToken)
 			require.NoError(t, err)
-			_, _, err = service.ValidateLoginSession(otherIdentity)
+			_, _, err = service.ValidateLoginSession(testtenant.Context(), otherIdentity)
 			assert.Error(t, err)
-			_, _, err = service.RefreshLoginSession(otherSession.RefreshToken, otherIdentity.SessionID, "127.0.0.1", "second-session")
+			_, _, err = service.RefreshLoginSession(testtenant.Context(), otherSession.RefreshToken, otherIdentity.SessionID, "127.0.0.1", "second-session")
 			assert.Error(t, err)
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.Zero(t, count)
-			tokenUser, err := model.ValidateAccessToken("account-delete-access-token")
+			tokenUser, err := model.ValidateAccessToken(testtenant.Context(), "account-delete-access-token")
 			require.NoError(t, err)
 			assert.Nil(t, tokenUser)
 			var audit model.AuditLog
@@ -169,18 +170,18 @@ func TestSecurityAccountDeletionRechecksTransactionAndConsumesFailedProof(t *tes
 			operation := service.VerificationOperation{Scope: service.VerificationScopeAccountDelete}
 			proof := issueSecurityEnrollmentProof(t, identity, operation, "password")
 			if scenario != "write failure" {
-				_, err := service.ConsumeOperationProof(proof, identity, operation)
+				_, err := service.ConsumeOperationProof(testtenant.Context(), proof, identity, operation)
 				require.NoError(t, err)
 			}
 			switch scenario {
 			case "revoked session":
-				_, err := model.RevokeAllUserSessions(user.Id, "test")
+				_, err := model.RevokeAllUserSessions(testtenant.Context(), user.Id, "test")
 				require.NoError(t, err)
 			case "auth version":
 				require.NoError(t, model.DB.Model(user).Update("auth_version", user.AuthVersion+1).Error)
 			case "root":
 				require.NoError(t, model.DB.Model(user).Update("role", common.RoleRootUser).Error)
-				_, err := service.GetVerificationRequirements(identity, service.VerificationScopeAccountDelete)
+				_, err := service.GetVerificationRequirements(testtenant.Context(), identity, service.VerificationScopeAccountDelete)
 				assert.ErrorIs(t, err, service.ErrVerificationForbidden)
 			case "write failure":
 				require.NoError(t, model.DB.Callback().Delete().Before("gorm:delete").Register("account-delete-failure", func(tx *gorm.DB) {
@@ -195,12 +196,12 @@ func TestSecurityAccountDeletionRechecksTransactionAndConsumesFailedProof(t *tes
 				assert.Contains(t, response.Body.String(), "SECURITY_PROOF_CONSUMED")
 			}
 			if scenario != "write failure" {
-				assert.Error(t, model.DeleteUserForSession(identity))
+				assert.Error(t, model.DeleteUserForSession(testtenant.Context(), identity))
 			}
-			_, err := model.GetUserById(user.Id, false)
+			_, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			if scenario == "write failure" {
-				_, _, err = service.ValidateLoginSession(identity)
+				_, _, err = service.ValidateLoginSession(testtenant.Context(), identity)
 				assert.NoError(t, err, "failed deletion must roll back the account version and preserve sessions")
 			}
 		})
@@ -247,12 +248,12 @@ func newSecurityMailbox(t *testing.T) *securityMailbox {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	mailbox := &securityMailbox{mail: map[string][]string{}}
-	previousServer, previousPort := common.SMTPServer, common.SMTPPort
-	previousAccount, previousFrom, previousToken := common.SMTPAccount, common.SMTPFrom, common.SMTPToken
-	previousSSL, previousTLS := common.SMTPSSLEnabled, common.SMTPStartTLSEnabled
-	common.SMTPServer, common.SMTPPort = "127.0.0.1", listener.Addr().(*net.TCPAddr).Port
-	common.SMTPAccount, common.SMTPFrom, common.SMTPToken = "", "sender@example.com", ""
-	common.SMTPSSLEnabled, common.SMTPStartTLSEnabled = false, false
+	previousServer, previousPort := common.TenantState(testtenant.Context()).SMTPServer, common.TenantState(testtenant.Context()).SMTPPort
+	previousAccount, previousFrom, previousToken := common.TenantState(testtenant.Context()).SMTPAccount, common.TenantState(testtenant.Context()).SMTPFrom, common.TenantState(testtenant.Context()).SMTPToken
+	previousSSL, previousTLS := common.TenantState(testtenant.Context()).SMTPSSLEnabled, common.TenantState(testtenant.Context()).SMTPStartTLSEnabled
+	common.TenantState(testtenant.Context()).SMTPServer, common.TenantState(testtenant.Context()).SMTPPort = "127.0.0.1", listener.Addr().(*net.TCPAddr).Port
+	common.TenantState(testtenant.Context()).SMTPAccount, common.TenantState(testtenant.Context()).SMTPFrom, common.TenantState(testtenant.Context()).SMTPToken = "", "sender@example.com", ""
+	common.TenantState(testtenant.Context()).SMTPSSLEnabled, common.TenantState(testtenant.Context()).SMTPStartTLSEnabled = false, false
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -267,9 +268,9 @@ func newSecurityMailbox(t *testing.T) *securityMailbox {
 	t.Cleanup(func() {
 		_ = listener.Close()
 		<-done
-		common.SMTPServer, common.SMTPPort = previousServer, previousPort
-		common.SMTPAccount, common.SMTPFrom, common.SMTPToken = previousAccount, previousFrom, previousToken
-		common.SMTPSSLEnabled, common.SMTPStartTLSEnabled = previousSSL, previousTLS
+		common.TenantState(testtenant.Context()).SMTPServer, common.TenantState(testtenant.Context()).SMTPPort = previousServer, previousPort
+		common.TenantState(testtenant.Context()).SMTPAccount, common.TenantState(testtenant.Context()).SMTPFrom, common.TenantState(testtenant.Context()).SMTPToken = previousAccount, previousFrom, previousToken
+		common.TenantState(testtenant.Context()).SMTPSSLEnabled, common.TenantState(testtenant.Context()).SMTPStartTLSEnabled = previousSSL, previousTLS
 	})
 	return mailbox
 }
@@ -352,14 +353,14 @@ func TestSecurityAccountRequiresProofBeforeMutation(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
-			oauth.Register("security-account-test", &authFlowTestOAuthProvider{})
-			t.Cleanup(func() { oauth.Unregister("security-account-test") })
+			oauth.Register(testtenant.Context(), "security-account-test", &authFlowTestOAuthProvider{})
+			t.Cleanup(func() { oauth.Unregister(testtenant.Context(), "security-account-test") })
 			response := securityEnrollmentRequest(http.MethodPost, test.path, test.body, "", identity, test.handler)
 			var result securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			assert.Equal(t, http.StatusForbidden, response.Code)
 			assert.Equal(t, "SECURITY_PROOF_REQUIRED", result.Code)
-			stored, err := model.GetUserById(user.Id, true)
+			stored, err := model.GetUserById(testtenant.Context(), user.Id, true)
 			require.NoError(t, err)
 			assert.True(t, common.ValidatePasswordAndHash("enrollment-password", stored.Password))
 			var flows int64
@@ -387,7 +388,7 @@ func TestSecurityAccountPasswordRequiresCurrentPassword(t *testing.T) {
 			var result securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			assert.Equal(t, test.success, result.Success, response.Body.String())
-			stored, err := model.GetUserById(user.Id, true)
+			stored, err := model.GetUserById(testtenant.Context(), user.Id, true)
 			require.NoError(t, err)
 			if test.success {
 				assert.True(t, common.ValidatePasswordAndHash("password123", stored.Password))
@@ -420,7 +421,7 @@ func TestSecurityAccountProfileReadsPasswordStatusInOneQuery(t *testing.T) {
 			require.NoError(t, model.DB.Callback().Query().Before("gorm:query").Register("profile_query_count", func(tx *gorm.DB) {
 				queries++
 			}))
-			profile, err := model.GetSelfUserById(user.Id)
+			profile, err := model.GetSelfUserById(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			assert.Equal(t, 1, queries)
 			assert.Equal(t, hasPassword, profile.HasPassword)
@@ -443,9 +444,9 @@ func TestSecurityAccountProfileReadsPasswordStatusInOneQuery(t *testing.T) {
 			assert.NotContains(t, result.Data, "access_token")
 			assert.NotContains(t, result.Data, "remark")
 
-			bundle, err := service.CreateLoginSession(user.Id, "profile-test", "127.0.0.1", "profile-test")
+			bundle, err := service.CreateLoginSession(testtenant.Context(), user.Id, "profile-test", "127.0.0.1", "profile-test")
 			require.NoError(t, err)
-			_, refreshed, err := service.RefreshLoginSession(bundle.RefreshToken, "", "127.0.0.1", "profile-test")
+			_, refreshed, err := service.RefreshLoginSession(testtenant.Context(), bundle.RefreshToken, "", "127.0.0.1", "profile-test")
 			require.NoError(t, err)
 			assert.Equal(t, hasPassword, refreshed.HasPassword)
 			assert.Empty(t, refreshed.Password)
@@ -460,7 +461,7 @@ func TestSecurityAccountProfileUpdateDoesNotRequireProof(t *testing.T) {
 	var result securityEnrollmentResponse
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
-	stored, err := model.GetUserById(user.Id, true)
+	stored, err := model.GetUserById(testtenant.Context(), user.Id, true)
 	require.NoError(t, err)
 	assert.Equal(t, "Updated", stored.DisplayName)
 	assert.Equal(t, user.Password, stored.Password)
@@ -468,9 +469,9 @@ func TestSecurityAccountProfileUpdateDoesNotRequireProof(t *testing.T) {
 
 func TestSecurityAccountLongUnicodePasswordAndSessionRotation(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
-	other, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "other-device")
+	other, err := service.CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "other-device")
 	require.NoError(t, err)
-	otherIdentity, err := service.ParseAccessToken(other.AccessToken)
+	otherIdentity, err := service.ParseAccessToken(testtenant.Context(), other.AccessToken)
 	require.NoError(t, err)
 	password := strings.Repeat("安全🔒 ", 24)
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopePasswordChange}, service.VerificationMethodPassword)
@@ -487,25 +488,27 @@ func TestSecurityAccountLongUnicodePasswordAndSessionRotation(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
 	assert.True(t, result.Data.HasPassword)
-	currentIdentity, err := service.ParseAccessToken(result.Data.AccessToken)
+	currentIdentity, err := service.ParseAccessToken(testtenant.Context(), result.Data.AccessToken)
 	require.NoError(t, err)
-	_, _, err = service.ValidateLoginSession(currentIdentity)
+	_, _, err = service.ValidateLoginSession(testtenant.Context(), currentIdentity)
 	require.NoError(t, err)
-	_, _, err = service.ValidateLoginSession(otherIdentity)
+	_, _, err = service.ValidateLoginSession(testtenant.Context(), otherIdentity)
 	require.Error(t, err)
 	login := model.User{Username: user.Username, Password: password}
-	require.NoError(t, login.ValidateAndFill())
+	require.NoError(t, login.ValidateAndFill(testtenant.Context()))
 	assert.False(t, common.ValidatePasswordAndHash(strings.TrimSpace(password), login.Password))
 	assert.False(t, common.ValidatePasswordAndHash("enrollment-password", login.Password))
 }
 
 func TestSecurityAccountPasswordPolicyAndHashCompatibility(t *testing.T) {
 	t.Setenv("ACCOUNT_PASSWORD_HASH_ALGORITHM", "argon2id")
+	assert.ErrorIs(t, common.ValidateNewAccountPassword("password123"), common.ErrAccountPasswordCommon)
+	assert.NoError(t, common.ValidateNewAccountPassword("    phrase with whitespace    "))
 	for _, test := range []struct {
 		name, password string
 		valid          bool
 	}{
-		{"common password accepted", "password123", true},
+		{"existing common password can still be verified", "password123", true},
 		{"short", "seven77", false},
 		{"too long", strings.Repeat("界", 129), false},
 		{"long Unicode", strings.Repeat("界🔒 ", 40), true},
@@ -537,12 +540,12 @@ func TestSecurityAccountEncryptedLongPasswordLogin(t *testing.T) {
 	hash, err := common.HashAccountPassword(password)
 	require.NoError(t, err)
 	require.NoError(t, model.DB.Model(user).Update("password", hash).Error)
-	keyID, publicPEM := common.PasswordEncryptionPublicKey()
+	keyID, publicPEM := common.PasswordEncryptionPublicKey(testtenant.Context())
 	if keyID == "" {
 		privatePEM, err := common.GeneratePasswordEncryptionPrivateKey()
 		require.NoError(t, err)
-		require.NoError(t, common.LoadPasswordEncryptionPrivateKey(privatePEM))
-		keyID, publicPEM = common.PasswordEncryptionPublicKey()
+		require.NoError(t, common.LoadPasswordEncryptionPrivateKey(testtenant.Context(), privatePEM))
+		keyID, publicPEM = common.PasswordEncryptionPublicKey(testtenant.Context())
 	}
 	block, _ := pem.Decode([]byte(publicPEM))
 	require.NotNil(t, block)
@@ -572,16 +575,16 @@ func TestSecurityAccountEncryptedLongPasswordLogin(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
 	assert.Contains(t, string(result.Data), `"has_password":true`)
-	proof, err := service.VerifySecurityInput(identity, service.VerificationInput{Method: "password", Scope: service.VerificationScopePasswordChange, PasswordEncrypted: encrypted, EncryptionKeyID: keyID})
+	proof, err := service.VerifySecurityInput(testtenant.Context(), identity, service.VerificationInput{Method: "password", Scope: service.VerificationScopePasswordChange, PasswordEncrypted: encrypted, EncryptionKeyID: keyID})
 	require.NoError(t, err)
 	assert.NotEmpty(t, proof.ProofToken)
 	ciphertext[len(ciphertext)-1] ^= 1
 	parts[3] = base64.StdEncoding.EncodeToString(ciphertext)
 	for _, invalid := range []string{strings.Join(parts, "."), "v2.bad.bad.bad", "v2." + strings.Repeat("a", 4096)} {
-		_, err := common.DecryptPassword(invalid, keyID)
+		_, err := common.DecryptPassword(testtenant.Context(), invalid, keyID)
 		assert.ErrorIs(t, err, common.ErrPasswordEncryptionInvalid)
 	}
-	_, err = common.DecryptPassword(encrypted, "wrong-key-id")
+	_, err = common.DecryptPassword(testtenant.Context(), encrypted, "wrong-key-id")
 	assert.ErrorIs(t, err, common.ErrPasswordEncryptionInvalid)
 }
 
@@ -603,15 +606,15 @@ func TestSecurityAccountEmailConfirmationAndAudit(t *testing.T) {
 			assert.Equal(t, "new@example.com", flow.Email)
 			assert.Equal(t, scenario == "replace without mfa", flow.OldEmailRequired)
 			newCode, oldCode := mailbox.code(t, flow.Email), ""
-			_, state, err := model.GetEmailBinding(identity, flow.FlowToken)
+			_, state, err := model.GetEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 			require.NoError(t, err)
 			assert.NotEqual(t, newCode, state.NewCodeHash)
 			assert.True(t, common.ValidatePasswordAndHash(newCode, state.NewCodeHash))
 			if flow.OldEmailRequired {
 				oldCode = mailbox.code(t, previous)
-				_, err := service.FinishEmailBinding(identity, flow.FlowToken, newCode, "")
+				_, err := service.FinishEmailBinding(testtenant.Context(), identity, flow.FlowToken, newCode, "")
 				assert.ErrorIs(t, err, model.ErrEmailBindingCodeInvalid)
-				stored, err := model.GetUserById(user.Id, false)
+				stored, err := model.GetUserById(testtenant.Context(), user.Id, false)
 				require.NoError(t, err)
 				assert.Equal(t, previous, stored.Email)
 			}
@@ -621,10 +624,10 @@ func TestSecurityAccountEmailConfirmationAndAudit(t *testing.T) {
 			var result securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			require.True(t, result.Success, response.Body.String())
-			stored, err := model.GetUserById(user.Id, false)
+			stored, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			assert.Equal(t, flow.Email, stored.Email)
-			_, err = service.FinishEmailBinding(identity, flow.FlowToken, newCode, oldCode)
+			_, err = service.FinishEmailBinding(testtenant.Context(), identity, flow.FlowToken, newCode, oldCode)
 			assert.ErrorIs(t, err, model.ErrAuthFlowConsumed)
 			legacy := securityEnrollmentRequest("POST", "/api/oauth/email/bind", `{"email":"other@example.com","code":"123456"}`, "", identity, EmailBind)
 			assert.Contains(t, legacy.Body.String(), `"success":false`)
@@ -645,34 +648,34 @@ func TestSecurityAccountEmailResendAndAttemptLimit(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
 	mailbox := newSecurityMailbox(t)
 	flow := startSecurityEmailBinding(t, identity, "new@example.com", service.VerificationMethodPassword)
-	_, err := service.ResendAccountEmailBinding(identity, flow.FlowToken)
+	_, err := service.ResendAccountEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 	assert.ErrorIs(t, err, model.ErrEmailBindingResendWait)
-	_, err = service.FinishEmailBinding(identity, flow.FlowToken, "invalid", "")
+	_, err = service.FinishEmailBinding(testtenant.Context(), identity, flow.FlowToken, "invalid", "")
 	assert.ErrorIs(t, err, model.ErrEmailBindingCodeInvalid)
-	stored, state, err := model.GetEmailBinding(identity, flow.FlowToken)
+	stored, state, err := model.GetEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 	require.NoError(t, err)
 	oldHash := state.NewCodeHash
 	state.ResendAt = time.Now().Add(-time.Second).Unix()
 	payload, err := common.Marshal(state)
 	require.NoError(t, err)
 	require.NoError(t, model.DB.Model(stored).Update("payload", string(payload)).Error)
-	replacement, err := service.ResendAccountEmailBinding(identity, flow.FlowToken)
+	replacement, err := service.ResendAccountEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 	require.NoError(t, err)
 	assert.Equal(t, flow.ExpiresAt, replacement.ExpiresAt)
-	_, state, err = model.GetEmailBinding(identity, flow.FlowToken)
+	_, state, err = model.GetEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 	require.NoError(t, err)
 	assert.Equal(t, 1, state.FailedAttempts)
 	assert.NotEqual(t, oldHash, state.NewCodeHash)
 	assert.True(t, common.ValidatePasswordAndHash(mailbox.code(t, flow.Email), state.NewCodeHash))
 	for attempt := 2; attempt <= model.EmailBindingMaxAttempts; attempt++ {
-		_, err = service.FinishEmailBinding(identity, flow.FlowToken, "invalid", "")
+		_, err = service.FinishEmailBinding(testtenant.Context(), identity, flow.FlowToken, "invalid", "")
 		if attempt < model.EmailBindingMaxAttempts {
 			assert.ErrorIs(t, err, model.ErrEmailBindingCodeInvalid)
 		} else {
 			assert.ErrorIs(t, err, model.ErrEmailBindingLocked)
 		}
 	}
-	_, err = service.FinishEmailBinding(identity, flow.FlowToken, mailbox.code(t, flow.Email), "")
+	_, err = service.FinishEmailBinding(testtenant.Context(), identity, flow.FlowToken, mailbox.code(t, flow.Email), "")
 	assert.ErrorIs(t, err, model.ErrEmailBindingLocked)
 }
 
@@ -681,10 +684,10 @@ func TestSecurityAccountEmailConcurrentClaimsHaveOneOwner(t *testing.T) {
 	mailbox := newSecurityMailbox(t)
 	other := &model.User{Username: "other-user", AffCode: "other-account", Group: "default", Password: user.Password, Status: common.UserStatusEnabled, Role: common.RoleCommonUser, AuthVersion: 1}
 	require.NoError(t, model.DB.Create(other).Error)
-	require.NoError(t, model.PublishUserAuthCache(other.Id))
-	bundle, err := service.CreateLoginSession(other.Id, "password", "127.0.0.1", "other-user")
+	require.NoError(t, model.PublishUserAuthCache(testtenant.Context(), other.Id))
+	bundle, err := service.CreateLoginSession(testtenant.Context(), other.Id, "password", "127.0.0.1", "other-user")
 	require.NoError(t, err)
-	secondIdentity, err := service.ParseAccessToken(bundle.AccessToken)
+	secondIdentity, err := service.ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
 	start, results := make(chan struct{}), make(chan error, 2)
 	for _, identity := range []service.AuthIdentity{firstIdentity, secondIdentity} {
@@ -692,7 +695,7 @@ func TestSecurityAccountEmailConcurrentClaimsHaveOneOwner(t *testing.T) {
 		code := mailbox.code(t, flow.Email)
 		go func(identity service.AuthIdentity, token, code string) {
 			<-start
-			_, err := service.FinishEmailBinding(identity, token, code, "")
+			_, err := service.FinishEmailBinding(testtenant.Context(), identity, token, code, "")
 			results <- err
 		}(identity, flow.FlowToken, code)
 	}
@@ -711,7 +714,7 @@ func TestSecurityAccountEmailRejectsChangedAuthorization(t *testing.T) {
 			mailbox := newSecurityMailbox(t)
 			flow := startSecurityEmailBinding(t, identity, "new@example.com", service.VerificationMethodPassword)
 			code := mailbox.code(t, flow.Email)
-			stored, _, err := model.GetEmailBinding(identity, flow.FlowToken)
+			stored, _, err := model.GetEmailBinding(testtenant.Context(), identity, flow.FlowToken)
 			require.NoError(t, err)
 			switch scenario {
 			case "other session":
@@ -723,7 +726,7 @@ func TestSecurityAccountEmailRejectsChangedAuthorization(t *testing.T) {
 			case "mfa enabled":
 				require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
 			case "notification failure":
-				common.SMTPServer = ""
+				common.TenantState(testtenant.Context()).SMTPServer = ""
 			}
 			request, err := common.Marshal(map[string]string{"flow_token": flow.FlowToken, "new_code": code})
 			require.NoError(t, err)
@@ -734,7 +737,7 @@ func TestSecurityAccountEmailRejectsChangedAuthorization(t *testing.T) {
 			if scenario == "notification failure" {
 				assert.Contains(t, string(result.Data), `"notification_warning":true`)
 			}
-			current, err := model.GetUserById(user.Id, false)
+			current, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			assert.Equal(t, scenario == "notification failure", current.Email == flow.Email)
 		})
@@ -745,9 +748,12 @@ func TestSecurityAccountOAuthBindingRejectsInvalidFlow(t *testing.T) {
 	for _, scenario := range []string{"success and replay", "other session", "wrong provider", "expired", "old flow", "mfa enabled"} {
 		t.Run(scenario, func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
-			oauth.Register("account-oauth", &enrollmentOAuthProvider{externalID: "new-binding"})
-			oauth.Register("other-oauth", &enrollmentOAuthProvider{externalID: "wrong-binding"})
-			t.Cleanup(func() { oauth.Unregister("account-oauth"); oauth.Unregister("other-oauth") })
+			oauth.Register(testtenant.Context(), "account-oauth", &enrollmentOAuthProvider{externalID: "new-binding"})
+			oauth.Register(testtenant.Context(), "other-oauth", &enrollmentOAuthProvider{externalID: "wrong-binding"})
+			t.Cleanup(func() {
+				oauth.Unregister(testtenant.Context(), "account-oauth")
+				oauth.Unregister(testtenant.Context(), "other-oauth")
+			})
 			operation := service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: []byte(`{"provider":"account-oauth"}`)}
 			proof := issueSecurityEnrollmentProof(t, identity, operation, service.VerificationMethodPassword)
 			response := securityEnrollmentRequest("POST", "/api/oauth/state", `{"provider":"account-oauth","intent":"bind"}`, proof, identity, GenerateOAuthCode)
@@ -758,7 +764,7 @@ func TestSecurityAccountOAuthBindingRejectsInvalidFlow(t *testing.T) {
 				FlowToken string `json:"flow_token"`
 			}
 			require.NoError(t, common.Unmarshal(result.Data, &started))
-			flow, err := model.GetAuthFlow(started.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+			flow, err := model.GetAuthFlow(testtenant.Context(), started.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
 			require.NoError(t, err)
 			provider := "account-oauth"
 			switch scenario {
@@ -778,7 +784,7 @@ func TestSecurityAccountOAuthBindingRejectsInvalidFlow(t *testing.T) {
 			response = securityEnrollmentRequest("GET", path, "", "", identity, handler)
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			assert.Equal(t, scenario == "success and replay", result.Success, response.Body.String())
-			current, err := model.GetUserById(user.Id, false)
+			current, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			assert.Equal(t, scenario == "success and replay", current.GitHubId == "new-binding")
 			if result.Success {
@@ -805,13 +811,13 @@ func TestSecurityAccountFirstPasswordRace(t *testing.T) {
 	for _, password := range []string{"first-password!42", "second-password!42"} {
 		go func(password string) {
 			<-start
-			results <- model.ChangeUserPassword(identity, &model.User{Id: user.Id, Password: password}, true)
+			results <- model.ChangeUserPassword(testtenant.Context(), identity, &model.User{Id: user.Id, Password: password}, true)
 		}(password)
 	}
 	close(start)
 	first, second := <-results, <-results
 	assert.NotEqual(t, first == nil, second == nil, "only one concurrent first password may succeed: %v / %v", first, second)
-	stored, err := model.GetUserById(user.Id, true)
+	stored, err := model.GetUserById(testtenant.Context(), user.Id, true)
 	require.NoError(t, err)
 	assert.True(t, common.ValidatePasswordAndHash("first-password!42", stored.Password) || common.ValidatePasswordAndHash("second-password!42", stored.Password))
 }
@@ -820,21 +826,21 @@ func TestSecurityAccountUnbindPreservesUsableLoginMethod(t *testing.T) {
 	for _, scenario := range []string{"password", "passkey", "email only", "twofa only", "disabled password", "disabled passkey"} {
 		t.Run(scenario, func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
-			previousPasswordEnabled := common.PasswordLoginEnabled
-			t.Cleanup(func() { common.PasswordLoginEnabled = previousPasswordEnabled })
-			common.PasswordLoginEnabled = scenario != "disabled password"
+			previousPasswordEnabled := common.TenantState(testtenant.Context()).PasswordLoginEnabled
+			t.Cleanup(func() { common.TenantState(testtenant.Context()).PasswordLoginEnabled = previousPasswordEnabled })
+			common.TenantState(testtenant.Context()).PasswordLoginEnabled = scenario != "disabled password"
 			require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: 31, ProviderUserId: "linked-subject"}).Error)
 			if scenario != "password" && scenario != "disabled password" {
 				require.NoError(t, model.DB.Model(user).Updates(map[string]any{"password": "", "email": "verified@example.com"}).Error)
 			}
 			if scenario == "passkey" || scenario == "disabled passkey" {
 				require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id, CredentialID: "existing-key", PublicKey: "public-key"}).Error)
-				system_setting.GetPasskeySettings().Enabled = scenario == "passkey"
+				system_setting.GetPasskeySettings(testtenant.Context()).Enabled = scenario == "passkey"
 			}
 			if scenario == "twofa only" {
 				require.NoError(t, model.DB.Create(&model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}).Error)
 			}
-			err := service.UnbindAccountOAuth(identity, 31)
+			err := service.UnbindAccountOAuth(testtenant.Context(), identity, 31)
 			if scenario == "password" || scenario == "passkey" {
 				require.NoError(t, err)
 			} else {

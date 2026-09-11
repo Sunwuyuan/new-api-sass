@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"crypto/aes"
 	"crypto/cipher"
@@ -47,7 +49,7 @@ func GeneratePasswordEncryptionPrivateKey() (string, error) {
 
 // LoadPasswordEncryptionPrivateKey validates a persisted key before replacing
 // the active in-memory key used by request handlers.
-func LoadPasswordEncryptionPrivateKey(privateKeyPEM string) error {
+func LoadPasswordEncryptionPrivateKey(tenantCtx context.Context, privateKeyPEM string) error {
 	block, rest := pem.Decode([]byte(privateKeyPEM))
 	if block == nil || block.Type != "PRIVATE KEY" || strings.TrimSpace(string(rest)) != "" {
 		return errors.New("password encryption key is not valid PKCS#8 PEM")
@@ -79,31 +81,31 @@ func LoadPasswordEncryptionPrivateKey(privateKeyPEM string) error {
 	keyDigest := sha256.Sum256(publicKeyDER)
 	keyID := hex.EncodeToString(keyDigest[:16])
 
-	passwordEncryptionState.Lock()
-	defer passwordEncryptionState.Unlock()
-	passwordEncryptionState.privateKey = privateKey
-	passwordEncryptionState.publicKey = publicKeyPEM
-	passwordEncryptionState.keyID = keyID
+	TenantState(tenantCtx).passwordEncryptionState.Lock()
+	defer TenantState(tenantCtx).passwordEncryptionState.Unlock()
+	TenantState(tenantCtx).passwordEncryptionState.privateKey = privateKey
+	TenantState(tenantCtx).passwordEncryptionState.publicKey = publicKeyPEM
+	TenantState(tenantCtx).passwordEncryptionState.keyID = keyID
 	return nil
 }
 
 // PasswordEncryptionPublicKey returns the active key identifier and SPKI PEM
 // public key exposed to browser clients.
-func PasswordEncryptionPublicKey() (keyID string, publicKeyPEM string) {
-	passwordEncryptionState.RLock()
-	defer passwordEncryptionState.RUnlock()
-	return passwordEncryptionState.keyID, passwordEncryptionState.publicKey
+func PasswordEncryptionPublicKey(tenantCtx context.Context) (keyID string, publicKeyPEM string) {
+	TenantState(tenantCtx).passwordEncryptionState.RLock()
+	defer TenantState(tenantCtx).passwordEncryptionState.RUnlock()
+	return TenantState(tenantCtx).passwordEncryptionState.keyID, TenantState(tenantCtx).passwordEncryptionState.publicKey
 }
 
 // DecryptPassword accepts legacy RSA-OAEP/SHA-256 ciphertext and v2 envelopes.
 // V2 wraps a fresh AES-256 key with RSA-OAEP and encrypts the password with GCM,
 // allowing long Unicode passwords to work with existing 2048-bit server keys.
 // Both formats share one public error for all malformed inputs.
-func DecryptPassword(ciphertextBase64 string, keyID string) (string, error) {
-	passwordEncryptionState.RLock()
-	privateKey := passwordEncryptionState.privateKey
-	activeKeyID := passwordEncryptionState.keyID
-	passwordEncryptionState.RUnlock()
+func DecryptPassword(tenantCtx context.Context, ciphertextBase64 string, keyID string) (string, error) {
+	TenantState(tenantCtx).passwordEncryptionState.RLock()
+	privateKey := TenantState(tenantCtx).passwordEncryptionState.privateKey
+	activeKeyID := TenantState(tenantCtx).passwordEncryptionState.keyID
+	TenantState(tenantCtx).passwordEncryptionState.RUnlock()
 	if privateKey == nil || keyID == "" || keyID != activeKeyID {
 		return "", ErrPasswordEncryptionInvalid
 	}

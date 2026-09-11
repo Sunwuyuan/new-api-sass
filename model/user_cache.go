@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -60,34 +62,34 @@ func userCacheTTLSeconds() int {
 }
 
 // invalidateUserCache clears user cache
-func invalidateUserCache(userId int) error {
+func invalidateUserCache(tenantCtx context.Context, userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return common.RedisDelKey(getUserCacheKey(userId))
+	return common.RedisDelKey(tenantCtx, getUserCacheKey(userId))
 }
 
-func populateUserCache(user User) error {
+func populateUserCache(tenantCtx context.Context, user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return writeUserCache(user.ToBaseUser(), true)
+	return writeUserCache(tenantCtx, user.ToBaseUser(), true)
 }
 
 // updateUserCache refreshes non-quota user cache fields.
 // Quota is maintained by atomic quota delta paths and must not be overwritten
 // by stale user snapshots from profile/settings updates.
-func updateUserCache(user User) error {
+func updateUserCache(tenantCtx context.Context, user User) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	return writeUserCache(user.ToBaseUser(), false)
+	return writeUserCache(tenantCtx, user.ToBaseUser(), false)
 }
 
 // GetUserCache gets complete user cache from hash
-func GetUserCache(userId int) (*UserBase, error) {
+func GetUserCache(tenantCtx context.Context, userId int) (*UserBase, error) {
 	// Try getting from Redis first
-	userCache, err := cacheGetUserBase(userId)
+	userCache, err := cacheGetUserBase(tenantCtx, userId)
 	if err == nil {
 		return userCache, nil
 	}
@@ -95,16 +97,16 @@ func GetUserCache(userId int) (*UserBase, error) {
 	// Redis misses and read failures both fall back to the shared database. A
 	// version fence newer than the database is the one exception: allowing that
 	// snapshot would re-authorize a user while a restrictive update is pending.
-	user, err := GetUserById(userId, false)
+	user, err := GetUserById(tenantCtx, userId, false)
 	if err != nil {
 		return nil, err
 	}
 	if common.RedisEnabled {
-		floor, floorErr := getUserAuthVersionFloor(userId)
+		floor, floorErr := getUserAuthVersionFloor(tenantCtx, userId)
 		if floorErr == nil && floor > user.AuthVersion {
 			return nil, ErrUserAuthCachePending
 		}
-		if err := populateUserCache(*user); err != nil {
+		if err := populateUserCache(tenantCtx, *user); err != nil {
 			if errors.Is(err, ErrUserAuthCachePending) {
 				return nil, err
 			}
@@ -114,20 +116,20 @@ func GetUserCache(userId int) (*UserBase, error) {
 	return user.ToBaseUser(), nil
 }
 
-func cacheGetUserBase(userId int) (*UserBase, error) {
+func cacheGetUserBase(tenantCtx context.Context, userId int) (*UserBase, error) {
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
 	var userCache UserBase
 	// Try getting from Redis first
-	err := common.RedisHGetObj(getUserCacheKey(userId), &userCache)
+	err := common.RedisHGetObj(tenantCtx, getUserCacheKey(userId), &userCache)
 	if err != nil {
 		return nil, err
 	}
 	if userCache.Id != userId || userCache.CacheSchema != userCacheSchemaVersion || userCache.AuthVersion <= 0 {
 		return nil, fmt.Errorf("user cache schema is stale")
 	}
-	floor, err := getUserAuthVersionFloor(userId)
+	floor, err := getUserAuthVersionFloor(tenantCtx, userId)
 	if err != nil {
 		return nil, err
 	}
@@ -140,57 +142,57 @@ func cacheGetUserBase(userId int) (*UserBase, error) {
 // Add atomic quota operations using hash fields.
 // 通过守卫式 Lua 脚本执行：哈希不存在时直接跳过（下次读取会从数据库水合），
 // 不会像裸 HINCRBY 那样创建只含 Quota 字段的残缺哈希。
-func cacheIncrUserQuota(userId int, delta int64) error {
+func cacheIncrUserQuota(tenantCtx context.Context, userId int, delta int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
-	_, err := cacheApplyUserQuotaDelta(userId, delta)
+	_, err := cacheApplyUserQuotaDelta(tenantCtx, userId, delta)
 	return err
 }
 
-func cacheDecrUserQuota(userId int, delta int64) error {
-	return cacheIncrUserQuota(userId, -delta)
+func cacheDecrUserQuota(tenantCtx context.Context, userId int, delta int64) error {
+	return cacheIncrUserQuota(tenantCtx, userId, -delta)
 }
 
 // syncCreditUserQuotaCache 在授信事务（充值/兑换等）提交后同步把增量补进缓存
 // 余额。预扣以缓存值为准（存在期间），授信不能绕过它，否则新到账的额度在
 // 缓存过期前不可用；缓存未命中无需处理，下次读取会从已提交的数据库余额水合。
-func syncCreditUserQuotaCache(userId int, quota int, operation string) {
+func syncCreditUserQuotaCache(tenantCtx context.Context, userId int, quota int, operation string) {
 	if quota <= 0 {
 		return
 	}
-	if err := cacheIncrUserQuota(userId, int64(quota)); err != nil {
+	if err := cacheIncrUserQuota(tenantCtx, userId, int64(quota)); err != nil {
 		common.SysLog(fmt.Sprintf("failed to sync %s credit to user quota cache: %s", operation, err.Error()))
 	}
 }
 
 // Helper functions to get individual fields if needed
-func getUserGroupCache(userId int) (string, error) {
-	cache, err := GetUserCache(userId)
+func getUserGroupCache(tenantCtx context.Context, userId int) (string, error) {
+	cache, err := GetUserCache(tenantCtx, userId)
 	if err != nil {
 		return "", err
 	}
 	return cache.Group, nil
 }
 
-func getUserQuotaCache(userId int) (int, error) {
-	cache, err := GetUserCache(userId)
+func getUserQuotaCache(tenantCtx context.Context, userId int) (int, error) {
+	cache, err := GetUserCache(tenantCtx, userId)
 	if err != nil {
 		return 0, err
 	}
 	return cache.Quota, nil
 }
 
-func getUserNameCache(userId int) (string, error) {
-	cache, err := GetUserCache(userId)
+func getUserNameCache(tenantCtx context.Context, userId int) (string, error) {
+	cache, err := GetUserCache(tenantCtx, userId)
 	if err != nil {
 		return "", err
 	}
 	return cache.Username, nil
 }
 
-func getUserSettingCache(userId int) (dto.UserSetting, error) {
-	cache, err := GetUserCache(userId)
+func getUserSettingCache(tenantCtx context.Context, userId int) (dto.UserSetting, error) {
+	cache, err := GetUserCache(tenantCtx, userId)
 	if err != nil {
 		return dto.UserSetting{}, err
 	}
@@ -199,7 +201,7 @@ func getUserSettingCache(userId int) (dto.UserSetting, error) {
 
 // RefreshUserGroupCache writes the database-authoritative group into an
 // existing user hash without changing the user's authentication version.
-func RefreshUserGroupCache(userId int) error {
+func RefreshUserGroupCache(tenantCtx context.Context, userId int) error {
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -207,7 +209,7 @@ func RefreshUserGroupCache(userId int) error {
 		return fmt.Errorf("invalid user id")
 	}
 	var authoritative User
-	if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&authoritative).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&authoritative).Error; err != nil {
 		return err
 	}
 	// Group transitions intentionally keep the same authentication version. A
@@ -215,12 +217,12 @@ func RefreshUserGroupCache(userId int) error {
 	// refresh and still pass the auth-version fence. Re-read after every write
 	// and repair the cache when the authoritative group changed in between.
 	for range 3 {
-		if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+		if err := updateUserCacheFieldAtVersion(tenantCtx, userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
 			return err
 		}
 
 		var verified User
-		if err := DB.Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&verified).Error; err != nil {
+		if err := DB.WithContext(tenantCtx).Select("id", "auth_version", commonGroupCol).Where("id = ?", userId).First(&verified).Error; err != nil {
 			return err
 		}
 		if verified.AuthVersion == authoritative.AuthVersion && verified.Group == authoritative.Group {
@@ -232,45 +234,45 @@ func RefreshUserGroupCache(userId int) error {
 	// Preserve the freshest snapshot observed even when the row was too busy to
 	// stabilize within the bounded retries. Returning an error lets best-effort
 	// callers emit an operation-specific warning.
-	if err := updateUserCacheFieldAtVersion(userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
+	if err := updateUserCacheFieldAtVersion(tenantCtx, userId, "Group", authoritative.Group, authoritative.AuthVersion); err != nil {
 		return err
 	}
 	return fmt.Errorf("user group changed repeatedly during cache refresh")
 }
 
-func updateUserEmailCache(userId int, email string) error {
-	return updateUserCacheField(userId, "Email", email)
+func updateUserEmailCache(tenantCtx context.Context, userId int, email string) error {
+	return updateUserCacheField(tenantCtx, userId, "Email", email)
 }
 
-func updateUserNameCache(userId int, username string) error {
-	return updateUserCacheField(userId, "Username", username)
+func updateUserNameCache(tenantCtx context.Context, userId int, username string) error {
+	return updateUserCacheField(tenantCtx, userId, "Username", username)
 }
 
-func updateUserSettingCache(userId int, setting string) error {
-	return updateUserCacheField(userId, "Setting", setting)
+func updateUserSettingCache(tenantCtx context.Context, userId int, setting string) error {
+	return updateUserCacheField(tenantCtx, userId, "Setting", setting)
 }
 
 // updateUserCacheField prevents individual cache refreshes from bypassing the
 // auth-version fence. It intentionally does nothing when the complete hash is
 // absent; the next GetUserCache call will repopulate it from the database.
-func updateUserCacheField(userId int, field string, value any) error {
+func updateUserCacheField(tenantCtx context.Context, userId int, field string, value any) error {
 	if !common.RedisEnabled {
 		return nil
 	}
 	var user User
-	if err := DB.Select("id", "auth_version").Where("id = ?", userId).First(&user).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Select("id", "auth_version").Where("id = ?", userId).First(&user).Error; err != nil {
 		return err
 	}
 	if user.AuthVersion <= 0 {
 		return fmt.Errorf("invalid user auth version")
 	}
-	return updateUserCacheFieldAtVersion(userId, field, value, user.AuthVersion)
+	return updateUserCacheFieldAtVersion(tenantCtx, userId, field, value, user.AuthVersion)
 }
 
 // GetUserLanguage returns the user's language preference from cache
 // Uses the existing GetUserCache mechanism for efficiency
-func GetUserLanguage(userId int) string {
-	userCache, err := GetUserCache(userId)
+func GetUserLanguage(tenantCtx context.Context, userId int) string {
+	userCache, err := GetUserCache(tenantCtx, userId)
 	if err != nil {
 		return ""
 	}

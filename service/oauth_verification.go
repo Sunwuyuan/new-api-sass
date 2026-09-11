@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import "errors"
 
 var ErrOAuthAccountMismatch = errors.New("The OAuth account does not match the account linked to your profile.")
@@ -12,12 +14,12 @@ type OAuthVerificationFlow struct {
 	SessionVersion  int64  `json:"session_version"`
 }
 
-func StartOAuthVerification(identity AuthIdentity, operation VerificationOperation, provider string) (*OAuthVerificationFlow, error) {
-	binding, err := BindVerificationOperation(operation)
+func StartOAuthVerification(tenantCtx context.Context, identity AuthIdentity, operation VerificationOperation, provider string) (*OAuthVerificationFlow, error) {
+	binding, err := BindVerificationOperation(tenantCtx, operation)
 	if err != nil {
 		return nil, err
 	}
-	providerUserID, err := GetOAuthVerificationBinding(identity, binding.Scope, provider)
+	providerUserID, err := GetOAuthVerificationBinding(tenantCtx, identity, binding.Scope, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -29,16 +31,16 @@ func StartOAuthVerification(identity AuthIdentity, operation VerificationOperati
 
 // FinishOAuthVerification only verifies an existing binding. It deliberately
 // never calls OAuth's login or find-or-create-user paths.
-func FinishOAuthVerification(identity AuthIdentity, provider, actualUserID string, flow *OAuthVerificationFlow) (*SecurityProof, error) {
+func FinishOAuthVerification(tenantCtx context.Context, identity AuthIdentity, provider, actualUserID string, flow *OAuthVerificationFlow) (*SecurityProof, error) {
 	if flow == nil || flow.ContextHash == "" || flow.UserAuthVersion != identity.UserAuthVersion || flow.SessionVersion != identity.SessionVersion {
 		return nil, ErrAuthTokenInvalid
 	}
-	expectedUserID, err := GetOAuthVerificationBinding(identity, flow.Scope, provider)
+	expectedUserID, err := GetOAuthVerificationBinding(tenantCtx, identity, flow.Scope, provider)
 	if err != nil {
 		return nil, err
 	}
 	if actualUserID == "" || actualUserID != expectedUserID || actualUserID != flow.ProviderUserID {
 		return nil, ErrOAuthAccountMismatch
 	}
-	return CompleteSecurityVerification(identity, VerificationBinding{Scope: flow.Scope, ContextHash: flow.ContextHash}, VerificationMethodOAuth)
+	return CompleteSecurityVerification(tenantCtx, identity, VerificationBinding{Scope: flow.Scope, ContextHash: flow.ContextHash}, VerificationMethodOAuth)
 }

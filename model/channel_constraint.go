@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"slices"
 
@@ -15,7 +17,7 @@ var filterEvalOrder = []dto.ChannelFilterKind{
 // ChannelSatisfiesFilters reports whether ch passes every filter.
 // On false, it returns the kind of the first violated filter (request_path
 // then task_plugin_identity) for error attribution.
-func ChannelSatisfiesFilters(ch *Channel, modelName string, filters []dto.ChannelFilter) (bool, dto.ChannelFilterKind) {
+func ChannelSatisfiesFilters(tenantCtx context.Context, ch *Channel, modelName string, filters []dto.ChannelFilter) (bool, dto.ChannelFilterKind) {
 	if ch == nil {
 		return false, ""
 	}
@@ -24,7 +26,7 @@ func ChannelSatisfiesFilters(ch *Channel, modelName string, filters []dto.Channe
 			if filter.Kind != kind {
 				continue
 			}
-			if !channelMatchesFilter(ch, modelName, filter) {
+			if !channelMatchesFilter(tenantCtx, ch, modelName, filter) {
 				return false, kind
 			}
 		}
@@ -36,7 +38,7 @@ func ChannelSatisfiesFilters(ch *Channel, modelName string, filters []dto.Channe
 // Caller must hold channelSyncLock (read lock). The input slice is never mutated.
 // A missing id in channelsIDM is kept for request_path (downstream consistency
 // error) and dropped for task_plugin_identity, matching the previous filters.
-func filterCandidateIDs(ids []int, modelName string, filters []dto.ChannelFilter) (kept []int, emptiedBy dto.ChannelFilterKind) {
+func filterCandidateIDs(tenantCtx context.Context, ids []int, modelName string, filters []dto.ChannelFilter) (kept []int, emptiedBy dto.ChannelFilterKind) {
 	if len(ids) == 0 {
 		return ids, ""
 	}
@@ -48,8 +50,8 @@ func filterCandidateIDs(ids []int, modelName string, filters []dto.ChannelFilter
 		}
 		next := make([]int, 0, len(kept))
 		for _, id := range kept {
-			channel, exists := channelsIDM[id]
-			if candidatePassesKindFilters(channel, exists, modelName, kind, kindFilters) {
+			channel, exists := TenantState(tenantCtx).channelsIDM[id]
+			if candidatePassesKindFilters(tenantCtx, channel, exists, modelName, kind, kindFilters) {
 				next = append(next, id)
 			}
 		}
@@ -71,7 +73,7 @@ func filtersByKind(filters []dto.ChannelFilter, kind dto.ChannelFilterKind) []dt
 	return matched
 }
 
-func candidatePassesKindFilters(ch *Channel, exists bool, modelName string, kind dto.ChannelFilterKind, filters []dto.ChannelFilter) bool {
+func candidatePassesKindFilters(tenantCtx context.Context, ch *Channel, exists bool, modelName string, kind dto.ChannelFilterKind, filters []dto.ChannelFilter) bool {
 	if kind == dto.FilterRequestPath && !exists {
 		return true
 	}
@@ -79,14 +81,14 @@ func candidatePassesKindFilters(ch *Channel, exists bool, modelName string, kind
 		return false
 	}
 	for _, filter := range filters {
-		if !channelMatchesFilter(ch, modelName, filter) {
+		if !channelMatchesFilter(tenantCtx, ch, modelName, filter) {
 			return false
 		}
 	}
 	return true
 }
 
-func channelMatchesFilter(ch *Channel, modelName string, filter dto.ChannelFilter) bool {
+func channelMatchesFilter(tenantCtx context.Context, ch *Channel, modelName string, filter dto.ChannelFilter) bool {
 	switch filter.Kind {
 	case dto.FilterRequestPath:
 		if filter.RequestPath == "" {
@@ -95,11 +97,11 @@ func channelMatchesFilter(ch *Channel, modelName string, filter dto.ChannelFilte
 		if ch.Type != constant.ChannelTypeAdvancedCustom {
 			return true
 		}
-		config := ch.GetOtherSettings().AdvancedCustom
+		config := ch.GetOtherSettings(tenantCtx).AdvancedCustom
 		return config != nil && config.SupportsPathForModel(filter.RequestPath, modelName)
 	case dto.FilterTaskPluginIdentity:
 		if ch.Type == constant.ChannelTypeTaskPlugin {
-			key := ch.GetSetting().TaskPluginKey
+			key := ch.GetSetting(tenantCtx).TaskPluginKey
 			return filter.TaskPluginKey != "" && (key == filter.TaskPluginKey || slices.Contains(filter.TaskPluginKeys, key))
 		}
 		return filter.TaskPluginKey == "" || slices.Contains(filter.TaskPluginChannelTypes, ch.Type)

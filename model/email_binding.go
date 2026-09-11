@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"time"
@@ -33,10 +35,10 @@ type EmailBindingState struct {
 	ResendAt       int64                  `json:"resend_at"`
 }
 
-func CreateEmailBinding(identity AuthSessionIdentity, state EmailBindingState) (string, *AuthFlow, error) {
+func CreateEmailBinding(tenantCtx context.Context, identity AuthSessionIdentity, state EmailBindingState) (string, *AuthFlow, error) {
 	var token string
 	var flow *AuthFlow
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := validateEmailBindingAccountWithTx(tx, identity, &state); err != nil {
 			return err
 		}
@@ -56,8 +58,8 @@ func CreateEmailBinding(identity AuthSessionIdentity, state EmailBindingState) (
 	return token, flow, err
 }
 
-func GetEmailBinding(identity AuthSessionIdentity, token string) (*AuthFlow, *EmailBindingState, error) {
-	flow, err := GetAuthFlow(token, AuthFlowMatch{Purpose: AuthFlowPurposeEmailBinding, UserId: identity.UserID, SessionId: identity.SessionID})
+func GetEmailBinding(tenantCtx context.Context, identity AuthSessionIdentity, token string) (*AuthFlow, *EmailBindingState, error) {
+	flow, err := GetAuthFlow(tenantCtx, token, AuthFlowMatch{Purpose: AuthFlowPurposeEmailBinding, UserId: identity.UserID, SessionId: identity.SessionID})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -68,10 +70,10 @@ func GetEmailBinding(identity AuthSessionIdentity, token string) (*AuthFlow, *Em
 	return flow, &state, nil
 }
 
-func ResendEmailBinding(identity AuthSessionIdentity, token, newCodeHash, oldCodeHash string) (*AuthFlow, *EmailBindingState, error) {
+func ResendEmailBinding(tenantCtx context.Context, identity AuthSessionIdentity, token, newCodeHash, oldCodeHash string) (*AuthFlow, *EmailBindingState, error) {
 	var flow *AuthFlow
 	var state *EmailBindingState
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		flow, state, err = lockEmailBindingWithTx(tx, identity, token)
 		if err != nil {
@@ -98,10 +100,10 @@ func ResendEmailBinding(identity AuthSessionIdentity, token, newCodeHash, oldCod
 // CompleteEmailBinding commits failed attempts even though verification fails.
 // Successful confirmation consumes the flow in the same transaction as the
 // email update, preserving the existing cross-database email ownership lock.
-func CompleteEmailBinding(identity AuthSessionIdentity, token, email, newCode, oldCode string) (*EmailBindingState, error) {
+func CompleteEmailBinding(tenantCtx context.Context, identity AuthSessionIdentity, token, email, newCode, oldCode string) (*EmailBindingState, error) {
 	var state *EmailBindingState
 	var verificationError error
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		// Acquire ownership protection before the first consistent read. Under
 		// MySQL REPEATABLE READ, a snapshot created before this lock could hide
 		// an address claimed by a concurrent transaction while we were waiting.

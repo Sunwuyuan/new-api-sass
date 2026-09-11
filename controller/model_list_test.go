@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting"
@@ -98,15 +99,15 @@ func withTieredBillingConfig(t *testing.T, modes map[string]string, exprs map[st
 	t.Helper()
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		if strings.HasPrefix(key, "billing_setting.") {
 			saved[key] = value
 		}
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
-		model.InvalidatePricingCache()
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
+		model.InvalidatePricingCache(testtenant.Context())
 	})
 
 	modeBytes, err := common.Marshal(modes)
@@ -114,30 +115,30 @@ func withTieredBillingConfig(t *testing.T, modes map[string]string, exprs map[st
 	exprBytes, err := common.Marshal(exprs)
 	require.NoError(t, err)
 
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode": string(modeBytes),
 		"billing_setting.billing_expr": string(exprBytes),
 	}))
-	model.InvalidatePricingCache()
+	model.InvalidatePricingCache(testtenant.Context())
 }
 
 func withSelfUseModeDisabled(t *testing.T) {
 	t.Helper()
 
-	original := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
+	original := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
 	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = original
+		operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = original
 	})
 }
 
 func withSelfUseModeEnabled(t *testing.T) {
 	t.Helper()
 
-	original := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = true
+	original := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = true
 	t.Cleanup(func() {
-		operation_setting.SelfUseModeEnabled = original
+		operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = original
 	})
 }
 
@@ -196,8 +197,8 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	}).Error)
 
 	defaultRecorder := httptest.NewRecorder()
-	defaultContext, _ := gin.CreateTestContext(defaultRecorder)
-	defaultContext.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=default", nil)
+	defaultContext, _ := testtenant.CreateTestContext(defaultRecorder)
+	defaultContext.Request = testtenant.NewRequest(http.MethodGet, "/api/user/models?group=default", nil)
 	defaultContext.Set("id", 1002)
 
 	GetUserModels(defaultContext)
@@ -206,8 +207,8 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 	require.ElementsMatch(t, []string{"zz-default-only-model"}, defaultModels)
 
 	vipRecorder := httptest.NewRecorder()
-	vipContext, _ := gin.CreateTestContext(vipRecorder)
-	vipContext.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=vip", nil)
+	vipContext, _ := testtenant.CreateTestContext(vipRecorder)
+	vipContext.Request = testtenant.NewRequest(http.MethodGet, "/api/user/models?group=vip", nil)
 	vipContext.Set("id", 1002)
 
 	GetUserModels(vipContext)
@@ -216,20 +217,20 @@ func TestGetUserModelsFiltersByRequestedGroup(t *testing.T) {
 }
 
 func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
-	originalAutoGroups := setting.AutoGroups2JsonString()
-	originalUsableGroups := setting.UserUsableGroups2JSONString()
-	originalSpecialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup.ReadAll()
+	originalAutoGroups := setting.AutoGroups2JsonString(testtenant.Context())
+	originalUsableGroups := setting.UserUsableGroups2JSONString(testtenant.Context())
+	originalSpecialGroups := ratio_setting.GetGroupRatioSetting(testtenant.Context()).GroupSpecialUsableGroup.ReadAll()
 	t.Cleanup(func() {
-		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
-		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
-		specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), originalAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), originalUsableGroups))
+		specialGroups := ratio_setting.GetGroupRatioSetting(testtenant.Context()).GroupSpecialUsableGroup
 		specialGroups.Clear()
 		specialGroups.AddAll(originalSpecialGroups)
 	})
 
-	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`["vip","default","unavailable"]`))
-	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"auto":"自动分组","default":"默认分组","unavailable":"不可用分组"}`))
-	specialGroups := ratio_setting.GetGroupRatioSetting().GroupSpecialUsableGroup
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), `["vip","default","unavailable"]`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), `{"auto":"自动分组","default":"默认分组","unavailable":"不可用分组"}`))
+	specialGroups := ratio_setting.GetGroupRatioSetting(testtenant.Context()).GroupSpecialUsableGroup
 	specialGroups.Clear()
 	specialGroups.Set("default", map[string]string{
 		"+:vip":         "VIP 分组",
@@ -253,8 +254,8 @@ func TestGetUserModelsExpandsAutoGroupsInConfiguredOrder(t *testing.T) {
 	}).Error)
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/user/models?group=auto", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/user/models?group=auto", nil)
 	context.Set("id", 1003)
 
 	GetUserModels(context)
@@ -292,8 +293,8 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	}).Error)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/v1/models", nil)
 	ctx.Set("id", 1001)
 
 	ListModels(ctx, constant.ChannelTypeOpenAI)
@@ -304,7 +305,7 @@ func TestListModelsIncludesTieredBillingModel(t *testing.T) {
 	require.NotContains(t, ids, "zz-tiered-missing-expr-model")
 	require.NotContains(t, ids, "zz-unpriced-model")
 
-	pricingByName := pricingByModelName(model.GetPricing())
+	pricingByName := pricingByModelName(model.GetPricing(testtenant.Context()))
 	visiblePricing, ok := pricingByName["zz-tiered-visible-model"]
 	require.True(t, ok)
 	require.Equal(t, "tiered_expr", visiblePricing.BillingMode)
@@ -329,7 +330,7 @@ func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T)
 	common.MemoryCacheEnabled = true
 	t.Cleanup(func() {
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
-		model.InvalidatePricingCache()
+		model.InvalidatePricingCache(testtenant.Context())
 	})
 
 	require.NoError(t, db.Create(&model.User{
@@ -373,12 +374,12 @@ func TestListModelsUsesAdvancedCustomEndpointTypesFromPricingCache(t *testing.T)
 		Enabled:   true,
 	}).Error)
 
-	model.InitChannelCache()
-	model.GetPricing()
+	model.InitChannelCache(testtenant.Context())
+	model.GetPricing(testtenant.Context())
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/v1/models", nil)
 	ctx.Set("id", 1003)
 
 	ListModels(ctx, constant.ChannelTypeOpenAI)
@@ -411,8 +412,8 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 	}).Error)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/v1/models", nil)
 	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
 	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimitEnabled, true)
 	common.SetContextKey(ctx, constant.ContextKeyTokenModelLimit, map[string]bool{
@@ -433,16 +434,16 @@ func TestListModelsTokenLimitIncludesTieredBillingModel(t *testing.T) {
 
 func TestListModelsTokenLimitUsesResolvedCustomAutoGroups(t *testing.T) {
 	withSelfUseModeEnabled(t)
-	originalMax := setting.GetMaxTokenAutoGroups()
-	originalUsableGroups := setting.UserUsableGroups2JSONString()
-	originalRatios := ratio_setting.GroupRatio2JSONString()
-	require.NoError(t, setting.UpdateMaxTokenAutoGroups("5"))
-	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":1}`))
+	originalMax := setting.GetMaxTokenAutoGroups(testtenant.Context())
+	originalUsableGroups := setting.UserUsableGroups2JSONString(testtenant.Context())
+	originalRatios := ratio_setting.GroupRatio2JSONString(testtenant.Context())
+	require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), "5"))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), `{"default":"Default","vip":"VIP"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), `{"default":1,"vip":1}`))
 	t.Cleanup(func() {
-		require.NoError(t, setting.UpdateMaxTokenAutoGroups(fmt.Sprintf("%d", originalMax)))
-		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalRatios))
+		require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), fmt.Sprintf("%d", originalMax)))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), originalUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), originalRatios))
 	})
 
 	db := setupModelListControllerTestDB(t)
@@ -453,8 +454,8 @@ func TestListModelsTokenLimitUsesResolvedCustomAutoGroups(t *testing.T) {
 	}).Error)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodGet, "/v1/models", nil)
 	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
 	common.SetContextKey(ctx, constant.ContextKeyTokenGroup, "auto")
 	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip"})
@@ -469,10 +470,10 @@ func TestListModelsTokenLimitUsesResolvedCustomAutoGroups(t *testing.T) {
 	ids := decodeListModelsResponse(t, recorder)
 	require.Equal(t, map[string]struct{}{"zz-vip-allowed": {}}, ids)
 
-	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default"}`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), `{"default":"Default"}`))
 	emptyRecorder := httptest.NewRecorder()
-	emptyCtx, _ := gin.CreateTestContext(emptyRecorder)
-	emptyCtx.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	emptyCtx, _ := testtenant.CreateTestContext(emptyRecorder)
+	emptyCtx.Request = testtenant.NewRequest(http.MethodGet, "/v1/models", nil)
 	common.SetContextKey(emptyCtx, constant.ContextKeyUserGroup, "default")
 	common.SetContextKey(emptyCtx, constant.ContextKeyTokenGroup, "auto")
 	common.SetContextKey(emptyCtx, constant.ContextKeyTokenAutoGroups, []string{"vip"})
@@ -508,7 +509,7 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	}
 	require.NoError(t, db.Create(user).Error)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/", func(c *gin.Context) {
 		setupLogin(&model.User{
 			Id:          user.Id,
@@ -521,7 +522,7 @@ func TestSetupLoginDoesNotTouchPasswordWhenPasswordFieldOmitted(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/", nil)
 	router.ServeHTTP(recorder, request)
 
 	require.Equal(t, http.StatusOK, recorder.Code)

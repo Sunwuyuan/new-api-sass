@@ -9,6 +9,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -21,8 +23,8 @@ func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin
 	t.Helper()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	c.Set(common.RequestIdKey, "responses-test")
 
 	resp := &http.Response{
@@ -30,7 +32,7 @@ func newResponsesChatTestContext(t *testing.T, body string, isStream bool) (*gin
 		Body:       io.NopCloser(strings.NewReader(body)),
 		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta:        &relaycommon.ChannelMeta{UpstreamModelName: "gpt-test"},
 		IsStream:           isStream,
 		RelayFormat:        types.RelayFormatOpenAI,
@@ -237,7 +239,7 @@ func TestOaiChatToResponsesStreamHandlerConvertsSSEOrderAndUsage(t *testing.T) {
 	}, "\n")
 
 	c, recorder, resp, info := newResponsesChatTestContext(t, body, true)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 
 	usage, err := OaiChatToResponsesStreamHandler(c, info, resp)
 	require.Nil(t, err)

@@ -4,6 +4,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -15,14 +17,14 @@ import (
 
 func TestHandleClaudeResponseDataCountsToolUse(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	operation_setting.SetToolPriceForTest("lookup_fn", 3.0)
+	operation_setting.SetToolPriceForTest(testtenant.Context(), "lookup_fn", 3.0)
 	t.Cleanup(func() {
-		operation_setting.DeleteToolPriceForTest("lookup_fn")
+		operation_setting.DeleteToolPriceForTest(testtenant.Context(), "lookup_fn")
 	})
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	info := &relaycommon.RelayInfo{
+	c, _ := testtenant.CreateTestContext(w)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet",
 		RelayFormat:     types.RelayFormatClaude,
 	}
@@ -49,8 +51,8 @@ func TestHandleClaudeResponseDataCountsToolUse(t *testing.T) {
 func TestCountClaudeStreamBillableToolsSetsWebSearchRequests(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	info := &relaycommon.RelayInfo{OriginModelName: "claude-3-7-sonnet"}
+	c, _ := testtenant.CreateTestContext(w)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: "claude-3-7-sonnet"}
 
 	countClaudeStreamBillableTools(c, info, &dto.ClaudeResponse{
 		Type: "message_delta",
@@ -60,9 +62,9 @@ func TestCountClaudeStreamBillableToolsSetsWebSearchRequests(t *testing.T) {
 	})
 	assert.Equal(t, 3, c.GetInt("claude_web_search_requests"))
 
-	operation_setting.SetToolPriceForTest("stream_fn", 2.0)
+	operation_setting.SetToolPriceForTest(testtenant.Context(), "stream_fn", 2.0)
 	t.Cleanup(func() {
-		operation_setting.DeleteToolPriceForTest("stream_fn")
+		operation_setting.DeleteToolPriceForTest(testtenant.Context(), "stream_fn")
 	})
 	countClaudeStreamBillableTools(c, info, &dto.ClaudeResponse{
 		Type: "content_block_start",

@@ -317,7 +317,7 @@ func PrepareTaskPluginRoute() gin.HandlerFunc {
 // through so the existing endpoint remains responsible for its validation.
 func PinTaskPluginEndpoint() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		generation := pluginruntime.DefaultRegistry.Generation()
+		generation := pluginruntime.TenantState(c.Request.Context()).DefaultRegistry.Generation()
 		if generation == nil {
 			c.Next()
 			return
@@ -348,7 +348,7 @@ func PinTaskPluginEndpoint() gin.HandlerFunc {
 			if claimedModel != declared {
 				rewriteTo = declared
 			}
-		} else if target, ok := model.ResolveTaskModelAlias(generation, claimedModel); ok {
+		} else if target, ok := model.ResolveTaskModelAlias(c.Request.Context(), generation, claimedModel); ok {
 			if target.Declared == "" {
 				c.Set(contextKeyTaskPluginEndpointModel, *modelRequest)
 				c.Next()
@@ -1068,7 +1068,7 @@ func applyOriginTaskIntent(c *gin.Context, intent map[string]any, meta pluginrun
 	tasks := make([]*model.Task, 0, len(ids))
 	channelID := 0
 	for _, id := range ids {
-		task, exist, err := model.GetByTaskId(userID, id)
+		task, exist, err := model.GetByTaskId(c.Request.Context(), userID, id)
 		if err != nil {
 			return &originTaskIntentError{Code: "origin_task_not_found", Message: "origin task not found or not owned by you", StatusCode: http.StatusInternalServerError}
 		}
@@ -1086,7 +1086,7 @@ func applyOriginTaskIntent(c *gin.Context, intent map[string]any, meta pluginrun
 		tasks = append(tasks, task)
 	}
 
-	channel, err := model.CacheGetChannel(channelID)
+	channel, err := model.CacheGetChannel(c.Request.Context(), channelID)
 	if err != nil || channel == nil || channel.Status != common.ChannelStatusEnabled {
 		return &originTaskIntentError{Code: "origin_task_channel_disabled", Message: "origin task channel is disabled", StatusCode: http.StatusBadRequest}
 	}
@@ -1139,7 +1139,7 @@ func renderTaskPluginQuery(
 	)
 	userID := common.GetContextKeyInt(c, constant.ContextKeyUserId)
 	platforms := taskPluginLegacyPlatforms(pinned.Plugin.Meta)
-	tasks, err := model.GetByTaskIdsForPlatforms(userID, platforms, taskIDs)
+	tasks, err := model.GetByTaskIdsForPlatforms(c.Request.Context(), userID, platforms, taskIDs)
 	if err != nil {
 		logger.LogDebug(
 			c,
@@ -1393,7 +1393,7 @@ func logTaskPluginChannelDecision(c *gin.Context, channel *model.Channel, modelN
 func PrepareTaskPluginSubmit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		pluginKey := strings.TrimSpace(c.Param("key"))
-		generation := pluginruntime.DefaultRegistry.Generation()
+		generation := pluginruntime.TenantState(c.Request.Context()).DefaultRegistry.Generation()
 		plugin, ok := generation.Get(pluginKey)
 		if !ok {
 			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": gin.H{"message": "task plugin not found", "type": "invalid_request_error"}})
@@ -1422,14 +1422,14 @@ func PrepareTaskPluginSubmit() gin.HandlerFunc {
 		}
 		exactOwned := slices.Contains(plugin.Meta.Models, modelName)
 		exactAlias := false
-		if target, resolved := model.ResolveTaskModelAlias(generation, modelName); resolved && target.Alias == modelName && target.PluginKey == plugin.Meta.Key {
+		if target, resolved := model.ResolveTaskModelAlias(c.Request.Context(), generation, modelName); resolved && target.Alias == modelName && target.PluginKey == plugin.Meta.Key {
 			exactAlias = true
 		}
 		if !exactOwned && !exactAlias {
 			folded := ""
 			if declared, ok := generation.CanonicalModel(modelName); ok && slices.Contains(plugin.Meta.Models, declared) && declared != modelName {
 				folded = declared
-			} else if target, resolved := model.ResolveTaskModelAlias(generation, modelName); resolved && target.PluginKey == plugin.Meta.Key && target.Alias != "" && target.Alias != modelName {
+			} else if target, resolved := model.ResolveTaskModelAlias(c.Request.Context(), generation, modelName); resolved && target.PluginKey == plugin.Meta.Key && target.Alias != "" && target.Alias != modelName {
 				folded = target.Alias
 			}
 			if folded != "" {

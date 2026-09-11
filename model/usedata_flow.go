@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"fmt"
 
@@ -22,27 +24,27 @@ type FlowQuotaData struct {
 	Quota       int    `json:"quota" gorm:"column:quota"`
 }
 
-func GetFlowQuotaData(startTime int64, endTime int64, username string, userID int, role int) ([]*FlowQuotaData, error) {
+func GetFlowQuotaData(tenantCtx context.Context, startTime int64, endTime int64, username string, userID int, role int) ([]*FlowQuotaData, error) {
 	switch {
 	case role >= common.RoleRootUser:
-		return getRootFlowQuotaData(startTime, endTime, username)
+		return getRootFlowQuotaData(tenantCtx, startTime, endTime, username)
 	case role >= common.RoleAdminUser:
-		return getAdminFlowQuotaData(startTime, endTime, username)
+		return getAdminFlowQuotaData(tenantCtx, startTime, endTime, username)
 	default:
-		return getSelfFlowQuotaData(startTime, endTime, userID)
+		return getSelfFlowQuotaData(tenantCtx, startTime, endTime, userID)
 	}
 }
 
-func flowQuotaBaseQuery(startTime int64, endTime int64) *gorm.DB {
-	query := DB.Table("quota_data").
+func flowQuotaBaseQuery(tenantCtx context.Context, startTime int64, endTime int64) *gorm.DB {
+	query := DB.WithContext(tenantCtx).Table("quota_data").
 		Where("use_group <> ''").
 		Where("created_at >= ? and created_at <= ?", startTime, endTime)
 	return query
 }
 
-func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQuotaData, error) {
+func getSelfFlowQuotaData(tenantCtx context.Context, startTime int64, endTime int64, userID int) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
-	err := flowQuotaBaseQuery(startTime, endTime).
+	err := flowQuotaBaseQuery(tenantCtx, startTime, endTime).
 		Select("token_id, use_group, model_name, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used").
 		Where("user_id = ?", userID).
 		Group("token_id, use_group, model_name").
@@ -51,12 +53,12 @@ func getSelfFlowQuotaData(startTime int64, endTime int64, userID int) ([]*FlowQu
 	if err != nil {
 		return nil, err
 	}
-	return rows, fillFlowTokenNames(rows)
+	return rows, fillFlowTokenNames(tenantCtx, rows)
 }
 
-func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
+func getAdminFlowQuotaData(tenantCtx context.Context, startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
-	query := flowQuotaBaseQuery(startTime, endTime).
+	query := flowQuotaBaseQuery(tenantCtx, startTime, endTime).
 		Select("user_id, username, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
 	if username != "" {
 		query = query.Where("username = ?", username)
@@ -68,12 +70,12 @@ func getAdminFlowQuotaData(startTime int64, endTime int64, username string) ([]*
 	if err != nil {
 		return nil, err
 	}
-	return rows, fillFlowChannelNames(rows)
+	return rows, fillFlowChannelNames(tenantCtx, rows)
 }
 
-func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
+func getRootFlowQuotaData(tenantCtx context.Context, startTime int64, endTime int64, username string) ([]*FlowQuotaData, error) {
 	rows := make([]*FlowQuotaData, 0)
-	query := flowQuotaBaseQuery(startTime, endTime).
+	query := flowQuotaBaseQuery(tenantCtx, startTime, endTime).
 		Select("user_id, username, node_name, token_id, use_group, model_name, channel_id, sum(count) as count, sum(quota) as quota, sum(token_used) as token_used")
 	if username != "" {
 		query = query.Where("username = ?", username)
@@ -85,13 +87,13 @@ func getRootFlowQuotaData(startTime int64, endTime int64, username string) ([]*F
 	if err != nil {
 		return nil, err
 	}
-	if err := fillFlowTokenNames(rows); err != nil {
+	if err := fillFlowTokenNames(tenantCtx, rows); err != nil {
 		return rows, err
 	}
-	return rows, fillFlowChannelNames(rows)
+	return rows, fillFlowChannelNames(tenantCtx, rows)
 }
 
-func fillFlowTokenNames(rows []*FlowQuotaData) error {
+func fillFlowTokenNames(tenantCtx context.Context, rows []*FlowQuotaData) error {
 	tokenIDSet := make(map[int]struct{})
 	tokenIDs := make([]int, 0)
 	for _, row := range rows {
@@ -112,7 +114,7 @@ func fillFlowTokenNames(rows []*FlowQuotaData) error {
 		Id   int    `gorm:"column:id"`
 		Name string `gorm:"column:name"`
 	}
-	if err := DB.Model(&Token{}).Select("id, name").Where("id IN ?", tokenIDs).Find(&tokens).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Model(&Token{}).Select("id, name").Where("id IN ?", tokenIDs).Find(&tokens).Error; err != nil {
 		return err
 	}
 	tokenNameByID := make(map[int]string, len(tokens))
@@ -129,7 +131,7 @@ func fillFlowTokenNames(rows []*FlowQuotaData) error {
 	return nil
 }
 
-func fillFlowChannelNames(rows []*FlowQuotaData) error {
+func fillFlowChannelNames(tenantCtx context.Context, rows []*FlowQuotaData) error {
 	channelIDSet := make(map[int]struct{})
 	channelIDs := make([]int, 0)
 	for _, row := range rows {
@@ -149,7 +151,7 @@ func fillFlowChannelNames(rows []*FlowQuotaData) error {
 	channelNameByID := make(map[int]string, len(channelIDs))
 	if common.MemoryCacheEnabled {
 		for _, channelID := range channelIDs {
-			if channel, err := CacheGetChannel(channelID); err == nil {
+			if channel, err := CacheGetChannel(tenantCtx, channelID); err == nil {
 				channelNameByID[channelID] = channel.Name
 			}
 		}
@@ -158,7 +160,7 @@ func fillFlowChannelNames(rows []*FlowQuotaData) error {
 			Id   int    `gorm:"column:id"`
 			Name string `gorm:"column:name"`
 		}
-		if err := DB.Table("channels").Select("id, name").Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
+		if err := DB.WithContext(tenantCtx).Table("channels").Select("id, name").Where("id IN ?", channelIDs).Find(&channels).Error; err != nil {
 			return err
 		}
 		for _, channel := range channels {

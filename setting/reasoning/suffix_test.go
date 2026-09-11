@@ -3,6 +3,7 @@ package reasoning
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,44 +92,44 @@ func TestCanonicalBillingModelNames(t *testing.T) {
 		},
 	}
 
-	geminiSettings := model_setting.GetGeminiSettings()
+	geminiSettings := model_setting.GetGeminiSettings(testtenant.Context())
 	oldGemini := geminiSettings.ThinkingAdapterEnabled
 	geminiSettings.ThinkingAdapterEnabled = true
 	t.Cleanup(func() { geminiSettings.ThinkingAdapterEnabled = oldGemini })
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, CanonicalBillingModelNames(tt.in))
+			assert.Equal(t, tt.want, CanonicalBillingModelNames(testtenant.Context(), tt.in))
 		})
 	}
 
 	assert.Equal(t,
-		CanonicalBillingModelNames("gemini-2.5-flash@thinking:8192"),
-		CanonicalBillingModelNames("gemini-2.5-flash-thinking-8192"),
+		CanonicalBillingModelNames(testtenant.Context(), "gemini-2.5-flash@thinking:8192"),
+		CanonicalBillingModelNames(testtenant.Context(), "gemini-2.5-flash-thinking-8192"),
 	)
-	assert.Equal(t, "gpt-5.1-codex-max", BaseModelName("gpt-5.1-codex-max"))
-	assert.Empty(t, CanonicalBillingModelNames("gpt-5.1-codex-max"))
+	assert.Equal(t, "gpt-5.1-codex-max", BaseModelName(testtenant.Context(), "gpt-5.1-codex-max"))
+	assert.Empty(t, CanonicalBillingModelNames(testtenant.Context(), "gpt-5.1-codex-max"))
 }
 
 func TestParseOpenAIReasoningEffortPreservesCodexMax(t *testing.T) {
-	effort, base := ParseOpenAIReasoningEffortFromModelSuffix("gpt-5.1-codex-max")
+	effort, base := ParseOpenAIReasoningEffortFromModelSuffix(testtenant.Context(), "gpt-5.1-codex-max")
 	assert.Empty(t, effort)
 	assert.Equal(t, "gpt-5.1-codex-max", base)
 }
 
 func TestBaseModelNameStripsModifiers(t *testing.T) {
-	require.Equal(t, "qwen3-max", BaseModelName("qwen3-max@thinking:on@temperature:0.2"))
+	require.Equal(t, "qwen3-max", BaseModelName(testtenant.Context(), "qwen3-max@thinking:on@temperature:0.2"))
 }
 
 func TestExemptAtNameIsOpaqueForBillingIdentity(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = original })
 	settings.ThinkingModelBlacklist = append(original, "re:.*@sha256:.*")
 
 	const model = "opaque@sha256:deadbeef"
-	assert.Equal(t, model, BaseModelName(model))
-	assert.Empty(t, CanonicalBillingModelNames(model))
-	assert.Equal(t, "kimi-k2-thinking", BaseModelName("kimi-k2-thinking"))
-	assert.Empty(t, CanonicalBillingModelNames("kimi-k2-thinking"))
+	assert.Equal(t, model, BaseModelName(testtenant.Context(), model))
+	assert.Empty(t, CanonicalBillingModelNames(testtenant.Context(), model))
+	assert.Equal(t, "kimi-k2-thinking", BaseModelName(testtenant.Context(), "kimi-k2-thinking"))
+	assert.Empty(t, CanonicalBillingModelNames(testtenant.Context(), "kimi-k2-thinking"))
 }

@@ -1,5 +1,7 @@
 package ratio_setting
 
+import context "context"
+
 import (
 	"maps"
 	"sync"
@@ -21,8 +23,8 @@ var (
 	rebuildMu   sync.Mutex
 )
 
-func InvalidateExposedDataCache() {
-	exposedData.Store((*exposedCache)(nil))
+func InvalidateExposedDataCache(tenantCtx context.Context) {
+	TenantState(tenantCtx).exposedData.Store((*exposedCache)(nil))
 }
 
 func cloneGinH(src gin.H) gin.H {
@@ -31,23 +33,23 @@ func cloneGinH(src gin.H) gin.H {
 	return dst
 }
 
-func GetExposedData() gin.H {
-	if c, ok := exposedData.Load().(*exposedCache); ok && c != nil && time.Now().Before(c.expiresAt) {
+func GetExposedData(tenantCtx context.Context) gin.H {
+	if c, ok := TenantState(tenantCtx).exposedData.Load().(*exposedCache); ok && c != nil && time.Now().Before(c.expiresAt) {
 		return cloneGinH(c.data)
 	}
-	rebuildMu.Lock()
-	defer rebuildMu.Unlock()
-	if c, ok := exposedData.Load().(*exposedCache); ok && c != nil && time.Now().Before(c.expiresAt) {
+	TenantState(tenantCtx).rebuildMu.Lock()
+	defer TenantState(tenantCtx).rebuildMu.Unlock()
+	if c, ok := TenantState(tenantCtx).exposedData.Load().(*exposedCache); ok && c != nil && time.Now().Before(c.expiresAt) {
 		return cloneGinH(c.data)
 	}
 	newData := gin.H{
-		"model_ratio":        GetModelRatioCopy(),
-		"completion_ratio":   GetCompletionRatioCopy(),
-		"cache_ratio":        GetCacheRatioCopy(),
-		"create_cache_ratio": GetCreateCacheRatioCopy(),
-		"model_price":        GetModelPriceCopy(),
+		"model_ratio":        GetModelRatioCopy(tenantCtx),
+		"completion_ratio":   GetCompletionRatioCopy(tenantCtx),
+		"cache_ratio":        GetCacheRatioCopy(tenantCtx),
+		"create_cache_ratio": GetCreateCacheRatioCopy(tenantCtx),
+		"model_price":        GetModelPriceCopy(tenantCtx),
 	}
-	exposedData.Store(&exposedCache{
+	TenantState(tenantCtx).exposedData.Store(&exposedCache{
 		data:      newData,
 		expiresAt: time.Now().Add(exposedDataTTL),
 	})

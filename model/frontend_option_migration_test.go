@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,10 +65,10 @@ func TestMigrateRetiredFrontendOptionsMigratesValidValuesIdempotently(t *testing
 		requireOptionMissing(t, db, key)
 	}
 
-	before, err := AllOption()
+	before, err := AllOption(testtenant.Context())
 	require.NoError(t, err)
 	require.NoError(t, MigrateRetiredFrontendOptions())
-	after, err := AllOption()
+	after, err := AllOption(testtenant.Context())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, before, after)
 }
@@ -169,12 +170,12 @@ func TestMigrateRetiredFrontendOptionsKeepsEmptyAuthoritativeTargets(t *testing.
 
 func TestRetiredThemeOptionIsPersistedButNotPublished(t *testing.T) {
 	db := useFrontendOptionMigrationDB(t)
-	previousMap := common.OptionMap
-	t.Cleanup(func() { common.OptionMap = previousMap })
-	common.OptionMap = map[string]string{}
+	previousMap := common.TenantState(testtenant.Context()).OptionMap
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).OptionMap = previousMap })
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
 
-	require.NoError(t, UpdateOption(retiredThemeOptionKey, "default"))
+	require.NoError(t, UpdateOption(testtenant.Context(), retiredThemeOptionKey, "default"))
 	assert.Equal(t, "default", requireOptionValue(t, db, retiredThemeOptionKey))
-	_, published := common.OptionMap[retiredThemeOptionKey]
+	_, published := common.TenantState(testtenant.Context()).OptionMap[retiredThemeOptionKey]
 	assert.False(t, published)
 }

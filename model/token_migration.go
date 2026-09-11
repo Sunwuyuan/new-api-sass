@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 const (
@@ -121,97 +120,4 @@ WHERE index_meta.indrelid = to_regclass(?)
 		definitionValid: state.DefinitionValid,
 		standaloneValid: state.StandaloneValid,
 	}, nil
-}
-
-// migrateTokenKeyUniqueness converts known PostgreSQL UNIQUE constraints left
-// on tokens.key into the standalone uniqueIndex represented by the current
-// model. Unknown constraint names are reported without modifying the schema.
-func migrateTokenKeyUniqueness(db *gorm.DB) error {
-	if db == nil {
-		return fmt.Errorf("migrate token key uniqueness: database is nil")
-	}
-	if db.Dialector.Name() != "postgres" {
-		return nil
-	}
-
-	statement := &gorm.Statement{DB: db}
-	if err := statement.Parse(&Token{}); err != nil {
-		return fmt.Errorf("parse token schema: %w", err)
-	}
-	tableName := statement.Schema.Table
-	constraints, err := inspectTokenKeyUniqueConstraints(db, tableName)
-	if err != nil {
-		return err
-	}
-	if len(constraints) == 0 {
-		return nil
-	}
-	if err := validateTokenKeyUniqueConstraints(constraints); err != nil {
-		return err
-	}
-
-	return db.Transaction(func(tx *gorm.DB) error {
-		migrator := tx.Migrator()
-		if !migrator.HasTable(&Token{}) {
-			return nil
-		}
-
-		if err := tx.Exec(
-			"LOCK TABLE ? IN ACCESS EXCLUSIVE MODE",
-			clause.Table{Name: tableName},
-		).Error; err != nil {
-			return fmt.Errorf("lock tokens for key uniqueness migration: %w", err)
-		}
-
-		constraints, err := inspectTokenKeyUniqueConstraints(tx, tableName)
-		if err != nil {
-			return err
-		}
-		if len(constraints) == 0 {
-			return nil
-		}
-		if err := validateTokenKeyUniqueConstraints(constraints); err != nil {
-			return err
-		}
-
-		targetIndex, err := inspectTokenKeyIndex(tx, tableName)
-		if err != nil {
-			return err
-		}
-		if targetIndex.exists && !targetIndex.definitionValid {
-			return fmt.Errorf("token key index %q has an unexpected definition", tokenKeyIndex)
-		}
-
-		for _, constraint := range constraints {
-			if err := migrator.DropConstraint(&Token{}, constraint.Name); err != nil {
-				return fmt.Errorf("drop token key unique constraint %q: %w", constraint.Name, err)
-			}
-		}
-
-		targetIndex, err = inspectTokenKeyIndex(tx, tableName)
-		if err != nil {
-			return err
-		}
-		if !targetIndex.exists {
-			if err := migrator.CreateIndex(&Token{}, tokenKeyIndex); err != nil {
-				return fmt.Errorf("create token key unique index: %w", err)
-			}
-			targetIndex, err = inspectTokenKeyIndex(tx, tableName)
-			if err != nil {
-				return err
-			}
-		}
-		if !targetIndex.standaloneValid {
-			return fmt.Errorf("token key index %q has an unexpected definition", tokenKeyIndex)
-		}
-
-		remainingConstraints, err := inspectTokenKeyUniqueConstraints(tx, tableName)
-		if err != nil {
-			return err
-		}
-		if len(remainingConstraints) != 0 {
-			return fmt.Errorf("tokens.key still has unique constraints after migration")
-		}
-		return nil
-	})
 }

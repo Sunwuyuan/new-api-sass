@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -16,7 +18,7 @@ import (
 
 func buildChannelAffinityTemplateContextForTest(meta channelAffinityMeta) *gin.Context {
 	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
+	ctx, _ := testtenant.CreateTestContext(rec)
 	setChannelAffinityContext(ctx, meta)
 	return ctx
 }
@@ -178,8 +180,8 @@ func TestShouldSkipRetryAfterChannelAffinityFailure(t *testing.T) {
 
 func TestExtractChannelAffinityValue_RequestHeader(t *testing.T) {
 	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx, _ := testtenant.CreateTestContext(rec)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	ctx.Request.Header.Set("X-Affinity-Key", " tenant-123 ")
 
 	value := extractChannelAffinityValue(ctx, operation_setting.ChannelAffinityKeySource{
@@ -207,13 +209,13 @@ func TestGetPreferredChannelByAffinity_RequestHeaderKeySource(t *testing.T) {
 	affinityValue := fmt.Sprintf("header-hit-%d", time.Now().UnixNano())
 	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(rule, "gpt-5", "default", affinityValue)
 
-	cache := getChannelAffinityCache()
+	cache := getChannelAffinityCache(testtenant.Context())
 	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9528, time.Minute))
 	t.Cleanup(func() {
 		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
 	})
 
-	setting := operation_setting.GetChannelAffinitySetting()
+	setting := operation_setting.GetChannelAffinitySetting(testtenant.Context())
 	originalRules := setting.Rules
 	setting.Rules = append([]operation_setting.ChannelAffinityRule{rule}, originalRules...)
 	t.Cleanup(func() {
@@ -221,8 +223,8 @@ func TestGetPreferredChannelByAffinity_RequestHeaderKeySource(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx, _ := testtenant.CreateTestContext(rec)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	ctx.Request.Header.Set("X-Affinity-Key", affinityValue)
 
 	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5", "default")
@@ -241,7 +243,7 @@ func TestClearCurrentChannelAffinityCache(t *testing.T) {
 
 	cacheKeySuffix := fmt.Sprintf("codex cli trace:default:clear-current-%d", time.Now().UnixNano())
 	cacheKeyFull := channelAffinityCacheNamespace + ":" + cacheKeySuffix
-	cache := getChannelAffinityCache()
+	cache := getChannelAffinityCache(testtenant.Context())
 	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9527, time.Minute))
 	t.Cleanup(func() {
 		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
@@ -266,7 +268,7 @@ func TestClearCurrentChannelAffinityCache(t *testing.T) {
 func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	setting := operation_setting.GetChannelAffinitySetting()
+	setting := operation_setting.GetChannelAffinitySetting(testtenant.Context())
 	require.NotNil(t, setting)
 
 	var codexRule *operation_setting.ChannelAffinityRule
@@ -282,15 +284,15 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	affinityValue := fmt.Sprintf("pc-hit-%d", time.Now().UnixNano())
 	cacheKeySuffix := buildChannelAffinityCacheKeySuffix(*codexRule, "gpt-5", "default", affinityValue)
 
-	cache := getChannelAffinityCache()
+	cache := getChannelAffinityCache(testtenant.Context())
 	require.NoError(t, cache.SetWithTTL(cacheKeySuffix, 9527, time.Minute))
 	t.Cleanup(func() {
 		_, _ = cache.DeleteMany([]string{cacheKeySuffix})
 	})
 
 	rec := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(rec)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"prompt_cache_key":"%s"}`, affinityValue)))
+	ctx, _ := testtenant.CreateTestContext(rec)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(fmt.Sprintf(`{"prompt_cache_key":"%s"}`, affinityValue)))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	channelID, found := GetPreferredChannelByAffinity(ctx, "gpt-5", "default")
@@ -304,7 +306,7 @@ func TestChannelAffinityHitCodexTemplatePassHeadersEffective(t *testing.T) {
 	require.True(t, applied)
 	require.Equal(t, 0.2, mergedOverride["temperature"])
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RequestHeaders: map[string]string{
 			"Originator": "Codex CLI",
 			"Session_id": "sess-123",

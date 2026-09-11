@@ -73,7 +73,7 @@ func toCustomOAuthProviderResponse(p *model.CustomOAuthProvider) *CustomOAuthPro
 
 // GetCustomOAuthProviders returns all custom OAuth providers
 func GetCustomOAuthProviders(c *gin.Context) {
-	providers, err := model.GetAllCustomOAuthProviders()
+	providers, err := model.GetAllCustomOAuthProviders(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -100,7 +100,7 @@ func GetCustomOAuthProvider(c *gin.Context) {
 		return
 	}
 
-	provider, err := model.GetCustomOAuthProviderById(id)
+	provider, err := model.GetCustomOAuthProviderById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiErrorMsg(c, "未找到该 OAuth 提供商")
 		return
@@ -221,13 +221,13 @@ func CreateCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Check if slug is already taken
-	if model.IsSlugTaken(req.Slug, 0) {
+	if model.IsSlugTaken(c.Request.Context(), req.Slug, 0) {
 		common.ApiErrorMsg(c, "该 Slug 已被使用")
 		return
 	}
 
 	// Check if slug conflicts with built-in providers
-	if oauth.IsProviderRegistered(req.Slug) && !oauth.IsCustomProvider(req.Slug) {
+	if oauth.IsProviderRegistered(c.Request.Context(), req.Slug) && !oauth.IsCustomProvider(c.Request.Context(), req.Slug) {
 		common.ApiErrorMsg(c, "该 Slug 与内置 OAuth 提供商冲突")
 		return
 	}
@@ -253,13 +253,13 @@ func CreateCustomOAuthProvider(c *gin.Context) {
 		AccessDeniedMessage:   req.AccessDeniedMessage,
 	}
 
-	if err := model.CreateCustomOAuthProvider(provider); err != nil {
+	if err := model.CreateCustomOAuthProvider(c.Request.Context(), provider); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
 	// Register the provider in the OAuth registry
-	oauth.RegisterOrUpdateCustomProvider(provider)
+	oauth.RegisterOrUpdateCustomProvider(c.Request.Context(), provider)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -306,7 +306,7 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Get existing provider
-	provider, err := model.GetCustomOAuthProviderById(id)
+	provider, err := model.GetCustomOAuthProviderById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiErrorMsg(c, "未找到该 OAuth 提供商")
 		return
@@ -316,12 +316,12 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 
 	// Check if new slug is taken by another provider
 	if req.Slug != "" && req.Slug != provider.Slug {
-		if model.IsSlugTaken(req.Slug, id) {
+		if model.IsSlugTaken(c.Request.Context(), req.Slug, id) {
 			common.ApiErrorMsg(c, "该 Slug 已被使用")
 			return
 		}
 		// Check if slug conflicts with built-in providers
-		if oauth.IsProviderRegistered(req.Slug) && !oauth.IsCustomProvider(req.Slug) {
+		if oauth.IsProviderRegistered(c.Request.Context(), req.Slug) && !oauth.IsCustomProvider(c.Request.Context(), req.Slug) {
 			common.ApiErrorMsg(c, "该 Slug 与内置 OAuth 提供商冲突")
 			return
 		}
@@ -383,16 +383,16 @@ func UpdateCustomOAuthProvider(c *gin.Context) {
 		provider.AccessDeniedMessage = *req.AccessDeniedMessage
 	}
 
-	if err := model.UpdateCustomOAuthProvider(provider); err != nil {
+	if err := model.UpdateCustomOAuthProvider(c.Request.Context(), provider); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
 	// Update the provider in the OAuth registry
 	if oldSlug != provider.Slug {
-		oauth.UnregisterCustomProvider(oldSlug)
+		oauth.UnregisterCustomProvider(c.Request.Context(), oldSlug)
 	}
-	oauth.RegisterOrUpdateCustomProvider(provider)
+	oauth.RegisterOrUpdateCustomProvider(c.Request.Context(), provider)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -411,14 +411,14 @@ func DeleteCustomOAuthProvider(c *gin.Context) {
 	}
 
 	// Get existing provider to get slug
-	provider, err := model.GetCustomOAuthProviderById(id)
+	provider, err := model.GetCustomOAuthProviderById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiErrorMsg(c, "未找到该 OAuth 提供商")
 		return
 	}
 
 	// Check if there are any user bindings
-	count, err := model.GetBindingCountByProviderId(id)
+	count, err := model.GetBindingCountByProviderId(c.Request.Context(), id)
 	if err != nil {
 		common.SysError("Failed to get binding count for provider " + strconv.Itoa(id) + ": " + err.Error())
 		common.ApiErrorMsg(c, "检查用户绑定时发生错误，请稍后重试")
@@ -429,13 +429,13 @@ func DeleteCustomOAuthProvider(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteCustomOAuthProvider(id); err != nil {
+	if err := model.DeleteCustomOAuthProvider(c.Request.Context(), id); err != nil {
 		common.ApiError(c, err)
 		return
 	}
 
 	// Unregister the provider from the OAuth registry
-	oauth.UnregisterCustomProvider(provider.Slug)
+	oauth.UnregisterCustomProvider(c.Request.Context(), provider.Slug)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -443,15 +443,15 @@ func DeleteCustomOAuthProvider(c *gin.Context) {
 	})
 }
 
-func buildUserOAuthBindingsResponse(userId int) ([]UserOAuthBindingResponse, error) {
-	bindings, err := model.GetUserOAuthBindingsByUserId(userId)
+func buildUserOAuthBindingsResponse(tenantCtx context.Context, userId int) ([]UserOAuthBindingResponse, error) {
+	bindings, err := model.GetUserOAuthBindingsByUserId(tenantCtx, userId)
 	if err != nil {
 		return nil, err
 	}
 
 	response := make([]UserOAuthBindingResponse, 0, len(bindings))
 	for _, binding := range bindings {
-		provider, err := model.GetCustomOAuthProviderById(binding.ProviderId)
+		provider, err := model.GetCustomOAuthProviderById(tenantCtx, binding.ProviderId)
 		if err != nil {
 			continue
 		}
@@ -475,7 +475,7 @@ func GetUserOAuthBindings(c *gin.Context) {
 		return
 	}
 
-	response, err := buildUserOAuthBindingsResponse(userId)
+	response, err := buildUserOAuthBindingsResponse(c.Request.Context(), userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -496,7 +496,7 @@ func GetUserOAuthBindingsByAdmin(c *gin.Context) {
 		return
 	}
 
-	targetUser, err := model.GetUserById(userId, false)
+	targetUser, err := model.GetUserById(c.Request.Context(), userId, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -508,7 +508,7 @@ func GetUserOAuthBindingsByAdmin(c *gin.Context) {
 		return
 	}
 
-	response, err := buildUserOAuthBindingsResponse(userId)
+	response, err := buildUserOAuthBindingsResponse(c.Request.Context(), userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -548,17 +548,17 @@ func UnbindCustomOAuth(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccountUnbind, Context: context}) == nil {
 		return
 	}
-	if err := service.UnbindAccountOAuth(identity, providerId); err != nil {
+	if err := service.UnbindAccountOAuth(c.Request.Context(), identity, providerId); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
 	succeeded = true
-	user, err := model.GetUserById(identity.UserID, false)
+	user, err := model.GetUserById(c.Request.Context(), identity.UserID, false)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	notificationFailed = service.NotifyAccountSecurityChange(user.Email, "Login account unlinked") != nil
+	notificationFailed = service.NotifyAccountSecurityChange(c.Request.Context(), user.Email, "Login account unlinked") != nil
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -575,7 +575,7 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 		return
 	}
 
-	targetUser, err := model.GetUserById(userId, false)
+	targetUser, err := model.GetUserById(c.Request.Context(), userId, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -594,7 +594,7 @@ func UnbindCustomOAuthByAdmin(c *gin.Context) {
 		return
 	}
 
-	if err := model.DeleteUserOAuthBinding(userId, providerId); err != nil {
+	if err := model.DeleteUserOAuthBinding(c.Request.Context(), userId, providerId); err != nil {
 		common.ApiError(c, err)
 		return
 	}

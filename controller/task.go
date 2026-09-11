@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -35,7 +37,7 @@ var (
 )
 
 func GetTask(c *gin.Context) {
-	task, exists, err := model.GetByTaskId(c.GetInt("id"), c.Param("key"))
+	task, exists, err := model.GetByTaskId(c.Request.Context(), c.GetInt("id"), c.Param("key"))
 	if err != nil {
 		videoProxyError(c, http.StatusInternalServerError, "server_error", "Failed to query task")
 		return
@@ -64,7 +66,7 @@ func GetTask(c *gin.Context) {
 }
 
 func GetTaskArtifacts(c *gin.Context) {
-	task, exists, err := model.GetByTaskId(c.GetInt("id"), c.Param("key"))
+	task, exists, err := model.GetByTaskId(c.Request.Context(), c.GetInt("id"), c.Param("key"))
 	if err != nil {
 		writeTaskArtifactError(c, http.StatusInternalServerError, "artifact_internal_error", "Failed to query task")
 		return
@@ -91,14 +93,14 @@ func GetDashboardTaskArtifacts(c *gin.Context) {
 
 func writeTaskArtifacts(c *gin.Context, task *model.Task, dashboard bool) {
 	c.Header("Cache-Control", "private, no-store")
-	artifacts, err := projectTaskArtifacts(task)
+	artifacts, err := projectTaskArtifacts(c.Request.Context(), task)
 	if err != nil {
 		writeTaskArtifactProjectionError(c, err)
 		return
 	}
 	items := make([]taskArtifactResponse, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		contentURL, buildErr := service.BuildTaskArtifactContentURL(task.TaskID, artifact.Key)
+		contentURL, buildErr := service.BuildTaskArtifactContentURL(c.Request.Context(), task.TaskID, artifact.Key)
 		if buildErr != nil {
 			writeTaskArtifactError(c, http.StatusInternalServerError, "artifact_url_error", "Failed to build artifact content URL")
 			return
@@ -112,7 +114,7 @@ func writeTaskArtifacts(c *gin.Context, task *model.Task, dashboard bool) {
 	}
 	response := gin.H{"task_id": task.TaskID, "artifacts": items}
 	if legacyVideoAvailable(task) {
-		legacyContentURL, buildErr := service.BuildTaskArtifactContentURL(task.TaskID, "video")
+		legacyContentURL, buildErr := service.BuildTaskArtifactContentURL(c.Request.Context(), task.TaskID, "video")
 		if buildErr != nil {
 			writeTaskArtifactError(c, http.StatusInternalServerError, "artifact_url_error", "Failed to build artifact content URL")
 			return
@@ -126,11 +128,11 @@ func writeTaskArtifacts(c *gin.Context, task *model.Task, dashboard bool) {
 	c.JSON(http.StatusOK, response)
 }
 
-func projectTaskArtifacts(task *model.Task) ([]relaychannel.TaskArtifact, error) {
+func projectTaskArtifacts(tenantCtx context.Context, task *model.Task) ([]relaychannel.TaskArtifact, error) {
 	if task == nil || task.Status != model.TaskStatusSuccess || !taskHasPluginExecution(task) {
 		return []relaychannel.TaskArtifact{}, nil
 	}
-	adaptor := relay.GetTaskAdaptor(task.Platform)
+	adaptor := relay.GetTaskAdaptor(tenantCtx, task.Platform)
 	if adaptor == nil {
 		return nil, errTaskArtifactPluginUnavailable
 	}
@@ -174,15 +176,15 @@ func validateProjectedTaskArtifacts(artifacts []relaychannel.TaskArtifact) ([]re
 	return artifacts, nil
 }
 
-func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error) {
+func initTaskArtifactAdaptor(tenantCtx context.Context, task *model.Task) (relaychannel.TaskAdaptor, error) {
 	if task == nil || !taskHasPluginExecution(task) {
 		return nil, errTaskArtifactPluginUnavailable
 	}
-	channelModel, err := model.CacheGetChannel(task.ChannelId)
+	channelModel, err := model.CacheGetChannel(tenantCtx, task.ChannelId)
 	if err != nil {
 		return nil, fmt.Errorf("%w: channel unavailable", errTaskArtifactPluginUnavailable)
 	}
-	adaptor := relay.GetTaskAdaptor(task.Platform)
+	adaptor := relay.GetTaskAdaptor(tenantCtx, task.Platform)
 	if adaptor == nil {
 		return nil, errTaskArtifactPluginUnavailable
 	}
@@ -199,7 +201,7 @@ func initTaskArtifactAdaptor(task *model.Task) (relaychannel.TaskAdaptor, error)
 			ChannelType:    channelModel.Type,
 			ChannelBaseUrl: baseURL,
 			ApiKey:         pluginKey,
-			ChannelSetting: channelModel.GetSetting(),
+			ChannelSetting: channelModel.GetSetting(tenantCtx),
 		},
 	})
 	return adaptor, nil
@@ -232,20 +234,20 @@ func legacyVideoAvailable(task *model.Task) bool {
 
 func getTaskForArtifactRequest(c *gin.Context, taskID string) (*model.Task, bool, error) {
 	if middleware.IsTaskArtifactAccess(c) {
-		task, exists, err := model.GetUniqueByOnlyTaskId(taskID)
+		task, exists, err := model.GetUniqueByOnlyTaskId(c.Request.Context(), taskID)
 		if err != nil || !exists || task == nil {
 			return task, exists, err
 		}
-		owner, err := model.GetUserCache(task.UserId)
+		owner, err := model.GetUserCache(c.Request.Context(), task.UserId)
 		if err != nil || owner == nil || owner.Status != common.UserStatusEnabled {
 			return nil, false, err
 		}
 		return task, true, nil
 	}
 	if c.GetInt("token_id") == 0 && c.GetInt("role") >= common.RoleAdminUser {
-		return model.GetByOnlyTaskId(taskID)
+		return model.GetByOnlyTaskId(c.Request.Context(), taskID)
 	}
-	return model.GetByTaskId(c.GetInt("id"), taskID)
+	return model.GetByTaskId(c.Request.Context(), c.GetInt("id"), taskID)
 }
 
 func writeTaskArtifactProjectionError(c *gin.Context, err error) {
@@ -310,7 +312,7 @@ func TaskArtifactContent(c *gin.Context) {
 		}
 		return
 	}
-	artifacts, err := projectTaskArtifacts(task)
+	artifacts, err := projectTaskArtifacts(c.Request.Context(), task)
 	if err != nil {
 		writeTaskArtifactProjectionError(c, err)
 		return
@@ -332,7 +334,7 @@ func TaskArtifactContent(c *gin.Context) {
 		return
 	}
 
-	adaptor, err := initTaskArtifactAdaptor(task)
+	adaptor, err := initTaskArtifactAdaptor(c.Request.Context(), task)
 	if err != nil {
 		writeTaskArtifactProjectionError(c, err)
 		return
@@ -376,9 +378,9 @@ func GetAllTask(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	queryParams := model.SyncTaskQueryParams{Platform: constant.TaskPlatform(c.Query("platform")), TaskID: c.Query("task_id"), Status: c.Query("status"), Action: c.Query("action"), StartTimestamp: startTimestamp, EndTimestamp: endTimestamp, ChannelID: c.Query("channel_id")}
-	items := model.TaskGetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
-	pageInfo.SetTotal(int(model.TaskCountAllTasks(queryParams)))
-	pageInfo.SetItems(tasksToDto(items, true, c.GetInt("role")))
+	items := model.TaskGetAllTasks(c.Request.Context(), pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	pageInfo.SetTotal(int(model.TaskCountAllTasks(c.Request.Context(), queryParams)))
+	pageInfo.SetItems(tasksToDto(c.Request.Context(), items, true, c.GetInt("role")))
 	common.ApiSuccess(c, pageInfo)
 }
 
@@ -388,13 +390,13 @@ func GetUserTask(c *gin.Context) {
 	startTimestamp, _ := strconv.ParseInt(c.Query("start_timestamp"), 10, 64)
 	endTimestamp, _ := strconv.ParseInt(c.Query("end_timestamp"), 10, 64)
 	queryParams := model.SyncTaskQueryParams{Platform: constant.TaskPlatform(c.Query("platform")), TaskID: c.Query("task_id"), Status: c.Query("status"), Action: c.Query("action"), StartTimestamp: startTimestamp, EndTimestamp: endTimestamp}
-	items := model.TaskGetAllUserTask(userID, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
-	pageInfo.SetTotal(int(model.TaskCountAllUserTask(userID, queryParams)))
-	pageInfo.SetItems(tasksToDto(items, false, common.RoleCommonUser))
+	items := model.TaskGetAllUserTask(c.Request.Context(), userID, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	pageInfo.SetTotal(int(model.TaskCountAllUserTask(c.Request.Context(), userID, queryParams)))
+	pageInfo.SetItems(tasksToDto(c.Request.Context(), items, false, common.RoleCommonUser))
 	common.ApiSuccess(c, pageInfo)
 }
 
-func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskDto {
+func tasksToDto(tenantCtx context.Context, tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskDto {
 	var userIDMap map[int]*model.UserBase
 	if fillUser {
 		userIDMap = make(map[int]*model.UserBase)
@@ -403,7 +405,7 @@ func tasksToDto(tasks []*model.Task, fillUser bool, viewerRole int) []*dto.TaskD
 			userIDs.Add(task.UserId)
 		}
 		for _, userID := range userIDs.Items() {
-			if cacheUser, err := model.GetUserCache(userID); err == nil {
+			if cacheUser, err := model.GetUserCache(tenantCtx, userID); err == nil {
 				userIDMap[userID] = cacheUser
 			}
 		}

@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"bytes"
 	"encoding/base64"
@@ -66,8 +68,8 @@ func DecodeBase64FileData(base64String string) (string, string, error) {
 }
 
 // GetImageFromUrl 获取图片的类型和base64编码的数据
-func GetImageFromUrl(url string) (mimeType string, data string, err error) {
-	resp, err := DoDownloadRequest(url)
+func GetImageFromUrl(tenantCtx context.Context, url string) (mimeType string, data string, err error) {
+	resp, err := DoDownloadRequest(tenantCtx, url)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to download image: %w", err)
 	}
@@ -116,8 +118,8 @@ func GetImageFromUrl(url string) (mimeType string, data string, err error) {
 	return mimeType, data, nil
 }
 
-func DecodeUrlImageData(imageUrl string) (image.Config, string, error) {
-	response, err := DoDownloadRequest(imageUrl)
+func DecodeUrlImageData(tenantCtx context.Context, imageUrl string) (image.Config, string, error) {
+	response, err := DoDownloadRequest(tenantCtx, imageUrl)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("fail to get image from url: %s", err.Error()))
 		return image.Config{}, "", err

@@ -175,7 +175,7 @@ func finishAdminAudit(c *gin.Context, writer *auditResponseWriter) {
 		Params:  routeParams,
 	}
 
-	model.RecordOperationAuditLog(operatorId, operatorRole, content, ip, action, opParams, adminInfo, auditInfo, c)
+	model.RecordOperationAuditLog(c.Request.Context(), operatorId, operatorRole, content, ip, action, opParams, adminInfo, auditInfo, c)
 }
 
 func auditAuthMethod(c *gin.Context) string {
@@ -266,9 +266,9 @@ func AccessTokenAudit() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		raw, present := authorizationToken(c.GetHeader("Authorization"))
 		if present {
-			_, internal, _ := service.ParseDashboardAccessToken(raw)
+			_, internal, _ := service.ParseDashboardAccessToken(c.Request.Context(), raw)
 			if !internal {
-				user, err := model.ValidateAccessToken(raw)
+				user, err := model.ValidateAccessToken(c.Request.Context(), raw)
 				if err == nil && user != nil && user.Id > 0 {
 					beginAccessTokenAudit(c, user, raw)
 					defer finishAccessTokenAudit(c)

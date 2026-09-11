@@ -64,7 +64,7 @@ func fetchCodexChannelWhamData(
 		return
 	}
 
-	ch, err := model.GetChannelById(channelId, true)
+	ch, err := model.GetChannelById(c.Request.Context(), channelId, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -99,7 +99,7 @@ func fetchCodexChannelWhamData(
 		return
 	}
 
-	client, err := service.GetHttpClientWithProxy(ch.GetSetting().Proxy)
+	client, err := service.GetHttpClientWithProxy(c.Request.Context(), ch.GetSetting(c.Request.Context()).Proxy)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -119,7 +119,7 @@ func fetchCodexChannelWhamData(
 		refreshCtx, refreshCancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 		defer refreshCancel()
 
-		res, refreshErr := service.RefreshCodexOAuthTokenWithProxy(refreshCtx, oauthKey.RefreshToken, ch.GetSetting().Proxy)
+		res, refreshErr := service.RefreshCodexOAuthTokenWithProxy(refreshCtx, oauthKey.RefreshToken, ch.GetSetting(c.Request.Context()).Proxy)
 		if refreshErr == nil {
 			oauthKey.AccessToken = res.AccessToken
 			oauthKey.RefreshToken = res.RefreshToken
@@ -131,8 +131,8 @@ func fetchCodexChannelWhamData(
 
 			encoded, encErr := common.Marshal(oauthKey)
 			if encErr == nil {
-				_ = model.DB.Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
-				model.InitChannelCache()
+				_ = model.DB.WithContext(c.Request.Context()).Model(&model.Channel{}).Where("id = ?", ch.Id).Update("key", string(encoded)).Error
+				model.InitChannelCache(c.Request.Context())
 			}
 
 			ctx2, cancel2 := context.WithTimeout(c.Request.Context(), 15*time.Second)

@@ -1,5 +1,7 @@
 package setting
 
+import context "context"
+
 import "strings"
 
 var CheckSensitiveEnabled = true
@@ -19,23 +21,24 @@ var SensitiveWords = []string{
 	"test_sensitive",
 }
 
-func SensitiveWordsToString() string {
-	return strings.Join(SensitiveWords, "\n")
+func SensitiveWordsToString(tenantCtx context.Context) string {
+	return strings.Join(TenantState(tenantCtx).SensitiveWords, "\n")
 }
 
-func SensitiveWordsFromString(s string) {
-	SensitiveWords = []string{}
+func SensitiveWordsFromString(tenantCtx context.Context, s string) {
+	words := []string{}
 	sw := strings.SplitSeq(s, "\n")
 	for w := range sw {
 		w = strings.TrimSpace(w)
 		if w != "" {
-			SensitiveWords = append(SensitiveWords, w)
+			words = append(words, w)
 		}
 	}
+	UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) { state.SensitiveWords = words })
 }
 
-func ShouldCheckPromptSensitive() bool {
-	return CheckSensitiveEnabled && CheckSensitiveOnPromptEnabled
+func ShouldCheckPromptSensitive(tenantCtx context.Context) bool {
+	return TenantState(tenantCtx).CheckSensitiveEnabled && TenantState(tenantCtx).CheckSensitiveOnPromptEnabled
 }
 
 //func ShouldCheckCompletionSensitive() bool {

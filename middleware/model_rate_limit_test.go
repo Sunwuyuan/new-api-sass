@@ -1,10 +1,10 @@
 package middleware
 
 import (
-	"context"
 	"testing"
 	"time"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +15,7 @@ func TestModelRedisRateLimitUsesUTCRegardlessOfLocalTimezone(t *testing.T) {
 	time.Local = time.FixedZone("test-utc-plus-eight", 8*60*60)
 	t.Cleanup(func() { time.Local = previousLocation })
 
-	ctx := context.Background()
+	ctx := testtenant.Context()
 	recordKey := "rateLimit:model-utc-record"
 	recordRedisRequest(ctx, redisClient, recordKey, 2)
 	recorded, err := redisClient.LIndex(ctx, recordKey, 0).Result()

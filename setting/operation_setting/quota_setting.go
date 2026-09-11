@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type QuotaSetting struct {
@@ -16,6 +18,6 @@ func init() {
 	config.GlobalConfig.Register("quota_setting", &quotaSetting)
 }
 
-func GetQuotaSetting() *QuotaSetting {
-	return &quotaSetting
+func GetQuotaSetting(tenantCtx context.Context) *QuotaSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("quota_setting").(*QuotaSetting)
 }

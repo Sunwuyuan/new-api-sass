@@ -37,14 +37,14 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 			// Failed requests have no committed balance changes to render.
 			content = "Failed user quota adjustment"
 		}
-		model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), content, c.ClientIP(), action, params,
+		model.RecordOperationAuditLog(c.Request.Context(), c.GetInt("id"), c.GetInt("role"), content, c.ClientIP(), action, params,
 			auditOperatorInfo(c), &model.AuditRequestInfo{
 				Method: c.Request.Method, Route: c.FullPath(), Status: c.Writer.Status(), Success: success,
 			}, c)
 		markAuditLogged(c)
 	}()
 
-	adjustment, err := model.AdjustUserQuota(req.Id, c.GetInt("role"), req.Mode, req.Value)
+	adjustment, err := model.AdjustUserQuota(c.Request.Context(), req.Id, c.GetInt("role"), req.Mode, req.Value)
 	if err != nil {
 		switch {
 		case errors.Is(err, model.ErrInvalidUserQuotaAdjustment):
@@ -78,7 +78,7 @@ func manageUserQuota(c *gin.Context, req ManageRequest) {
 	}
 	success = true
 	operation := model.AuditOperation{Action: action, Params: params}
-	model.RecordLogWithAdminInfo(adjustment.UserID, model.LogTypeTopup,
+	model.RecordLogWithAdminInfo(c.Request.Context(), adjustment.UserID, model.LogTypeTopup,
 		auditContentEN(action, params), auditOperatorInfo(c), &operation, c)
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": ""})
 }

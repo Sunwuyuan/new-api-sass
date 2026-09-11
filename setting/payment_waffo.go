@@ -1,5 +1,7 @@
 package setting
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
@@ -24,10 +26,10 @@ var (
 )
 
 // GetWaffoPayMethods 从 options 读取 Waffo 支付方式配置
-func GetWaffoPayMethods() []constant.WaffoPayMethod {
-	common.OptionMapRWMutex.RLock()
-	jsonStr := common.OptionMap["WaffoPayMethods"]
-	common.OptionMapRWMutex.RUnlock()
+func GetWaffoPayMethods(tenantCtx context.Context) []constant.WaffoPayMethod {
+	common.TenantState(tenantCtx).OptionMapRWMutex.RLock()
+	jsonStr := common.TenantState(tenantCtx).OptionMap["WaffoPayMethods"]
+	common.TenantState(tenantCtx).OptionMapRWMutex.RUnlock()
 
 	if jsonStr == "" {
 		return copyDefaultWaffoPayMethods()
@@ -40,14 +42,14 @@ func GetWaffoPayMethods() []constant.WaffoPayMethod {
 }
 
 // SetWaffoPayMethods 序列化 Waffo 支付方式配置并更新 OptionMap
-func SetWaffoPayMethods(methods []constant.WaffoPayMethod) error {
+func SetWaffoPayMethods(tenantCtx context.Context, methods []constant.WaffoPayMethod) error {
 	jsonBytes, err := common.Marshal(methods)
 	if err != nil {
 		return err
 	}
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap["WaffoPayMethods"] = string(jsonBytes)
-	common.OptionMapRWMutex.Unlock()
+	common.TenantState(tenantCtx).OptionMapRWMutex.Lock()
+	common.TenantState(tenantCtx).OptionMap["WaffoPayMethods"] = string(jsonBytes)
+	common.TenantState(tenantCtx).OptionMapRWMutex.Unlock()
 	return nil
 }
 

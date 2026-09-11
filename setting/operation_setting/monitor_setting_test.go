@@ -1,24 +1,29 @@
 package operation_setting
 
 import (
+	config "github.com/QuantumNous/new-api/setting/config"
+
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGetMonitorSetting_ChannelTestEnabledEnvOverridesEnabledConfig(t *testing.T) {
-	orig := monitorSetting
-	t.Cleanup(func() { monitorSetting = orig })
+	orig := *(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting))
+	t.Cleanup(func() {
+		*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = orig
+	})
 
 	t.Setenv("CHANNEL_TEST_ENABLED", "false")
 	t.Setenv("CHANNEL_TEST_FREQUENCY", "5")
-	monitorSetting = MonitorSetting{
+	*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = MonitorSetting{
 		AutoTestChannelEnabled: true,
 		AutoTestChannelMinutes: 20,
 	}
 
-	setting := GetMonitorSetting()
+	setting := GetMonitorSetting(testtenant.Context())
 
 	require.NotNil(t, setting)
 	assert.False(t, setting.AutoTestChannelEnabled)
@@ -26,16 +31,18 @@ func TestGetMonitorSetting_ChannelTestEnabledEnvOverridesEnabledConfig(t *testin
 }
 
 func TestGetMonitorSetting_ChannelTestEnabledEnvCanEnableDisabledConfig(t *testing.T) {
-	orig := monitorSetting
-	t.Cleanup(func() { monitorSetting = orig })
+	orig := *(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting))
+	t.Cleanup(func() {
+		*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = orig
+	})
 
 	t.Setenv("CHANNEL_TEST_ENABLED", "true")
-	monitorSetting = MonitorSetting{
+	*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = MonitorSetting{
 		AutoTestChannelEnabled: false,
 		AutoTestChannelMinutes: 12,
 	}
 
-	setting := GetMonitorSetting()
+	setting := GetMonitorSetting(testtenant.Context())
 
 	require.NotNil(t, setting)
 	assert.True(t, setting.AutoTestChannelEnabled)
@@ -43,22 +50,26 @@ func TestGetMonitorSetting_ChannelTestEnabledEnvCanEnableDisabledConfig(t *testi
 }
 
 func TestGetMonitorSettingPreservesAutoBanOnlyMode(t *testing.T) {
-	orig := monitorSetting
-	t.Cleanup(func() { monitorSetting = orig })
+	orig := *(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting))
+	t.Cleanup(func() {
+		*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = orig
+	})
 
 	t.Setenv("CHANNEL_TEST_ENABLED", "")
 	t.Setenv("CHANNEL_TEST_FREQUENCY", "")
-	monitorSetting = MonitorSetting{ChannelTestMode: ChannelTestModeAutoBanOnly}
+	*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = MonitorSetting{ChannelTestMode: ChannelTestModeAutoBanOnly}
 
-	setting := GetMonitorSetting()
+	setting := GetMonitorSetting(testtenant.Context())
 
 	require.NotNil(t, setting)
 	assert.Equal(t, ChannelTestModeAutoBanOnly, setting.ChannelTestMode)
 }
 
 func TestGetMonitorSettingNormalizesChannelTestConcurrency(t *testing.T) {
-	orig := monitorSetting
-	t.Cleanup(func() { monitorSetting = orig })
+	orig := *(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting))
+	t.Cleanup(func() {
+		*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = orig
+	})
 
 	tests := []struct {
 		name        string
@@ -72,9 +83,9 @@ func TestGetMonitorSettingNormalizesChannelTestConcurrency(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			monitorSetting = MonitorSetting{ChannelTestConcurrency: test.concurrency}
+			*(config.GlobalConfig.ForTenant(testtenant.Context()).Get("monitor_setting").(*MonitorSetting)) = MonitorSetting{ChannelTestConcurrency: test.concurrency}
 
-			setting := GetMonitorSetting()
+			setting := GetMonitorSetting(testtenant.Context())
 
 			require.NotNil(t, setting)
 			assert.Equal(t, test.want, setting.ChannelTestConcurrency)

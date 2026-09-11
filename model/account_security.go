@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 
@@ -18,12 +20,12 @@ var (
 // ChangeUserPassword rechecks the authorized session, password state and current
 // password under the same user lock as the credential update. Only self-profile
 // fields are accepted; a stale snapshot cannot restore roles or account status.
-func ChangeUserPassword(identity AuthSessionIdentity, update *User, firstPassword bool) error {
+func ChangeUserPassword(tenantCtx context.Context, identity AuthSessionIdentity, update *User, firstPassword bool) error {
 	hash, err := common.HashAccountPassword(update.Password)
 	if err != nil {
 		return err
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := ValidateAuthSessionWithTx(tx, identity); err != nil {
 			return err
 		}
@@ -67,8 +69,8 @@ type AccountLoginMethods struct {
 	CustomProviderIDs []int
 }
 
-func UnbindUserOAuthForSession(identity AuthSessionIdentity, providerID int, enabled AccountLoginMethods) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
+func UnbindUserOAuthForSession(tenantCtx context.Context, identity AuthSessionIdentity, providerID int, enabled AccountLoginMethods) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := ValidateAuthSessionWithTx(tx, identity); err != nil {
 			return err
 		}

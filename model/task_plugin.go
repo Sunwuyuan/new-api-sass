@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/sha256"
 	"encoding/hex"
@@ -18,23 +20,24 @@ type TaskPluginChannelRef struct {
 	Name string `json:"name"`
 }
 
-func GetTaskPluginUsage(key string) ([]TaskPluginChannelRef, int64, error) {
+func GetTaskPluginUsage(tenantCtx context.Context, key string) ([]TaskPluginChannelRef, int64, error) {
 	var channels []Channel
-	if err := DB.Where("type = ? AND status = ?", constant.ChannelTypeTaskPlugin, common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("type = ? AND status = ?", constant.ChannelTypeTaskPlugin, common.ChannelStatusEnabled).Find(&channels).Error; err != nil {
 		return nil, 0, err
 	}
 	refs := make([]TaskPluginChannelRef, 0)
 	for _, channel := range channels {
-		if channel.GetSetting().TaskPluginKey == key {
+		if channel.GetSetting(tenantCtx).TaskPluginKey == key {
 			refs = append(refs, TaskPluginChannelRef{Id: channel.Id, Name: channel.Name})
 		}
 	}
 	var inFlight int64
-	err := DB.Model(&Task{}).Where("platform = ? AND status NOT IN ?", key, []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).Count(&inFlight).Error
+	err := DB.WithContext(tenantCtx).Model(&Task{}).Where("platform = ? AND status NOT IN ?", key, []TaskStatus{TaskStatusSuccess, TaskStatusFailure}).Count(&inFlight).Error
 	return refs, inFlight, err
 }
 
 type TaskPlugin struct {
+	TenantID   int64  `json:"-" gorm:"not null;index;uniqueIndex:uk_task_plugin_key_version,priority:1"`
 	Id         int64  `json:"id"`
 	Key        string `json:"key" gorm:"size:128;not null;uniqueIndex:uk_task_plugin_key_version,priority:1"`
 	APIVersion int    `json:"api_version" gorm:"not null"`
@@ -60,8 +63,8 @@ func (plugin TaskPlugin) HasIcon() bool {
 	return plugin.Icon != ""
 }
 
-func SaveTaskPlugin(plugin *TaskPlugin) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
+func SaveTaskPlugin(tenantCtx context.Context, plugin *TaskPlugin) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var existing TaskPlugin
 		err := tx.Where(&TaskPlugin{Key: plugin.Key, Version: plugin.Version}).First(&existing).Error
 		if err == nil {
@@ -94,15 +97,15 @@ func SaveTaskPlugin(plugin *TaskPlugin) error {
 	})
 }
 
-func ListTaskPluginVersions(key string) ([]TaskPlugin, error) {
+func ListTaskPluginVersions(tenantCtx context.Context, key string) ([]TaskPlugin, error) {
 	var plugins []TaskPlugin
-	err := DB.Where(&TaskPlugin{Key: key}).Order("created_at DESC, id DESC").Find(&plugins).Error
+	err := DB.WithContext(tenantCtx).Where(&TaskPlugin{Key: key}).Order("created_at DESC, id DESC").Find(&plugins).Error
 	return plugins, err
 }
 
-func ListTaskPlugins() ([]TaskPlugin, error) {
+func ListTaskPlugins(tenantCtx context.Context) ([]TaskPlugin, error) {
 	var plugins []TaskPlugin
-	err := DB.
+	err := DB.WithContext(tenantCtx).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "created_at"}, Desc: true}).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}, Desc: true}).
@@ -110,9 +113,9 @@ func ListTaskPlugins() ([]TaskPlugin, error) {
 	return plugins, err
 }
 
-func GetTaskPluginVersion(key, version string) (*TaskPlugin, error) {
+func GetTaskPluginVersion(tenantCtx context.Context, key, version string) (*TaskPlugin, error) {
 	var plugin TaskPlugin
-	query := DB.Where(&TaskPlugin{Key: key})
+	query := DB.WithContext(tenantCtx).Where(&TaskPlugin{Key: key})
 	if version == "" {
 		query = query.Where(&TaskPlugin{Active: true})
 	} else {
@@ -124,8 +127,8 @@ func GetTaskPluginVersion(key, version string) (*TaskPlugin, error) {
 	return &plugin, nil
 }
 
-func ListActiveTaskPlugins() ([]TaskPlugin, error) {
-	snapshot, err := GetTaskPluginSyncSnapshot()
+func ListActiveTaskPlugins(tenantCtx context.Context) ([]TaskPlugin, error) {
+	snapshot, err := GetTaskPluginSyncSnapshot(tenantCtx)
 	return snapshot.Plugins, err
 }
 
@@ -137,9 +140,9 @@ type TaskPluginSyncSnapshot struct {
 // GetTaskPluginSyncSnapshot returns the enabled override set together with a
 // deterministic revision of every active database override. Nodes can compare
 // the revision even though their local routing-generation counters differ.
-func GetTaskPluginSyncSnapshot() (TaskPluginSyncSnapshot, error) {
+func GetTaskPluginSyncSnapshot(tenantCtx context.Context) (TaskPluginSyncSnapshot, error) {
 	var activePlugins []TaskPlugin
-	if err := DB.Where(&TaskPlugin{Active: true}).
+	if err := DB.WithContext(tenantCtx).Where(&TaskPlugin{Active: true}).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "key"}}).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "version"}}).
 		Order(clause.OrderByColumn{Column: clause.Column{Name: "id"}}).
@@ -185,8 +188,8 @@ func GetTaskPluginSyncSnapshot() (TaskPluginSyncSnapshot, error) {
 	}, nil
 }
 
-func ActivateTaskPlugin(key, version string) error {
-	return DB.Transaction(func(tx *gorm.DB) error {
+func ActivateTaskPlugin(tenantCtx context.Context, key, version string) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var target TaskPlugin
 		if err := tx.Where(&TaskPlugin{Key: key, Version: version}).First(&target).Error; err != nil {
 			return err
@@ -198,8 +201,8 @@ func ActivateTaskPlugin(key, version string) error {
 	})
 }
 
-func SetTaskPluginEnabled(key string, enabled bool) error {
-	result := DB.Model(&TaskPlugin{}).Where(&TaskPlugin{Key: key, Active: true}).Update("enabled", enabled)
+func SetTaskPluginEnabled(tenantCtx context.Context, key string, enabled bool) error {
+	result := DB.WithContext(tenantCtx).Model(&TaskPlugin{}).Where(&TaskPlugin{Key: key, Active: true}).Update("enabled", enabled)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -214,9 +217,9 @@ type TaskPluginDeleteResult struct {
 	Promoted      *TaskPlugin
 }
 
-func DeleteTaskPluginVersion(key, version string) (TaskPluginDeleteResult, error) {
+func DeleteTaskPluginVersion(tenantCtx context.Context, key, version string) (TaskPluginDeleteResult, error) {
 	result := TaskPluginDeleteResult{}
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var plugin TaskPlugin
 		if err := lockForUpdate(tx).Where(&TaskPlugin{Key: key, Version: version}).First(&plugin).Error; err != nil {
 			return err

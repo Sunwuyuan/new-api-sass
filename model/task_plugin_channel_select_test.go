@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,25 +26,25 @@ func TestTaskPluginChannelSelectionFiltersBothCachePaths(t *testing.T) {
 		{Id: 900005, Type: constant.ChannelTypeJimeng, Status: common.ChannelStatusEnabled, Name: "legacy-beta", Models: "legacy", Group: "default", Priority: &priority, Weight: &weight},
 	}
 	for i := range channels {
-		require.NoError(t, channels[i].Insert())
+		require.NoError(t, channels[i].Insert(testtenant.Context()))
 	}
 
-	selected, err := GetChannel("default", "shared", 0, identityFilters("alpha", nil))
+	selected, err := GetChannel(testtenant.Context(), "default", "shared", 0, identityFilters("alpha", nil))
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, "alpha", selected.Name)
-	selected, err = GetChannel("default", "shared", 0, identityFilters("", nil))
+	selected, err = GetChannel(testtenant.Context(), "default", "shared", 0, identityFilters("", nil))
 	require.NoError(t, err)
 	assert.Nil(t, selected)
-	selected, err = GetChannel("default", "ordinary", 0, identityFilters("", nil))
+	selected, err = GetChannel(testtenant.Context(), "default", "ordinary", 0, identityFilters("", nil))
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, "ordinary", selected.Name)
-	selected, err = GetChannel("default", "legacy", 0, identityFilters("legacy-alpha", []int{constant.ChannelTypeKling}))
+	selected, err = GetChannel(testtenant.Context(), "default", "legacy", 0, identityFilters("legacy-alpha", []int{constant.ChannelTypeKling}))
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Equal(t, "legacy-alpha", selected.Name)
-	selected, err = GetChannel("default", "legacy", 0, identityFilters("legacy-alpha", []int{constant.ChannelTypeKling, constant.ChannelTypeJimeng}))
+	selected, err = GetChannel(testtenant.Context(), "default", "legacy", 0, identityFilters("legacy-alpha", []int{constant.ChannelTypeKling, constant.ChannelTypeJimeng}))
 	require.NoError(t, err)
 	require.NotNil(t, selected)
 	assert.Contains(t, []string{"legacy-alpha", "legacy-beta"}, selected.Name)
@@ -61,22 +62,22 @@ func TestSharedPluginKeysFilterBothChannelSources(t *testing.T) {
 	truncateTables(t)
 	originalMemoryCache := common.MemoryCacheEnabled
 	common.MemoryCacheEnabled = true
-	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCache; InitChannelCache() })
+	t.Cleanup(func() { common.MemoryCacheEnabled = originalMemoryCache; InitChannelCache(testtenant.Context()) })
 	filters := []dto.ChannelFilter{{Kind: dto.FilterTaskPluginIdentity, TaskPluginKey: "alpha", TaskPluginKeys: []string{"alpha", "beta"}}}
 	var abilities []Ability
 	for index, key := range []string{"alpha", "beta", "unrelated"} {
 		setting := `{"task_plugin_key":"` + key + `"}`
 		channel := Channel{Id: 910001 + index, Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: key, Models: "shared", Group: "default", Setting: &setting}
-		require.NoError(t, channel.Insert())
+		require.NoError(t, channel.Insert(testtenant.Context()))
 		abilities = append(abilities, Ability{ChannelId: channel.Id, Model: "shared", Group: "default", Enabled: true})
-		matches, _ := ChannelSatisfiesFilters(&channel, "shared", filters)
+		matches, _ := ChannelSatisfiesFilters(testtenant.Context(), &channel, "shared", filters)
 		assert.Equal(t, index < 2, matches)
 	}
-	assert.Equal(t, abilities[:2], filterAbilitiesByConstraints(abilities, "shared", filters))
-	InitChannelCache()
-	channelSyncLock.RLock()
-	kept, emptied := filterCandidateIDs([]int{910001, 910002, 910003}, "shared", filters)
-	channelSyncLock.RUnlock()
+	assert.Equal(t, abilities[:2], filterAbilitiesByConstraints(testtenant.Context(), abilities, "shared", filters))
+	InitChannelCache(testtenant.Context())
+	TenantState(testtenant.Context()).channelSyncLock.RLock()
+	kept, emptied := filterCandidateIDs(testtenant.Context(), []int{910001, 910002, 910003}, "shared", filters)
+	TenantState(testtenant.Context()).channelSyncLock.RUnlock()
 	assert.Equal(t, []int{910001, 910002}, kept)
 	assert.Empty(t, emptied)
 }

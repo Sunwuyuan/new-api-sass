@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -24,29 +26,29 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
 
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode": `{"tiered-test-model":"tiered_expr"}`,
 		"billing_setting.billing_expr": `{"tiered-test-model":"param(\"stream\") == true ? tier(\"stream\", p * 3) : tier(\"base\", p * 2)"}`,
 	}))
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	req := httptest.NewRequest(http.MethodPost, "/api/channel/test/1", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	req := testtenant.NewRequest(http.MethodPost, "/api/channel/test/1", nil)
 	req.Body = nil
 	req.ContentLength = 0
 	req.Header.Set("Content-Type", "application/json")
 	ctx.Request = req
 	ctx.Set("group", "default")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "tiered-test-model",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -65,17 +67,17 @@ func TestModelPriceHelperTieredUsesPreloadedRequestInput(t *testing.T) {
 	require.NotNil(t, info.TieredBillingSnapshot)
 	require.Equal(t, "stream", info.TieredBillingSnapshot.EstimatedTier)
 	require.Equal(t, billing_setting.BillingModeTieredExpr, info.TieredBillingSnapshot.BillingMode)
-	require.Equal(t, common.QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
+	require.Equal(t, common.TenantState(testtenant.Context()).QuotaPerUnit, info.TieredBillingSnapshot.QuotaPerUnit)
 }
 
 func TestFixedPricePreConsumeAndRealtimeRejection(t *testing.T) {
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
-	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.LoadFromDB(saved)) })
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	t.Cleanup(func() { require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved)) })
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode":    `{"fixed-test":"tiered_expr"}`,
 		"billing_setting.billing_expr":    `{"fixed-test":"len <= 32000 ? tier(\"short\", fixed(0.01)) : tier(\"long\", p * 2)"}`,
 		"group_ratio_setting.group_ratio": `{"default":1.5}`,
@@ -90,9 +92,9 @@ func TestFixedPricePreConsumeAndRealtimeRejection(t *testing.T) {
 		{"Realtime rejects even unselected fixed branch", types.RelayFormatOpenAIRealtime, 50000, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-			ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-			info := &relaycommon.RelayInfo{OriginModelName: "fixed-test", UserGroup: "default", UsingGroup: "default", RelayFormat: tc.format, BillingRequestInput: &billingexpr.RequestInput{}}
+			ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: "fixed-test", UserGroup: "default", UsingGroup: "default", RelayFormat: tc.format, BillingRequestInput: &billingexpr.RequestInput{}}
 			price, err := ModelPriceHelper(ctx, info, tc.prompt, &types.TokenCountMeta{})
 			if tc.wantError {
 				require.ErrorContains(t, err, "Realtime")
@@ -113,15 +115,15 @@ func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
 
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode":    `{"tiered-fallback-model":"tiered_expr"}`,
 		"billing_setting.billing_expr":    `{"tiered-fallback-model":"tier(\"base\", p * 3 + c * 15)"}`,
 		"group_ratio_setting.group_ratio": `{"default":1,"free":0}`,
@@ -163,13 +165,13 @@ func TestModelPriceHelperTieredPreConsumeMaxTokensFallback(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			ctx, _ := gin.CreateTestContext(recorder)
-			req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			ctx, _ := testtenant.CreateTestContext(recorder)
+			req := testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 			req.Header.Set("Content-Type", "application/json")
 			ctx.Request = req
 			ctx.Set("group", tc.group)
 
-			info := &relaycommon.RelayInfo{
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				OriginModelName: "tiered-fallback-model",
 				UserGroup:       tc.group,
 				UsingGroup:      tc.group,
@@ -191,25 +193,25 @@ func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
 
-	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 		"billing_setting.billing_mode":    `{"tiered-overflow-model":"tiered_expr"}`,
 		"billing_setting.billing_expr":    `{"tiered-overflow-model":"tier(\"overflow\", p * 100000000000000000)"}`,
 		"group_ratio_setting.group_ratio": `{"default":1}`,
 	}))
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "tiered-overflow-model",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -228,23 +230,23 @@ func TestModelPriceHelperTieredRejectsPreConsumeOverflow(t *testing.T) {
 
 func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	savedModelPrices := ratio_setting.ModelPrice2JSONString()
-	savedModelRatios := ratio_setting.ModelRatio2JSONString()
+	savedModelPrices := ratio_setting.ModelPrice2JSONString(testtenant.Context())
+	savedModelRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedModelPrices))
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedModelRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), savedModelPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedModelRatios))
 	})
 
 	modelPrices, err := common.Marshal(map[string]float64{
 		"fixed-image-price":      0.04,
 		"fractional-image-price": 0.0000012,
-		"overflow-image-price":   float64(common.MaxQuota) / common.QuotaPerUnit / 2,
+		"overflow-image-price":   float64(common.MaxQuota) / common.TenantState(testtenant.Context()).QuotaPerUnit / 2,
 	})
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(modelPrices)))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), string(modelPrices)))
 	modelRatios, err := common.Marshal(map[string]float64{"ratio-image-price": 15})
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(modelRatios)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(modelRatios)))
 
 	tests := []struct {
 		name           string
@@ -270,9 +272,9 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+			ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 			ctx.Set("group", "default")
-			info := &relaycommon.RelayInfo{
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				OriginModelName: tt.model,
 				UserGroup:       "default",
 				UsingGroup:      "default",
@@ -293,9 +295,9 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 	}
 
 	newInfo := func(model string) (*gin.Context, *relaycommon.RelayInfo) {
-		ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+		ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 		ctx.Set("group", "default")
-		return ctx, &relaycommon.RelayInfo{
+		return ctx, &relaycommon.RelayInfo{Context: testtenant.Context(),
 			OriginModelName: model,
 			UserGroup:       "default",
 			UsingGroup:      "default",
@@ -327,25 +329,25 @@ func TestModelPriceHelperRequestBillingRatiosOnlyApplyToFixedPrice(t *testing.T)
 func TestModelPriceHelperUsesSuffixedOriginLikeMain(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["gemini-2.5-flash"] = 0.15
 	ratios["gemini-2.5-flash-thinking-*"] = 0.075
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = true
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = true
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
 
-	suffixed := &relaycommon.RelayInfo{
+	suffixed := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-2.5-flash-thinking-8192",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -356,12 +358,12 @@ func TestModelPriceHelperUsesSuffixedOriginLikeMain(t *testing.T) {
 	assert.Equal(t, "gemini-2.5-flash-thinking-8192", suffixed.GetBillingModelName())
 	assert.Equal(t, 0.075, suffixedPrice.ModelRatio)
 
-	geminiSettings := model_setting.GetGeminiSettings()
+	geminiSettings := model_setting.GetGeminiSettings(testtenant.Context())
 	oldThinking := geminiSettings.ThinkingAdapterEnabled
 	geminiSettings.ThinkingAdapterEnabled = true
 	t.Cleanup(func() { geminiSettings.ThinkingAdapterEnabled = oldThinking })
 
-	adapterOn := &relaycommon.RelayInfo{
+	adapterOn := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-2.5-flash-thinking-8192",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -372,7 +374,7 @@ func TestModelPriceHelperUsesSuffixedOriginLikeMain(t *testing.T) {
 	assert.Equal(t, "gemini-2.5-flash-thinking-8192", adapterOn.GetBillingModelName())
 	assert.Equal(t, 0.075, adapterOnPrice.ModelRatio)
 
-	base := &relaycommon.RelayInfo{
+	base := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-2.5-flash",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -387,29 +389,29 @@ func TestModelPriceHelperUsesSuffixedOriginLikeMain(t *testing.T) {
 func TestModelPriceHelperHonorsCustomClaudeThinkingAlias(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["claude-3-7-sonnet"] = 1.5
 	ratios["claude-3-7-sonnet-thinking"] = 3.0
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	claudeSettings := model_setting.GetClaudeSettings()
+	claudeSettings := model_setting.GetClaudeSettings(testtenant.Context())
 	oldThinking := claudeSettings.ThinkingAdapterEnabled
 	claudeSettings.ThinkingAdapterEnabled = true
 	t.Cleanup(func() { claudeSettings.ThinkingAdapterEnabled = oldThinking })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -424,27 +426,27 @@ func TestModelPriceHelperHonorsCustomClaudeThinkingAlias(t *testing.T) {
 func TestModelPriceHelperCanonicalBillingLadder(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
 
 	t.Run("level2 full form", func(t *testing.T) {
-		ratios := ratio_setting.GetModelRatioCopy()
+		ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 		delete(ratios, "qwen3-max")
 		ratios["qwen3-max@effort:high@thinking:on"] = 4.0
 		ratios["qwen3-max@thinking:on"] = 3.0
 		ratioJSON, err := common.Marshal(ratios)
 		require.NoError(t, err)
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-		info := &relaycommon.RelayInfo{
+		info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 			OriginModelName: "qwen3-max@thinking:on@effort:high@temperature:0.2",
 			UserGroup:       "default",
 			UsingGroup:      "default",
@@ -456,15 +458,15 @@ func TestModelPriceHelperCanonicalBillingLadder(t *testing.T) {
 	})
 
 	t.Run("level3 thinking form shuffled budget", func(t *testing.T) {
-		ratios := ratio_setting.GetModelRatioCopy()
+		ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 		delete(ratios, "qwen3-max")
 		delete(ratios, "qwen3-max@effort:high@thinking:on")
 		ratios["qwen3-max@thinking:on"] = 3.0
 		ratioJSON, err := common.Marshal(ratios)
 		require.NoError(t, err)
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-		info := &relaycommon.RelayInfo{
+		info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 			OriginModelName: "qwen3-max@temperature:0.3@thinking:8192",
 			UserGroup:       "default",
 			UsingGroup:      "default",
@@ -476,15 +478,15 @@ func TestModelPriceHelperCanonicalBillingLadder(t *testing.T) {
 	})
 
 	t.Run("level4 base fallback", func(t *testing.T) {
-		ratios := ratio_setting.GetModelRatioCopy()
+		ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 		delete(ratios, "qwen3-max@thinking:on")
 		delete(ratios, "qwen3-max@effort:high@thinking:on")
 		ratios["qwen3-max"] = 1.25
 		ratioJSON, err := common.Marshal(ratios)
 		require.NoError(t, err)
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-		info := &relaycommon.RelayInfo{
+		info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 			OriginModelName: "qwen3-max@thinking:off",
 			UserGroup:       "default",
 			UsingGroup:      "default",
@@ -496,13 +498,13 @@ func TestModelPriceHelperCanonicalBillingLadder(t *testing.T) {
 	})
 
 	t.Run("thinking minus one bills as on", func(t *testing.T) {
-		ratios := ratio_setting.GetModelRatioCopy()
+		ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 		ratios["qwen3-max@thinking:on"] = 3.0
 		ratioJSON, err := common.Marshal(ratios)
 		require.NoError(t, err)
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-		info := &relaycommon.RelayInfo{
+		info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 			OriginModelName: "qwen3-max@thinking:-1",
 			UserGroup:       "default",
 			UsingGroup:      "default",
@@ -517,30 +519,30 @@ func TestModelPriceHelperCanonicalBillingLadder(t *testing.T) {
 func TestModelPriceHelperMigratesLegacyGeminiWildcardToCanonical(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	delete(ratios, "gemini-2.5-flash-thinking-*")
 	ratios["gemini-2.5-flash"] = 0.15
 	ratios["gemini-2.5-flash@thinking:on"] = 0.09
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	geminiSettings := model_setting.GetGeminiSettings()
+	geminiSettings := model_setting.GetGeminiSettings(testtenant.Context())
 	oldThinking := geminiSettings.ThinkingAdapterEnabled
 	geminiSettings.ThinkingAdapterEnabled = true
 	t.Cleanup(func() { geminiSettings.ThinkingAdapterEnabled = oldThinking })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-2.5-flash-thinking-8192",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -554,23 +556,23 @@ func TestModelPriceHelperMigratesLegacyGeminiWildcardToCanonical(t *testing.T) {
 func TestModelPriceHelperModifierNameFallsBackToBase(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["qwen3.8-max"] = 2.0
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "qwen3.8-max@thinking:on@temperature:0.2",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -584,29 +586,29 @@ func TestModelPriceHelperModifierNameFallsBackToBase(t *testing.T) {
 func TestModelPriceHelperExemptAtNameBillsVerbatim(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	originalBlacklist := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = originalBlacklist })
 	settings.ThinkingModelBlacklist = append(originalBlacklist, "re:.*@sha256:.*")
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["opaque"] = 1.0
 	ratios["opaque@sha256:deadbeef"] = 7.0
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "opaque@sha256:deadbeef",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -621,24 +623,24 @@ func TestModelPriceHelperExemptAtNameBillsVerbatim(t *testing.T) {
 func TestModelPriceHelperPreservesGpt51CodexMaxIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["gpt-5.1-codex-max"] = 1.75
 	ratios["gpt-5.1-codex"] = 9.9
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = false
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = false
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1-codex-max",
 		UserGroup:       "default",
 		UsingGroup:      "default",
@@ -653,29 +655,29 @@ func TestModelPriceHelperPreservesGpt51CodexMaxIdentity(t *testing.T) {
 func TestModelPriceHelperNativeGeminiNoThinkingDoesNotAliasBillingModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	savedRatios := ratio_setting.ModelRatio2JSONString()
+	savedRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
 	})
-	ratios := ratio_setting.GetModelRatioCopy()
+	ratios := ratio_setting.GetModelRatioCopy(testtenant.Context())
 	ratios["gemini-3-pro"] = 1.25
 	ratioJSON, err := common.Marshal(ratios)
 	require.NoError(t, err)
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(ratioJSON)))
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(ratioJSON)))
 
-	oldSelfUse := operation_setting.SelfUseModeEnabled
-	operation_setting.SelfUseModeEnabled = true
-	t.Cleanup(func() { operation_setting.SelfUseModeEnabled = oldSelfUse })
+	oldSelfUse := operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled
+	operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = true
+	t.Cleanup(func() { operation_setting.TenantState(testtenant.Context()).SelfUseModeEnabled = oldSelfUse })
 
-	geminiSettings := model_setting.GetGeminiSettings()
+	geminiSettings := model_setting.GetGeminiSettings(testtenant.Context())
 	oldThinking := geminiSettings.ThinkingAdapterEnabled
 	geminiSettings.ThinkingAdapterEnabled = true
 	t.Cleanup(func() { geminiSettings.ThinkingAdapterEnabled = oldThinking })
 
 	budget := 0
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("group", "default")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-3-pro",
 		UserGroup:       "default",
 		UsingGroup:      "default",

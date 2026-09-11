@@ -40,7 +40,7 @@ func (a *Adaptor) ConvertClaudeRequest(c *gin.Context, info *relaycommon.RelayIn
 		return nil, err
 	}
 	if request.MaxTokens == nil {
-		defaultMaxTokens := uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(request.Model))
+		defaultMaxTokens := uint(model_setting.GetClaudeSettings(info.Context).GetDefaultMaxTokens(request.Model))
 		request.MaxTokens = &defaultMaxTokens
 	}
 	// ApplyClaudeThinkingModel no longer rewrites request.Model. Do not write
@@ -100,7 +100,7 @@ func CommonClaudeHeadersOperation(c *gin.Context, req *http.Header, info *relayc
 	if anthropicBeta != "" {
 		req.Set("anthropic-beta", anthropicBeta)
 	}
-	model_setting.GetClaudeSettings().WriteHeaders(info.OriginModelName, req)
+	model_setting.GetClaudeSettings(c.Request.Context()).WriteHeaders(info.OriginModelName, req)
 }
 
 func (a *Adaptor) SetupRequestHeader(c *gin.Context, req *http.Header, info *relaycommon.RelayInfo) error {

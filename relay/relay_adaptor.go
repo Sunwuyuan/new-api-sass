@@ -1,5 +1,7 @@
 package relay
 
+import context "context"
+
 import (
 	"fmt"
 	"strconv"
@@ -169,15 +171,15 @@ func ResolveTaskPluginForPlatform(generation *pluginruntime.RoutingGeneration, p
 // the task-plugin system is switched off, the resolved plugin is disabled,
 // or the platform simply names nothing. The distinction is user-actionable,
 // so it must survive into the client-facing message.
-func TaskPlatformUnavailableError(platform constant.TaskPlatform) (string, string) {
-	if !pluginruntime.DefaultRegistry.Enabled() {
+func TaskPlatformUnavailableError(tenantCtx context.Context, platform constant.TaskPlatform) (string, string) {
+	if !pluginruntime.TenantState(tenantCtx).DefaultRegistry.Enabled() {
 		return "task_plugin_system_disabled", "the task plugin system is disabled on this gateway"
 	}
 	key := string(platform)
 	if mapped, ok := taskPluginKeys[platform]; ok {
 		key = mapped
 	}
-	for _, meta := range pluginruntime.DefaultRegistry.Snapshot().Factory {
+	for _, meta := range pluginruntime.TenantState(tenantCtx).DefaultRegistry.Snapshot().Factory {
 		if meta.Key == key {
 			return "task_plugin_disabled", fmt.Sprintf("task plugin %q is disabled on this gateway", key)
 		}
@@ -185,12 +187,12 @@ func TaskPlatformUnavailableError(platform constant.TaskPlatform) (string, strin
 	return "invalid_api_platform", fmt.Sprintf("invalid api platform: %s", platform)
 }
 
-func GetTaskAdaptor(platform constant.TaskPlatform) channel.TaskAdaptor {
-	plugin, ok := ResolveTaskPluginForPlatform(pluginruntime.DefaultRegistry.Generation(), platform)
+func GetTaskAdaptor(tenantCtx context.Context, platform constant.TaskPlatform) channel.TaskAdaptor {
+	plugin, ok := ResolveTaskPluginForPlatform(pluginruntime.TenantState(tenantCtx).DefaultRegistry.Generation(), platform)
 	if !ok {
 		return nil
 	}
-	return jspluginadaptor.New(plugin)
+	return jspluginadaptor.New(tenantCtx, plugin)
 }
 
 // getTaskAdaptorForRequest preserves the exact plugin object pinned by the
@@ -201,26 +203,26 @@ func getTaskAdaptorForRequest(c *gin.Context, platform constant.TaskPlatform) (c
 		if value, exists := c.Get(pluginruntime.ContextKeyPinnedPlugin); exists {
 			if pinned, ok := value.(pluginruntime.PinnedPlugin); ok && pinned.Plugin != nil {
 				platform = constant.TaskPlatform(pinned.Plugin.Meta.Key)
-				return platform, jspluginadaptor.New(pinned.Plugin)
+				return platform, jspluginadaptor.New(c.Request.Context(), pinned.Plugin)
 			}
 			return platform, nil
 		}
 		if value, exists := c.Get(pluginruntime.ContextKeyPinnedEndpoint); exists {
 			if pinned, ok := value.(pluginruntime.PinnedEndpoint); ok && pinned.Plugin != nil {
 				platform = constant.TaskPlatform(pinned.Plugin.Meta.Key)
-				return platform, jspluginadaptor.New(pinned.Plugin)
+				return platform, jspluginadaptor.New(c.Request.Context(), pinned.Plugin)
 			}
 			return platform, nil
 		}
 		if value, exists := c.Get(pluginruntime.ContextKeyPinnedRoute); exists {
 			if pinned, ok := value.(pluginruntime.PinnedRoute); ok && pinned.Plugin != nil {
 				platform = constant.TaskPlatform(pinned.Plugin.Meta.Key)
-				return platform, jspluginadaptor.New(pinned.Plugin)
+				return platform, jspluginadaptor.New(c.Request.Context(), pinned.Plugin)
 			}
 			return platform, nil
 		}
 	}
-	generation := pluginruntime.DefaultRegistry.Generation()
+	generation := pluginruntime.TenantState(c.Request.Context()).DefaultRegistry.Generation()
 	plugin, ok := ResolveTaskPluginForPlatform(generation, platform)
 	if !ok {
 		return platform, nil
@@ -231,5 +233,5 @@ func getTaskAdaptorForRequest(c *gin.Context, platform constant.TaskPlatform) (c
 			Plugin:     plugin,
 		})
 	}
-	return platform, jspluginadaptor.New(plugin)
+	return platform, jspluginadaptor.New(c.Request.Context(), plugin)
 }

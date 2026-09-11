@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"crypto/hmac"
 	"encoding/json"
@@ -73,7 +75,7 @@ type VerificationBinding struct {
 	ContextHash string `json:"context_hash"`
 }
 
-func BindVerificationOperation(operation VerificationOperation) (VerificationBinding, error) {
+func BindVerificationOperation(tenantCtx context.Context, operation VerificationOperation) (VerificationBinding, error) {
 	var fields map[string]json.RawMessage
 	if len(operation.Context) > 0 {
 		if common.GetJsonType(operation.Context) != "object" || common.Unmarshal(operation.Context, &fields) != nil {
@@ -106,7 +108,7 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 				return VerificationBinding{}, ErrVerificationContextInvalid
 			}
 		default:
-			if len(fields) != 1 || context.Provider == "" || len(context.Provider) > 64 || oauth.GetProvider(context.Provider) == nil {
+			if len(fields) != 1 || context.Provider == "" || len(context.Provider) > 64 || oauth.GetProvider(tenantCtx, context.Provider) == nil {
 				return VerificationBinding{}, ErrVerificationContextInvalid
 			}
 		}
@@ -137,7 +139,7 @@ func BindVerificationOperation(operation VerificationOperation) (VerificationBin
 	}
 	return VerificationBinding{
 		Scope:       operation.Scope,
-		ContextHash: common.GenerateHMACWithKey(authSigningKey("verification-context"), string(payload)),
+		ContextHash: common.GenerateHMACWithKey(authSigningKey(tenantCtx, "verification-context"), string(payload)),
 	}, nil
 }
 
@@ -169,7 +171,7 @@ type VerificationRequirements struct {
 
 // securityVerificationPolicy is the only operation-to-method policy. Device
 // support and disabled providers never turn an enrolled factor into an absent one.
-func securityVerificationPolicy(scope string, state model.UserVerificationState) ([]VerificationMethodOption, error) {
+func securityVerificationPolicy(tenantCtx context.Context, scope string, state model.UserVerificationState) ([]VerificationMethodOption, error) {
 	var methods []string
 	if state.HasTwoFA {
 		methods = append(methods, VerificationMethodTwoFA)
@@ -212,7 +214,7 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 		if method == VerificationMethodTwoFA && state.TwoFALocked {
 			option.Available, option.Reason = false, ErrVerificationLocked.Error()
 		}
-		if !system_setting.PasskeySettingsSnapshot().Enabled && (method == VerificationMethodPasskey || scope == VerificationScopePasskeyRegister) {
+		if !system_setting.PasskeySettingsSnapshot(tenantCtx).Enabled && (method == VerificationMethodPasskey || scope == VerificationScopePasskeyRegister) {
 			option.Available, option.Reason = false, "Passkey authentication is disabled."
 		}
 		options = append(options, option)
@@ -220,11 +222,11 @@ func securityVerificationPolicy(scope string, state model.UserVerificationState)
 	return options, nil
 }
 
-func GetVerificationRequirements(identity AuthIdentity, scope string) (*VerificationRequirements, error) {
+func GetVerificationRequirements(tenantCtx context.Context, identity AuthIdentity, scope string) (*VerificationRequirements, error) {
 	if scope == VerificationScopeLogin {
 		return nil, ErrProofScope
 	}
-	state, err := model.GetUserVerificationState(identity.UserID)
+	state, err := model.GetUserVerificationState(tenantCtx, identity.UserID)
 	if err != nil {
 		return nil, err
 	}
@@ -234,13 +236,13 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	if scope == VerificationScopeChannelKeyRead && state.Role != common.RoleRootUser {
 		return nil, ErrVerificationForbidden
 	}
-	methods, err := securityVerificationPolicy(scope, *state)
+	methods, err := securityVerificationPolicy(tenantCtx, scope, *state)
 	if err != nil {
 		return nil, err
 	}
 	requirements := &VerificationRequirements{Scope: scope, Methods: methods, OAuthProviders: []VerificationOAuthProvider{}, PasswordEncryptionEnabled: common.PasswordLoginEncryptionEnabled}
 	for i := range methods {
-		if methods[i].Method == VerificationMethodPassword && !common.PasswordLoginEnabled {
+		if methods[i].Method == VerificationMethodPassword && !common.TenantState(tenantCtx).PasswordLoginEnabled {
 			switch scope {
 			case VerificationScopeAccountBind, VerificationScopeAccountUnbind, VerificationScopePasswordSet, VerificationScopePasswordChange, VerificationScopeAccountDelete:
 				methods[i].Available, methods[i].Reason = false, "Password authentication is disabled."
@@ -249,18 +251,18 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 		if methods[i].Method != VerificationMethodOAuth {
 			continue
 		}
-		user, err := model.GetUserById(identity.UserID, false)
+		user, err := model.GetUserById(tenantCtx, identity.UserID, false)
 		if err != nil {
 			return nil, err
 		}
-		requirements.OAuthProviders, err = verificationOAuthProviders(user)
+		requirements.OAuthProviders, err = verificationOAuthProviders(tenantCtx, user)
 		if err != nil {
 			return nil, err
 		}
 		if len(requirements.OAuthProviders) == 0 {
 			methods[i].Available, methods[i].Reason = false, "No linked OAuth provider is available."
 			if user.TelegramId != "" {
-				if err := oauth.TelegramConfigurationError(); err != nil {
+				if err := oauth.TelegramConfigurationError(tenantCtx); err != nil {
 					methods[i].Reason = err.Error()
 				}
 			}
@@ -269,10 +271,10 @@ func GetVerificationRequirements(identity AuthIdentity, scope string) (*Verifica
 	return requirements, nil
 }
 
-func verificationOAuthProviders(user *model.User) ([]VerificationOAuthProvider, error) {
+func verificationOAuthProviders(tenantCtx context.Context, user *model.User) ([]VerificationOAuthProvider, error) {
 	bindings := map[int]string{}
-	if len(oauth.GetEnabledCustomProviders()) > 0 {
-		stored, err := model.GetUserOAuthBindingsByUserId(user.Id)
+	if len(oauth.GetEnabledCustomProviders(tenantCtx)) > 0 {
+		stored, err := model.GetUserOAuthBindingsByUserId(tenantCtx, user.Id)
 		if err != nil {
 			return nil, err
 		}
@@ -281,8 +283,8 @@ func verificationOAuthProviders(user *model.User) ([]VerificationOAuthProvider, 
 		}
 	}
 	providers := []VerificationOAuthProvider{}
-	for slug, provider := range oauth.GetAllProviders() {
-		if !provider.IsEnabled() {
+	for slug, provider := range oauth.GetAllProviders(tenantCtx) {
+		if !provider.IsEnabled(tenantCtx) {
 			continue
 		}
 		var userID string
@@ -303,15 +305,15 @@ func verificationOAuthProviders(user *model.User) ([]VerificationOAuthProvider, 
 			}
 		}
 		if userID != "" {
-			providers = append(providers, VerificationOAuthProvider{Slug: slug, Name: provider.GetName(), UserID: userID})
+			providers = append(providers, VerificationOAuthProvider{Slug: slug, Name: provider.GetName(tenantCtx), UserID: userID})
 		}
 	}
 	sort.Slice(providers, func(i, j int) bool { return providers[i].Slug < providers[j].Slug })
 	return providers, nil
 }
 
-func RequireVerificationMethod(identity AuthIdentity, scope, method string) (*VerificationRequirements, error) {
-	requirements, err := GetVerificationRequirements(identity, scope)
+func RequireVerificationMethod(tenantCtx context.Context, identity AuthIdentity, scope, method string) (*VerificationRequirements, error) {
+	requirements, err := GetVerificationRequirements(tenantCtx, identity, scope)
 	if err != nil {
 		return nil, err
 	}
@@ -329,14 +331,14 @@ func RequireVerificationMethod(identity AuthIdentity, scope, method string) (*Ve
 
 // CompleteSecurityVerification runs after the concrete authentication ceremony.
 // Recheck the session and policy after potentially slow external authentication.
-func CompleteSecurityVerification(identity AuthIdentity, binding VerificationBinding, method string) (*SecurityProof, error) {
-	if _, _, err := ValidateLoginSession(identity); err != nil {
+func CompleteSecurityVerification(tenantCtx context.Context, identity AuthIdentity, binding VerificationBinding, method string) (*SecurityProof, error) {
+	if _, _, err := ValidateLoginSession(tenantCtx, identity); err != nil {
 		return nil, err
 	}
-	if _, err := RequireVerificationMethod(identity, binding.Scope, method); err != nil {
+	if _, err := RequireVerificationMethod(tenantCtx, identity, binding.Scope, method); err != nil {
 		return nil, err
 	}
-	token, expiresAt, err := IssueSecurityProof(identity, method, binding)
+	token, expiresAt, err := IssueSecurityProof(tenantCtx, identity, method, binding)
 	if err != nil {
 		return nil, err
 	}
@@ -345,22 +347,22 @@ func CompleteSecurityVerification(identity AuthIdentity, binding VerificationBin
 
 // ConsumeOperationProof accepts a proof at most once. The consumption commits
 // before the caller performs its action; an action failure must not restore it.
-func ConsumeOperationProof(raw string, identity AuthIdentity, operation VerificationOperation) (*model.AuthFlowAuthorization, error) {
-	binding, err := BindVerificationOperation(operation)
+func ConsumeOperationProof(tenantCtx context.Context, raw string, identity AuthIdentity, operation VerificationOperation) (*model.AuthFlowAuthorization, error) {
+	binding, err := BindVerificationOperation(tenantCtx, operation)
 	if err != nil {
 		return nil, err
 	}
-	claims, err := verifySecurityProof(raw, identity, binding)
+	claims, err := verifySecurityProof(tenantCtx, raw, identity, binding)
 	if err != nil {
 		return nil, err
 	}
-	if _, _, err := ValidateLoginSession(identity); err != nil {
+	if _, _, err := ValidateLoginSession(tenantCtx, identity); err != nil {
 		return nil, err
 	}
-	if _, err := RequireVerificationMethod(identity, binding.Scope, claims.Method); err != nil {
+	if _, err := RequireVerificationMethod(tenantCtx, identity, binding.Scope, claims.Method); err != nil {
 		return nil, err
 	}
-	flow, err := model.ConsumeAuthFlowWithAction(claims.ID, model.AuthFlowMatch{
+	flow, err := model.ConsumeAuthFlowWithAction(tenantCtx, claims.ID, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeSecurityProof, UserId: identity.UserID, SessionId: identity.SessionID,
 	}, func(tx *gorm.DB, _ *model.AuthFlow) error {
 		return model.ValidateAuthSessionWithTx(tx, identity)
@@ -383,21 +385,21 @@ func ConsumeOperationProof(raw string, identity AuthIdentity, operation Verifica
 
 // ValidateFlowAuthorization permits a dedicated configuration flow to outlive
 // its consumed proof, while retaining its operation, session and method policy.
-func ValidateFlowAuthorization(identity AuthIdentity, operation VerificationOperation, authorization *model.AuthFlowAuthorization) error {
+func ValidateFlowAuthorization(tenantCtx context.Context, identity AuthIdentity, operation VerificationOperation, authorization *model.AuthFlowAuthorization) error {
 	if authorization == nil || authorization.ProofID <= 0 || authorization.AuthSessionIdentity != identity {
 		return model.ErrAuthFlowInvalid
 	}
-	binding, err := BindVerificationOperation(operation)
+	binding, err := BindVerificationOperation(tenantCtx, operation)
 	if err != nil {
 		return err
 	}
 	if authorization.Scope != binding.Scope || !hmac.Equal([]byte(authorization.ContextHash), []byte(binding.ContextHash)) {
 		return model.ErrAuthFlowInvalid
 	}
-	if _, _, err := ValidateLoginSession(identity); err != nil {
+	if _, _, err := ValidateLoginSession(tenantCtx, identity); err != nil {
 		return err
 	}
-	_, err = RequireVerificationMethod(identity, binding.Scope, authorization.Method)
+	_, err = RequireVerificationMethod(tenantCtx, identity, binding.Scope, authorization.Method)
 	return err
 }
 
@@ -411,12 +413,12 @@ type VerificationInput struct {
 	EncryptionKeyID   string          `json:"encryption_key_id,omitempty"`
 }
 
-func VerifySecurityInput(identity AuthIdentity, input VerificationInput) (*SecurityProof, error) {
-	binding, err := BindVerificationOperation(VerificationOperation{Scope: input.Scope, Context: input.Context})
+func VerifySecurityInput(tenantCtx context.Context, identity AuthIdentity, input VerificationInput) (*SecurityProof, error) {
+	binding, err := BindVerificationOperation(tenantCtx, VerificationOperation{Scope: input.Scope, Context: input.Context})
 	if err != nil {
 		return nil, err
 	}
-	if _, err := RequireVerificationMethod(identity, input.Scope, input.Method); err != nil {
+	if _, err := RequireVerificationMethod(tenantCtx, identity, input.Scope, input.Method); err != nil {
 		return nil, err
 	}
 	switch input.Method {
@@ -424,12 +426,12 @@ func VerifySecurityInput(identity AuthIdentity, input VerificationInput) (*Secur
 		password := input.Password
 		if common.PasswordLoginEncryptionEnabled {
 			var err error
-			password, err = common.DecryptPassword(input.PasswordEncrypted, input.EncryptionKeyID)
+			password, err = common.DecryptPassword(tenantCtx, input.PasswordEncrypted, input.EncryptionKeyID)
 			if err != nil {
 				return nil, ErrVerificationFailed
 			}
 		}
-		user, err := model.GetUserById(identity.UserID, true)
+		user, err := model.GetUserById(tenantCtx, identity.UserID, true)
 		if err != nil {
 			return nil, err
 		}
@@ -442,11 +444,11 @@ func VerifySecurityInput(identity AuthIdentity, input VerificationInput) (*Secur
 				return nil, ErrVerificationFailed
 			}
 		}
-		twoFA, err := model.GetTwoFAByUserId(identity.UserID)
+		twoFA, err := model.GetTwoFAByUserId(tenantCtx, identity.UserID)
 		if err != nil {
 			return nil, err
 		}
-		if err := VerifyTwoFactorCode(twoFA, input.Code); err != nil {
+		if err := VerifyTwoFactorCode(tenantCtx, twoFA, input.Code); err != nil {
 			return nil, err
 		}
 	case VerificationMethodPasskey, VerificationMethodOAuth:
@@ -454,12 +456,12 @@ func VerifySecurityInput(identity AuthIdentity, input VerificationInput) (*Secur
 	default:
 		return nil, ErrProofMethod
 	}
-	return CompleteSecurityVerification(identity, binding, input.Method)
+	return CompleteSecurityVerification(tenantCtx, identity, binding, input.Method)
 }
 
 // VerifyTwoFactorCode classifies the input before verification so one failed
 // submission cannot increment the failure counter for both TOTP and backup codes.
-func VerifyTwoFactorCode(twoFA *model.TwoFA, code string) error {
+func VerifyTwoFactorCode(tenantCtx context.Context, twoFA *model.TwoFA, code string) error {
 	if twoFA == nil || !twoFA.IsEnabled {
 		return model.ErrTwoFANotEnabled
 	}
@@ -470,11 +472,11 @@ func VerifyTwoFactorCode(twoFA *model.TwoFA, code string) error {
 	var valid bool
 	var err error
 	if numeric, numericErr := common.ValidateNumericCode(code); numericErr == nil {
-		valid, err = twoFA.ValidateTOTPAndUpdateUsage(numeric)
+		valid, err = twoFA.ValidateTOTPAndUpdateUsage(tenantCtx, numeric)
 	} else if common.ValidateBackupCode(code) {
-		valid, err = twoFA.ValidateBackupCodeAndUpdateUsage(code)
+		valid, err = twoFA.ValidateBackupCodeAndUpdateUsage(tenantCtx, code)
 	} else {
-		err = twoFA.IncrementFailedAttempts()
+		err = twoFA.IncrementFailedAttempts(tenantCtx)
 	}
 	if err != nil {
 		return err
@@ -485,8 +487,8 @@ func VerifyTwoFactorCode(twoFA *model.TwoFA, code string) error {
 	return nil
 }
 
-func GetOAuthVerificationBinding(identity AuthIdentity, scope, provider string) (string, error) {
-	requirements, err := RequireVerificationMethod(identity, scope, VerificationMethodOAuth)
+func GetOAuthVerificationBinding(tenantCtx context.Context, identity AuthIdentity, scope, provider string) (string, error) {
+	requirements, err := RequireVerificationMethod(tenantCtx, identity, scope, VerificationMethodOAuth)
 	if err != nil {
 		return "", err
 	}

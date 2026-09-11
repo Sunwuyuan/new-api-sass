@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,14 +20,14 @@ func resetPricingEndpointTestTables(t *testing.T) {
 	for _, table := range []string{"abilities", "channels", "models", "vendors"} {
 		require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
 	}
-	InitChannelCache()
-	InvalidatePricingCache()
+	InitChannelCache(testtenant.Context())
+	InvalidatePricingCache(testtenant.Context())
 	t.Cleanup(func() {
 		for _, table := range []string{"abilities", "channels", "models", "vendors"} {
 			require.NoError(t, DB.Exec("DELETE FROM "+table).Error)
 		}
-		InitChannelCache()
-		InvalidatePricingCache()
+		InitChannelCache(testtenant.Context())
+		InvalidatePricingCache(testtenant.Context())
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
 	})
 }
@@ -66,8 +67,8 @@ func pricingEndpointAdvancedCustomConfig(routes ...dto.AdvancedCustomRoute) dto.
 
 func pricingEndpointTypesByModel(t *testing.T) map[string][]constant.EndpointType {
 	t.Helper()
-	InitChannelCache()
-	return pricingEndpointTypesFromPricing(GetPricing())
+	InitChannelCache(testtenant.Context())
+	return pricingEndpointTypesFromPricing(GetPricing(testtenant.Context()))
 }
 
 func pricingEndpointTypesFromPricing(pricings []Pricing) map[string][]constant.EndpointType {
@@ -200,7 +201,7 @@ func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 		},
 	))
 	insertPricingEndpointAbility(t, 301, "gemini-3.5-flash")
-	InitChannelCache()
+	InitChannelCache(testtenant.Context())
 
 	initial := pricingEndpointTypesByModel(t)
 	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, initial["gemini-3.5-flash"])
@@ -220,7 +221,7 @@ func TestInitChannelCacheInvalidatesPricingCache(t *testing.T) {
 		},
 	))
 	require.NoError(t, DB.Model(&Channel{}).Where("id = ?", 301).Update("settings", channel.OtherSettings).Error)
-	InitChannelCache()
+	InitChannelCache(testtenant.Context())
 
 	updated := pricingEndpointTypesByModel(t)
 	assert.Equal(t, []constant.EndpointType{
@@ -246,12 +247,12 @@ func TestInitChannelCacheInvalidatesStartupPricingBuiltBeforeChannelCache(t *tes
 	))
 	insertPricingEndpointAbility(t, 302, "gemini-3.5-flash")
 
-	staleByModel := pricingEndpointTypesFromPricing(GetPricing())
+	staleByModel := pricingEndpointTypesFromPricing(GetPricing(testtenant.Context()))
 	require.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, staleByModel["gemini-3.5-flash"])
 
-	InitChannelCache()
+	InitChannelCache(testtenant.Context())
 
-	rebuiltByModel := pricingEndpointTypesFromPricing(GetPricing())
+	rebuiltByModel := pricingEndpointTypesFromPricing(GetPricing(testtenant.Context()))
 	assert.Equal(t, []constant.EndpointType{
 		constant.EndpointTypeOpenAI,
 		constant.EndpointTypeOpenAIResponse,
@@ -273,22 +274,22 @@ func TestCacheUpdateChannelSyncsAdvancedCustomConfig(t *testing.T) {
 		UpstreamPath: "/v1beta/models/{model}:generateContent",
 		Converter:    "openai_responses_to_gemini_generate_content",
 	}))
-	CacheUpdateChannel(channel)
+	CacheUpdateChannel(testtenant.Context(), channel)
 
-	require.NotNil(t, channel2advancedCustomConfig[401])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIResponse}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
+	require.NotNil(t, TenantState(testtenant.Context()).channel2advancedCustomConfig[401])
+	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAIResponse}, TenantState(testtenant.Context()).channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
 
 	channel.SetOtherSettings(pricingEndpointAdvancedCustomConfig(dto.AdvancedCustomRoute{
 		IncomingPath: "/v1/chat/completions",
 		UpstreamPath: "/v1/chat/completions",
 	}))
-	CacheUpdateChannel(channel)
+	CacheUpdateChannel(testtenant.Context(), channel)
 
-	require.NotNil(t, channel2advancedCustomConfig[401])
-	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
+	require.NotNil(t, TenantState(testtenant.Context()).channel2advancedCustomConfig[401])
+	assert.Equal(t, []constant.EndpointType{constant.EndpointTypeOpenAI}, TenantState(testtenant.Context()).channel2advancedCustomConfig[401].SupportedEndpointTypesForModel("gemini-3.5-flash"))
 
 	channel.Type = constant.ChannelTypeOpenAI
-	CacheUpdateChannel(channel)
+	CacheUpdateChannel(testtenant.Context(), channel)
 
-	assert.Nil(t, channel2advancedCustomConfig[401])
+	assert.Nil(t, TenantState(testtenant.Context()).channel2advancedCustomConfig[401])
 }

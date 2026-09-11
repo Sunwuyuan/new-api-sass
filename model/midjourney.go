@@ -1,6 +1,11 @@
 package model
 
+import "github.com/QuantumNous/new-api/tenant"
+
+import context "context"
+
 type Midjourney struct {
+	tenant.Row
 	Id          int    `json:"id"`
 	Code        int    `json:"code"`
 	UserId      int    `json:"user_id" gorm:"index"`
@@ -36,12 +41,12 @@ type TaskQueryParams struct {
 	EndTimestamp   string
 }
 
-func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
+func GetAllUserTask(tenantCtx context.Context, userId int, startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
 	var tasks []*Midjourney
 	var err error
 
 	// 初始化查询构建器
-	query := DB.Where("user_id = ?", userId)
+	query := DB.WithContext(tenantCtx).Where("user_id = ?", userId)
 
 	if queryParams.MjID != "" {
 		query = query.Where("mj_id = ?", queryParams.MjID)
@@ -63,12 +68,12 @@ func GetAllUserTask(userId int, startIdx int, num int, queryParams TaskQueryPara
 	return tasks
 }
 
-func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
+func GetAllTasks(tenantCtx context.Context, startIdx int, num int, queryParams TaskQueryParams) []*Midjourney {
 	var tasks []*Midjourney
 	var err error
 
 	// 初始化查询构建器
-	query := DB
+	query := DB.WithContext(tenantCtx)
 
 	// 添加过滤条件
 	if queryParams.ChannelID != "" {
@@ -93,11 +98,11 @@ func GetAllTasks(startIdx int, num int, queryParams TaskQueryParams) []*Midjourn
 	return tasks
 }
 
-func GetAllUnFinishTasks() []*Midjourney {
+func GetAllUnFinishTasks(tenantCtx context.Context) []*Midjourney {
 	var tasks []*Midjourney
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Find(&tasks).Error
+	err = DB.WithContext(tenantCtx).Where("progress != ?", "100%").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -108,73 +113,73 @@ func GetAllUnFinishTasks() []*Midjourney {
 // still in progress. It is a cheap existence check (LIMIT 1) used to decide
 // whether the midjourney_poll system task needs to run; when no task is pending
 // the scheduler skips creating a row entirely.
-func HasUnfinishedMidjourneyTasks() bool {
+func HasUnfinishedMidjourneyTasks(tenantCtx context.Context) bool {
 	var id int
-	err := DB.Model(&Midjourney{}).
+	err := DB.WithContext(tenantCtx).Model(&Midjourney{}).
 		Where("progress != ?", "100%").
 		Limit(1).
 		Pluck("id", &id).Error
 	return err == nil && id != 0
 }
 
-func GetByOnlyMJId(mjId string) *Midjourney {
+func GetByOnlyMJId(tenantCtx context.Context, mjId string) *Midjourney {
 	var mj *Midjourney
 	var err error
-	err = DB.Where("mj_id = ?", mjId).First(&mj).Error
+	err = DB.WithContext(tenantCtx).Where("mj_id = ?", mjId).First(&mj).Error
 	if err != nil {
 		return nil
 	}
 	return mj
 }
 
-func GetByMJId(userId int, mjId string) *Midjourney {
+func GetByMJId(tenantCtx context.Context, userId int, mjId string) *Midjourney {
 	var mj *Midjourney
 	var err error
-	err = DB.Where("user_id = ? and mj_id = ?", userId, mjId).First(&mj).Error
+	err = DB.WithContext(tenantCtx).Where("user_id = ? and mj_id = ?", userId, mjId).First(&mj).Error
 	if err != nil {
 		return nil
 	}
 	return mj
 }
 
-func GetByMJIds(userId int, mjIds []string) []*Midjourney {
+func GetByMJIds(tenantCtx context.Context, userId int, mjIds []string) []*Midjourney {
 	var mj []*Midjourney
 	var err error
-	err = DB.Where("user_id = ? and mj_id in (?)", userId, mjIds).Find(&mj).Error
+	err = DB.WithContext(tenantCtx).Where("user_id = ? and mj_id in (?)", userId, mjIds).Find(&mj).Error
 	if err != nil {
 		return nil
 	}
 	return mj
 }
 
-func GetMjByuId(id int) *Midjourney {
+func GetMjByuId(tenantCtx context.Context, id int) *Midjourney {
 	var mj *Midjourney
 	var err error
-	err = DB.Where("id = ?", id).First(&mj).Error
+	err = DB.WithContext(tenantCtx).Where("id = ?", id).First(&mj).Error
 	if err != nil {
 		return nil
 	}
 	return mj
 }
 
-func UpdateProgress(id int, progress string) error {
-	return DB.Model(&Midjourney{}).Where("id = ?", id).Update("progress", progress).Error
+func UpdateProgress(tenantCtx context.Context, id int, progress string) error {
+	return DB.WithContext(tenantCtx).Model(&Midjourney{}).Where("id = ?", id).Update("progress", progress).Error
 }
 
-func (midjourney *Midjourney) Insert() error {
+func (midjourney *Midjourney) Insert(tenantCtx context.Context) error {
 	var err error
-	err = DB.Create(midjourney).Error
+	err = DB.WithContext(tenantCtx).Create(midjourney).Error
 	return err
 }
 
-func (midjourney *Midjourney) Update() error {
+func (midjourney *Midjourney) Update(tenantCtx context.Context) error {
 	var err error
-	err = DB.Save(midjourney).Error
+	err = DB.WithContext(tenantCtx).Save(midjourney).Error
 	return err
 }
 
-func (midjourney *Midjourney) UpdateBillingState() error {
-	return DB.Model(midjourney).
+func (midjourney *Midjourney) UpdateBillingState(tenantCtx context.Context) error {
+	return DB.WithContext(tenantCtx).Model(midjourney).
 		Select("quota", "token_id", "billing_channel_id").
 		Updates(midjourney).Error
 }
@@ -191,30 +196,30 @@ func (midjourney *Midjourney) GetBillingChannelId() int {
 // another process already moved the task out of fromStatus.
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
 // Uses Model().Select("*").Updates() to avoid GORM Save()'s INSERT fallback.
-func (midjourney *Midjourney) UpdateWithStatus(fromStatus string) (bool, error) {
-	result := DB.Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
+func (midjourney *Midjourney) UpdateWithStatus(tenantCtx context.Context, fromStatus string) (bool, error) {
+	result := DB.WithContext(tenantCtx).Model(midjourney).Where("status = ?", fromStatus).Select("*").Updates(midjourney)
 	if result.Error != nil {
 		return false, result.Error
 	}
 	return result.RowsAffected > 0, nil
 }
 
-func MjBulkUpdate(mjIds []string, params map[string]any) error {
-	return DB.Model(&Midjourney{}).
+func MjBulkUpdate(tenantCtx context.Context, mjIds []string, params map[string]any) error {
+	return DB.WithContext(tenantCtx).Model(&Midjourney{}).
 		Where("mj_id in (?)", mjIds).
 		Updates(params).Error
 }
 
-func MjBulkUpdateByTaskIds(taskIDs []int, params map[string]any) error {
-	return DB.Model(&Midjourney{}).
+func MjBulkUpdateByTaskIds(tenantCtx context.Context, taskIDs []int, params map[string]any) error {
+	return DB.WithContext(tenantCtx).Model(&Midjourney{}).
 		Where("id in (?)", taskIDs).
 		Updates(params).Error
 }
 
 // CountAllTasks returns total midjourney tasks for admin query
-func CountAllTasks(queryParams TaskQueryParams) int64 {
+func CountAllTasks(tenantCtx context.Context, queryParams TaskQueryParams) int64 {
 	var total int64
-	query := DB.Model(&Midjourney{})
+	query := DB.WithContext(tenantCtx).Model(&Midjourney{})
 	if queryParams.ChannelID != "" {
 		query = query.Where("channel_id = ?", queryParams.ChannelID)
 	}
@@ -232,9 +237,9 @@ func CountAllTasks(queryParams TaskQueryParams) int64 {
 }
 
 // CountAllUserTask returns total midjourney tasks for user
-func CountAllUserTask(userId int, queryParams TaskQueryParams) int64 {
+func CountAllUserTask(tenantCtx context.Context, userId int, queryParams TaskQueryParams) int64 {
 	var total int64
-	query := DB.Model(&Midjourney{}).Where("user_id = ?", userId)
+	query := DB.WithContext(tenantCtx).Model(&Midjourney{}).Where("user_id = ?", userId)
 	if queryParams.MjID != "" {
 		query = query.Where("mj_id = ?", queryParams.MjID)
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -34,7 +35,7 @@ func setupTaskPluginBindChannelTest(t *testing.T) {
 	require.NoError(t, database.AutoMigrate(&model.Channel{}, &model.Ability{}, &model.CasbinRule{}, &model.AuthzRole{}, &model.Log{}, &model.AuditLog{}, &model.User{}))
 	model.DB = database
 	model.LOG_DB = database
-	require.NoError(t, authz.Init(database))
+	require.NoError(t, authz.Init(database.WithContext(testtenant.Context())))
 	t.Cleanup(func() {
 		common.IsMasterNode = wasMaster
 		common.RedisEnabled = previousRedisEnabled
@@ -47,10 +48,10 @@ func postAddChannel(t *testing.T, userID, role int, body string) *httptest.Respo
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Set("id", userID)
 	context.Set("role", role)
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/channel", strings.NewReader(body))
+	context.Request = testtenant.NewRequest(http.MethodPost, "/api/channel", strings.NewReader(body))
 	context.Request.Header.Set("Content-Type", "application/json")
 	AddChannel(context)
 	return recorder
@@ -66,9 +67,9 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 
 	taskPluginBody := `{"mode":"single","channel":{"type":61,"name":"plugin-channel","key":"sk","models":"doc","group":"default","base_url":"https://example.com","setting":"{\"task_plugin_key\":\"channel-bind\"}"}}`
 	openaiBody := `{"mode":"single","channel":{"type":1,"name":"openai-channel","key":"sk","models":"gpt","group":"default"}}`
@@ -96,9 +97,9 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 
 	baseURL := "https://example.com"
 	setting := `{"task_plugin_key":"channel-bind-update"}`
@@ -112,7 +113,7 @@ export function parseTaskResult() { return {}; }
 		BaseURL: &baseURL,
 		Setting: &setting,
 	}
-	require.NoError(t, channel.Insert())
+	require.NoError(t, channel.Insert(testtenant.Context()))
 
 	payload := fmt.Sprintf(
 		`{"id":%d,"type":61,"name":"existing-plugin","key":"sk","models":"doc","group":"default","base_url":"https://example.com","setting":"{\"task_plugin_key\":\"channel-bind-update\"}"}`,
@@ -120,10 +121,10 @@ export function parseTaskResult() { return {}; }
 	)
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Set("id", 2)
 	context.Set("role", common.RoleAdminUser)
-	context.Request = httptest.NewRequest(http.MethodPut, "/api/channel", strings.NewReader(payload))
+	context.Request = testtenant.NewRequest(http.MethodPut, "/api/channel", strings.NewReader(payload))
 	context.Request.Header.Set("Content-Type", "application/json")
 	UpdateChannel(context)
 	assert.Contains(t, recorder.Body.String(), "task plugin channels require the task_plugin.bind permission")
@@ -140,9 +141,9 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `, key, baseURLField)
-		_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+		_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 		require.NoError(t, err)
-		t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+		t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 	}
 	body := func(pluginKey string) string {
 		return fmt.Sprintf(`{"mode":"single","channel":{"type":61,"name":"%s","key":"sk","models":"doc","group":"default","setting":"{\"task_plugin_key\":\"%s\"}"}}`, pluginKey, pluginKey)

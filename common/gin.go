@@ -12,7 +12,9 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/pkg/errors"
+	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
 )
@@ -48,7 +50,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	cached, exists := c.Get(KeyRequestBody)
 	if exists && cached != nil {
 		if b, ok := cached.([]byte); ok {
-			bs, err := CreateBodyStorage(b)
+			bs, err := CreateBodyStorage(c.Request.Context(), b)
 			if err != nil {
 				return nil, err
 			}
@@ -66,7 +68,7 @@ func GetRequestBody(c *gin.Context) (io.Seeker, error) {
 	contentLength := c.Request.ContentLength
 
 	// 使用新的存储系统
-	storage, err := CreateBodyStorageFromReader(c.Request.Body, contentLength, maxBytes)
+	storage, err := CreateBodyStorageFromReader(c.Request.Context(), c.Request.Body, contentLength, maxBytes)
 	_ = c.Request.Body.Close()
 
 	if err != nil {
@@ -197,6 +199,15 @@ func GetContextKeyType[T any](c *gin.Context, key constant.ContextKey) (T, bool)
 }
 
 func ApiError(c *gin.Context, err error) {
+	var hostingError *tenant.HTTPError
+	if errors.As(err, &hostingError) {
+		c.JSON(hostingError.Status, gin.H{"success": false, "code": hostingError.Code, "message": hostingError.Message})
+		return
+	}
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "code": "resource_not_found", "message": "Resource not found"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"success": false,
 		"message": err.Error(),

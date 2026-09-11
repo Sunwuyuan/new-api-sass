@@ -1,5 +1,7 @@
 package model_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"regexp"
@@ -73,8 +75,8 @@ func init() {
 	config.GlobalConfig.Register("global", &globalSettings)
 }
 
-func GetGlobalSettings() *GlobalSettings {
-	return &globalSettings
+func GetGlobalSettings(tenantCtx context.Context) *GlobalSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("global").(*GlobalSettings)
 }
 
 const thinkingBlacklistRegexPrefix = "re:"
@@ -94,22 +96,22 @@ func thinkingBlacklistSourceKey(entries []string) string {
 	return strings.Join(entries, "\x00")
 }
 
-func compiledThinkingBlacklist() ([]string, []*regexp.Regexp) {
-	entries := globalSettings.ThinkingModelBlacklist
+func compiledThinkingBlacklist(tenantCtx context.Context) ([]string, []*regexp.Regexp) {
+	entries := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("global").(*GlobalSettings))).ThinkingModelBlacklist
 	key := thinkingBlacklistSourceKey(entries)
 
-	thinkingBlacklistMu.RLock()
-	if thinkingBlacklistCache.source == key {
-		exact, regexes := thinkingBlacklistCache.exact, thinkingBlacklistCache.regexes
-		thinkingBlacklistMu.RUnlock()
+	TenantState(tenantCtx).thinkingBlacklistMu.RLock()
+	if TenantState(tenantCtx).thinkingBlacklistCache.source == key {
+		exact, regexes := TenantState(tenantCtx).thinkingBlacklistCache.exact, TenantState(tenantCtx).thinkingBlacklistCache.regexes
+		TenantState(tenantCtx).thinkingBlacklistMu.RUnlock()
 		return exact, regexes
 	}
-	thinkingBlacklistMu.RUnlock()
+	TenantState(tenantCtx).thinkingBlacklistMu.RUnlock()
 
-	thinkingBlacklistMu.Lock()
-	defer thinkingBlacklistMu.Unlock()
-	if thinkingBlacklistCache.source == key {
-		return thinkingBlacklistCache.exact, thinkingBlacklistCache.regexes
+	TenantState(tenantCtx).thinkingBlacklistMu.Lock()
+	defer TenantState(tenantCtx).thinkingBlacklistMu.Unlock()
+	if TenantState(tenantCtx).thinkingBlacklistCache.source == key {
+		return TenantState(tenantCtx).thinkingBlacklistCache.exact, TenantState(tenantCtx).thinkingBlacklistCache.regexes
 	}
 
 	exact := make([]string, 0, len(entries))
@@ -135,7 +137,7 @@ func compiledThinkingBlacklist() ([]string, []*regexp.Regexp) {
 		}
 		exact = append(exact, entry)
 	}
-	thinkingBlacklistCache = thinkingBlacklistCompiled{source: key, exact: exact, regexes: regexes}
+	TenantState(tenantCtx).thinkingBlacklistCache = thinkingBlacklistCompiled{source: key, exact: exact, regexes: regexes}
 	return exact, regexes
 }
 
@@ -143,13 +145,13 @@ func compiledThinkingBlacklist() ([]string, []*regexp.Regexp) {
 // from host thinking-suffix and @-modifier parsing. Exact blacklist entries
 // match the complete name; entries prefixed with re: are Go regular expressions
 // matched with MatchString against the same full name.
-func ShouldPreserveThinkingSuffix(modelName string) bool {
+func ShouldPreserveThinkingSuffix(tenantCtx context.Context, modelName string) bool {
 	target := strings.TrimSpace(modelName)
 	if target == "" {
 		return false
 	}
 
-	exact, regexes := compiledThinkingBlacklist()
+	exact, regexes := compiledThinkingBlacklist(tenantCtx)
 	if slices.Contains(exact, target) {
 		return true
 	}
@@ -164,7 +166,7 @@ func ShouldPreserveThinkingSuffix(modelName string) bool {
 // ShouldPreserveEffortTail reports whether modelName is a real model ID whose
 // name already ends in an effort word. Entries match the complete name and the
 // de-namespaced bare name.
-func ShouldPreserveEffortTail(modelName string) bool {
+func ShouldPreserveEffortTail(tenantCtx context.Context, modelName string) bool {
 	target := strings.TrimSpace(modelName)
 	if target == "" {
 		return false
@@ -174,7 +176,7 @@ func ShouldPreserveEffortTail(modelName string) bool {
 		bare = target[slash+1:]
 	}
 
-	for _, entry := range globalSettings.EffortTailModelIDs {
+	for _, entry := range (*(config.GlobalConfig.ForTenant(tenantCtx).Get("global").(*GlobalSettings))).EffortTailModelIDs {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue

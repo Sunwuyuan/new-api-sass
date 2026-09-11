@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/sha256"
 	"errors"
@@ -167,7 +169,7 @@ func replaceModelPricing(values map[string]map[string]any, name string, draft Pr
 	}
 }
 
-func effectiveModelPricing(values map[string]map[string]any, name string) PricingValues {
+func effectiveModelPricing(tenantCtx context.Context, values map[string]map[string]any, name string) PricingValues {
 	result := modelPricingValues(values, name)
 	// Legacy wildcard aliases are resolved by the same normalization as relay.
 	alias := ratio_setting.FormatMatchingModelName(name)
@@ -197,7 +199,7 @@ func effectiveModelPricing(values map[string]map[string]any, name string) Pricin
 	if _, exists := result["ModelPrice"]; exists {
 		return result
 	}
-	if _, exists := result["ModelRatio"]; !exists && operation_setting.SelfUseModeEnabled {
+	if _, exists := result["ModelRatio"]; !exists && operation_setting.TenantState(tenantCtx).SelfUseModeEnabled {
 		result["ModelRatio"] = float64(37.5)
 	}
 	// Completion ratios include engine-enforced model defaults. Expose their
@@ -221,23 +223,23 @@ func effectiveModelPricing(values map[string]map[string]any, name string) Pricin
 
 // PreviewModelPricing resolves a complete editable draft using the same defaults
 // as the saved-price display and conversion. It has no write side effects.
-func PreviewModelPricing(name string, draft PricingValues) (PricingValues, error) {
+func PreviewModelPricing(tenantCtx context.Context, name string, draft PricingValues) (PricingValues, error) {
 	if draft == nil {
 		return nil, errors.New("pricing draft is required")
 	}
-	values, _, _, err := readModelPricingMaps(DB)
+	values, _, _, err := readModelPricingMaps(DB.WithContext(tenantCtx))
 	if err != nil {
 		return nil, err
 	}
-	if err := validateModelPricing(name, draft, modelPricingValues(values, name)); err != nil {
+	if err := validateModelPricing(tenantCtx, name, draft, modelPricingValues(values, name)); err != nil {
 		return nil, err
 	}
 	replaceModelPricing(values, name, draft)
-	return effectiveModelPricing(values, name), nil
+	return effectiveModelPricing(tenantCtx, values, name), nil
 }
 
-func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
-	values, _, _, err := readModelPricingMaps(DB)
+func GetModelPricingSnapshot(tenantCtx context.Context, names []string) (*ModelPricingSnapshot, error) {
+	values, _, _, err := readModelPricingMaps(DB.WithContext(tenantCtx))
 	if err != nil {
 		return nil, err
 	}
@@ -264,16 +266,16 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 	}
 	sort.Strings(names)
 	result := &ModelPricingSnapshot{Entries: make([]ModelPricingEntry, 0, len(names)), Options: make(map[string]string), EmptyVersion: ModelPricingVersion(PricingValues{})}
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(tenantCtx).DefaultRegistry.Generation()
 	for _, name := range names {
 		configured := modelPricingValues(values, name)
 		entry := ModelPricingEntry{ModelName: name, Version: ModelPricingVersion(configured), Configured: configured,
-			ModelPricingDescription: ModelPricingDescription{Effective: effectiveModelPricing(values, name)}}
+			ModelPricingDescription: ModelPricingDescription{Effective: effectiveModelPricing(tenantCtx, values, name)}}
 		entry.CacheWriteMode = ResolveCacheWriteMode(name, configured)
-		entry.BillingDetails = ResolveLegacyBillingDetails(name, entry.Effective, configured)
+		entry.BillingDetails = ResolveLegacyBillingDetails(tenantCtx, name, entry.Effective, configured)
 		if plugin, ok := generation.GetByModel(name); ok {
 			entry.UsageSchema, _ = plugin.Meta.UsageForModel(name)
-		} else if target, ok := ResolveTaskModelAlias(generation, name); ok {
+		} else if target, ok := ResolveTaskModelAlias(tenantCtx, generation, name); ok {
 			if plugin, ok := generation.Get(target.PluginKey); ok {
 				entry.UsageSchema, _ = plugin.Meta.UsageForModel(target.Declared)
 			}
@@ -323,7 +325,7 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 	// Preserve the existing settings editor's full-map interface. Built-in
 	// expressions are display defaults only; per-model writes do not persist them.
 	for name, expression := range billing_setting.GetBuiltinBillingExprCopy() {
-		effective := effectiveModelPricing(values, name)
+		effective := effectiveModelPricing(tenantCtx, values, name)
 		if effective["billing_setting.billing_mode"] != "tiered_expr" {
 			continue
 		}
@@ -344,27 +346,27 @@ func GetModelPricingSnapshot(names []string) (*ModelPricingSnapshot, error) {
 	return result, nil
 }
 
-func ValidateModelPricing(name string, values PricingValues) error {
+func ValidateModelPricing(tenantCtx context.Context, name string, values PricingValues) error {
 	variants := make(map[string]any)
-	for key, expression := range billing_setting.GetPluginBillingExprCopy() {
+	for key, expression := range billing_setting.GetPluginBillingExprCopy(tenantCtx) {
 		if plugin, model, ok := billing_setting.SplitPluginBillingExprKey(key); ok && model == name {
 			variants[plugin] = expression
 		}
 	}
 	previous := PricingValues{billing_setting.PluginBillingExprOption: variants}
-	if expression, ok := billing_setting.GetBillingExpr(name); ok {
+	if expression, ok := billing_setting.GetBillingExpr(tenantCtx, name); ok {
 		previous["billing_setting.billing_expr"] = expression
 	}
-	return validateModelPricing(name, values, previous)
+	return validateModelPricing(tenantCtx, name, values, previous)
 }
 
 // Writes pass the locked database snapshot here, so allowing an unchanged stale
 // override cannot bypass validation through an out-of-date process-local cache.
-func validateModelPricing(name string, values, previous PricingValues) error {
+func validateModelPricing(tenantCtx context.Context, name string, values, previous PricingValues) error {
 	if strings.TrimSpace(name) == "" {
 		return errors.New("model name is required")
 	}
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(tenantCtx).DefaultRegistry.Generation()
 	previousVariants, _ := previous[billing_setting.PluginBillingExprOption].(map[string]any)
 	variants := map[string]any{}
 	if value, exists := values[billing_setting.PluginBillingExprOption]; exists {
@@ -425,7 +427,7 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 						return fmt.Errorf("model %s: plugin %s: %w", name, plugin.Meta.Key, err)
 					}
 				}
-			} else if target, resolved := ResolveTaskModelAlias(generation, name); resolved {
+			} else if target, resolved := ResolveTaskModelAlias(tenantCtx, generation, name); resolved {
 				if plugin, ok := generation.Get(target.PluginKey); ok {
 					schema, _ := plugin.Meta.UsageForModel(target.Declared)
 					err = billing_setting.SmokeTestTaskExpr(expression, schema)
@@ -458,7 +460,7 @@ func validateModelPricing(name string, values, previous PricingValues) error {
 	return nil
 }
 
-func UpdateModelPricing(changes []ModelPricingChange) error {
+func UpdateModelPricing(tenantCtx context.Context, changes []ModelPricingChange) error {
 	if len(changes) == 0 {
 		return errors.New("select model pricing changes before saving")
 	}
@@ -472,7 +474,7 @@ func UpdateModelPricing(changes []ModelPricingChange) error {
 			return ErrModelPricingConflict
 		}
 	}
-	return mutateModelPricingOptions(func(_ *gorm.DB, values map[string]map[string]any) error {
+	return mutateModelPricingOptions(tenantCtx, func(tenantDB *gorm.DB, values map[string]map[string]any) error {
 		defaults := defaultPricingMaps()
 		for _, change := range changes {
 			previous := modelPricingValues(values, change.ModelName)
@@ -483,7 +485,7 @@ func UpdateModelPricing(changes []ModelPricingChange) error {
 			if change.Reset {
 				pricing = modelPricingValues(defaults, change.ModelName)
 			}
-			if err := validateModelPricing(change.ModelName, pricing, previous); err != nil {
+			if err := validateModelPricing(tenantDB.Statement.Context, change.ModelName, pricing, previous); err != nil {
 				return err
 			}
 			replaceModelPricing(values, change.ModelName, pricing)
@@ -494,8 +496,8 @@ func UpdateModelPricing(changes []ModelPricingChange) error {
 
 // UpdateModelPricingOptions keeps legacy single-option callers on the same
 // locking, validation and transaction path as the model-level API.
-func UpdateModelPricingOptions(updates map[string]string) error {
-	return mutateModelPricingOptions(func(_ *gorm.DB, values map[string]map[string]any) error {
+func UpdateModelPricingOptions(tenantCtx context.Context, updates map[string]string) error {
+	return mutateModelPricingOptions(tenantCtx, func(tenantDB *gorm.DB, values map[string]map[string]any) error {
 		previous := maps.Clone(values)
 		names := make(map[string]bool)
 		for key, raw := range updates {
@@ -524,7 +526,7 @@ func UpdateModelPricingOptions(updates map[string]string) error {
 			values[key] = entries
 		}
 		for name := range names {
-			if err := validateModelPricing(name, modelPricingValues(values, name), modelPricingValues(previous, name)); err != nil {
+			if err := validateModelPricing(tenantDB.Statement.Context, name, modelPricingValues(values, name), modelPricingValues(previous, name)); err != nil {
 				return err
 			}
 		}
@@ -532,11 +534,11 @@ func UpdateModelPricingOptions(updates map[string]string) error {
 	})
 }
 
-func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) error) error {
-	modelPricingMutationMu.Lock()
-	defer modelPricingMutationMu.Unlock()
+func mutateModelPricingOptions(tenantCtx context.Context, mutate func(*gorm.DB, map[string]map[string]any) error) error {
+	TenantState(tenantCtx).modelPricingMutationMu.Lock()
+	defer TenantState(tenantCtx).modelPricingMutationMu.Unlock()
 	var committed map[string]map[string]any
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		values, existing, duplicated, err := readModelPricingMaps(lockForUpdate(tx))
 		if err != nil {
 			return err
@@ -578,11 +580,11 @@ func mutateModelPricingOptions(mutate func(*gorm.DB, map[string]map[string]any) 
 	}
 	for _, key := range modelPricingOptionKeys {
 		encoded, _ := common.Marshal(committed[key])
-		if err := updateOptionMap(key, string(encoded)); err != nil {
+		if err := updateOptionMap(tenantCtx, key, string(encoded)); err != nil {
 			return err
 		}
 	}
-	RefreshPricing()
-	ratio_setting.InvalidateExposedDataCache()
+	RefreshPricing(tenantCtx)
+	ratio_setting.InvalidateExposedDataCache(tenantCtx)
 	return nil
 }

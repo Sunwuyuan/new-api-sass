@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"io"
 
@@ -22,8 +24,8 @@ import (
 // io.Closer. Request construction uses that metadata to populate ContentLength
 // and GetBody, while the caller retains ownership of the underlying storage
 // through the separately returned closer.
-func NewOutboundJSONBody(data []byte) (body common.ReplayableBody, closer io.Closer, err error) {
-	storage, err := common.CreateBodyStorage(data)
+func NewOutboundJSONBody(tenantCtx context.Context, data []byte) (body common.ReplayableBody, closer io.Closer, err error) {
+	storage, err := common.CreateBodyStorage(tenantCtx, data)
 	if err != nil {
 		return nil, nil, err
 	}

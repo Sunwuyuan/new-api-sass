@@ -9,10 +9,11 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-	"github.com/gin-gonic/gin"
 	"github.com/jinzhu/copier"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -71,9 +72,9 @@ func TestRequestDeepCopyResponses(t *testing.T) {
 			request, err := common.DeepCopy(src)
 			require.NoError(t, err)
 			assert.Equal(t, json.RawMessage(`"hello"`), request.Input)
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 			c.Set("model_mapping", fmt.Sprintf(`{"client-model":%q}`, model))
-			info := &relaycommon.RelayInfo{OriginModelName: src.Model}
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: src.Model}
 			require.NoError(t, helper.ModelMappedHelper(c, info, request))
 			assert.Equal(t, model, request.Model)
 			assert.Equal(t, "client-model", src.Model)

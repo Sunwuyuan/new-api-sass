@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"fmt"
 	"html"
@@ -10,14 +12,14 @@ import (
 	"github.com/QuantumNous/new-api/setting/system_setting"
 )
 
-func UnbindAccountOAuth(identity AuthIdentity, providerID int) error {
+func UnbindAccountOAuth(tenantCtx context.Context, identity AuthIdentity, providerID int) error {
 	enabled := model.AccountLoginMethods{
-		Password: common.PasswordLoginEnabled,
-		Passkey:  system_setting.PasskeySettingsSnapshot().Enabled,
-		WeChat:   common.WeChatAuthEnabled,
+		Password: common.TenantState(tenantCtx).PasswordLoginEnabled,
+		Passkey:  system_setting.PasskeySettingsSnapshot(tenantCtx).Enabled,
+		WeChat:   common.TenantState(tenantCtx).WeChatAuthEnabled,
 	}
-	for _, provider := range oauth.GetAllProviders() {
-		if !provider.IsEnabled() {
+	for _, provider := range oauth.GetAllProviders(tenantCtx) {
+		if !provider.IsEnabled(tenantCtx) {
 			continue
 		}
 		if custom, ok := provider.(*oauth.GenericOAuthProvider); ok {
@@ -26,16 +28,16 @@ func UnbindAccountOAuth(identity AuthIdentity, providerID int) error {
 			enabled.OAuthColumns = append(enabled.OAuthColumns, provider.ProviderUserIDColumn())
 		}
 	}
-	return model.UnbindUserOAuthForSession(identity, providerID, enabled)
+	return model.UnbindUserOAuthForSession(tenantCtx, identity, providerID, enabled)
 }
 
 // NotifyAccountSecurityChange never includes credentials or tokens. The caller
 // records delivery failure independently from the already-committed change.
-func NotifyAccountSecurityChange(email, event string) error {
+func NotifyAccountSecurityChange(tenantCtx context.Context, email, event string) error {
 	if email == "" {
 		return nil
 	}
-	subject := common.SystemName + " — Account security notification"
+	subject := common.TenantState(tenantCtx).SystemName + " — Account security notification"
 	content := fmt.Sprintf("<p>Your account security settings have changed: %s.</p><p>If you did not make this change, open your account security settings, revoke other login sessions, and contact your administrator.</p>", html.EscapeString(event))
-	return common.SendEmail(subject, email, content)
+	return common.SendEmail(tenantCtx, subject, email, content)
 }

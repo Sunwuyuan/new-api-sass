@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"fmt"
 
@@ -18,9 +20,9 @@ type RankingQuotaBucket struct {
 	Tokens    int64  `json:"tokens"`
 }
 
-func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal, error) {
+func GetRankingQuotaTotals(tenantCtx context.Context, startTime int64, endTime int64) ([]RankingQuotaTotal, error) {
 	var rows []RankingQuotaTotal
-	query := DB.Table("quota_data").
+	query := DB.WithContext(tenantCtx).Table("quota_data").
 		Select("model_name, sum(token_used) as total_tokens").
 		Where("model_name <> ''").
 		Group("model_name").
@@ -31,13 +33,13 @@ func GetRankingQuotaTotals(startTime int64, endTime int64) ([]RankingQuotaTotal,
 	return rows, err
 }
 
-func GetRankingQuotaBuckets(startTime int64, endTime int64, bucketSize int64) ([]RankingQuotaBucket, error) {
+func GetRankingQuotaBuckets(tenantCtx context.Context, startTime int64, endTime int64, bucketSize int64) ([]RankingQuotaBucket, error) {
 	if bucketSize <= 0 {
 		bucketSize = 3600
 	}
 	bucketExpr := rankingBucketExpr(bucketSize)
 	var rows []RankingQuotaBucket
-	query := DB.Table("quota_data").
+	query := DB.WithContext(tenantCtx).Table("quota_data").
 		Select(fmt.Sprintf("model_name, %s as bucket, sum(token_used) as tokens", bucketExpr)).
 		Where("model_name <> ''").
 		Group(fmt.Sprintf("model_name, %s", bucketExpr)).

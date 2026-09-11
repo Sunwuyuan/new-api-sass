@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -118,7 +119,7 @@ func transformLegacyAPIInfo(value string) (string, error) {
 		return "", err
 	}
 	result := string(encoded)
-	if err := console_setting.ValidateConsoleSettings(result, "ApiInfo"); err != nil {
+	if err := console_setting.ValidateConsoleSettings(context.Background(), result, "ApiInfo"); err != nil {
 		return "", err
 	}
 	return result, nil
@@ -128,7 +129,7 @@ func transformLegacyAnnouncements(value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
 		return "", errors.New("value is empty")
 	}
-	if err := console_setting.ValidateConsoleSettings(value, "Announcements"); err != nil {
+	if err := console_setting.ValidateConsoleSettings(context.Background(), value, "Announcements"); err != nil {
 		return "", err
 	}
 	return value, nil
@@ -165,7 +166,7 @@ func transformLegacyFAQ(value string) (string, error) {
 		return "", err
 	}
 	result := string(encoded)
-	if err := console_setting.ValidateConsoleSettings(result, "FAQ"); err != nil {
+	if err := console_setting.ValidateConsoleSettings(context.Background(), result, "FAQ"); err != nil {
 		return "", err
 	}
 	return result, nil
@@ -220,7 +221,7 @@ func migrateLegacyUptimeOptions() error {
 			return err
 		}
 		value := string(encoded)
-		if err := console_setting.ValidateConsoleSettings(value, "UptimeKumaGroups"); err != nil {
+		if err := console_setting.ValidateConsoleSettings(context.Background(), value, "UptimeKumaGroups"); err != nil {
 			common.SysError(fmt.Sprintf("legacy Uptime Kuma options were not migrated: %v", err))
 			return nil
 		}

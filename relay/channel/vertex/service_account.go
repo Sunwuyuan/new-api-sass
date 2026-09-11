@@ -1,17 +1,20 @@
 package vertex
 
+import context "context"
+
 import (
 	"crypto/rsa"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/QuantumNous/new-api/common"
 	"net/http"
 	"net/url"
 	"strings"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/bytedance/gopkg/cache/asynccache"
 	"github.com/golang-jwt/jwt/v5"
@@ -32,7 +35,7 @@ var Cache = asynccache.NewAsyncCache(asynccache.Options{
 	RefreshDuration: time.Minute * 35,
 	EnableExpire:    true,
 	ExpireDuration:  time.Minute * 30,
-	Fetcher: func(key string) (interface{}, error) {
+	Fetcher: func(key string) (any, error) {
 		return nil, errors.New("not found")
 	},
 })
@@ -44,6 +47,7 @@ func getAccessToken(a *Adaptor, info *relaycommon.RelayInfo) (string, error) {
 	} else {
 		cacheKey = fmt.Sprintf("access-token-%d", info.ChannelId)
 	}
+	cacheKey = tenant.MustKey(info.Context, cacheKey)
 	val, err := Cache.Get(cacheKey)
 	if err == nil {
 		return val.(string), nil
@@ -111,7 +115,7 @@ func exchangeJwtForAccessToken(signedJWT string, info *relaycommon.RelayInfo) (s
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
 	data.Set("assertion", signedJWT)
 
-	client, err := service.GetHttpClientWithProxySettings(info.ChannelSetting.Proxy, info.ChannelSetting)
+	client, err := service.GetHttpClientWithProxySettings(info.Context, info.ChannelSetting.Proxy, info.ChannelSetting)
 	if err != nil {
 		return "", fmt.Errorf("new proxy http client failed: %w", err)
 	}
@@ -122,8 +126,8 @@ func exchangeJwtForAccessToken(signedJWT string, info *relaycommon.RelayInfo) (s
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var result map[string]any
+	if err := common.DecodeJson(resp.Body, &result); err != nil {
 		return "", err
 	}
 
@@ -134,15 +138,15 @@ func exchangeJwtForAccessToken(signedJWT string, info *relaycommon.RelayInfo) (s
 	return "", fmt.Errorf("failed to get access token: %v", result)
 }
 
-func AcquireAccessToken(creds Credentials, proxy string) (string, error) {
+func AcquireAccessToken(tenantCtx context.Context, creds Credentials, proxy string) (string, error) {
 	signedJWT, err := createSignedJWT(creds.ClientEmail, creds.PrivateKey)
 	if err != nil {
 		return "", fmt.Errorf("failed to create signed JWT: %w", err)
 	}
-	return exchangeJwtForAccessTokenWithProxy(signedJWT, proxy)
+	return exchangeJwtForAccessTokenWithProxy(tenantCtx, signedJWT, proxy)
 }
 
-func exchangeJwtForAccessTokenWithProxy(signedJWT string, proxy string) (string, error) {
+func exchangeJwtForAccessTokenWithProxy(tenantCtx context.Context, signedJWT string, proxy string) (string, error) {
 	authURL := "https://www.googleapis.com/oauth2/v4/token"
 	data := url.Values{}
 	data.Set("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer")
@@ -151,12 +155,12 @@ func exchangeJwtForAccessTokenWithProxy(signedJWT string, proxy string) (string,
 	var client *http.Client
 	var err error
 	if proxy != "" {
-		client, err = service.GetHttpClientWithProxy(proxy)
+		client, err = service.GetHttpClientWithProxy(tenantCtx, proxy)
 		if err != nil {
 			return "", fmt.Errorf("new proxy http client failed: %w", err)
 		}
 	} else {
-		client = service.GetHttpClient()
+		client = service.GetHttpClient(tenantCtx)
 	}
 
 	resp, err := client.PostForm(authURL, data)
@@ -165,8 +169,8 @@ func exchangeJwtForAccessTokenWithProxy(signedJWT string, proxy string) (string,
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	var result map[string]any
+	if err := common.DecodeJson(resp.Body, &result); err != nil {
 		return "", err
 	}
 

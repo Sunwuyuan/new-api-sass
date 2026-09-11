@@ -3,6 +3,7 @@ package operation_setting
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,48 +37,48 @@ func TestParseHTTPStatusCodeRanges_NoComma_IsInvalid(t *testing.T) {
 }
 
 func TestShouldDisableByStatusCode(t *testing.T) {
-	orig := AutomaticDisableStatusCodeRanges
-	t.Cleanup(func() { AutomaticDisableStatusCodeRanges = orig })
+	orig := TenantState(testtenant.Context()).AutomaticDisableStatusCodeRanges
+	t.Cleanup(func() { TenantState(testtenant.Context()).AutomaticDisableStatusCodeRanges = orig })
 
-	AutomaticDisableStatusCodeRanges = []StatusCodeRange{
+	TenantState(testtenant.Context()).AutomaticDisableStatusCodeRanges = []StatusCodeRange{
 		{Start: 401, End: 403},
 		{Start: 500, End: 599},
 	}
 
-	require.True(t, ShouldDisableByStatusCode(401))
-	require.True(t, ShouldDisableByStatusCode(403))
-	require.False(t, ShouldDisableByStatusCode(404))
-	require.True(t, ShouldDisableByStatusCode(500))
-	require.False(t, ShouldDisableByStatusCode(200))
+	require.True(t, ShouldDisableByStatusCode(testtenant.Context(), 401))
+	require.True(t, ShouldDisableByStatusCode(testtenant.Context(), 403))
+	require.False(t, ShouldDisableByStatusCode(testtenant.Context(), 404))
+	require.True(t, ShouldDisableByStatusCode(testtenant.Context(), 500))
+	require.False(t, ShouldDisableByStatusCode(testtenant.Context(), 200))
 }
 
 func TestShouldRetryByStatusCode(t *testing.T) {
-	orig := AutomaticRetryStatusCodeRanges
-	t.Cleanup(func() { AutomaticRetryStatusCodeRanges = orig })
+	orig := TenantState(testtenant.Context()).AutomaticRetryStatusCodeRanges
+	t.Cleanup(func() { TenantState(testtenant.Context()).AutomaticRetryStatusCodeRanges = orig })
 
-	AutomaticRetryStatusCodeRanges = []StatusCodeRange{
+	TenantState(testtenant.Context()).AutomaticRetryStatusCodeRanges = []StatusCodeRange{
 		{Start: 429, End: 429},
 		{Start: 500, End: 599},
 	}
 
-	require.True(t, ShouldRetryByStatusCode(429))
-	require.True(t, ShouldRetryByStatusCode(500))
-	require.False(t, ShouldRetryByStatusCode(504))
-	require.False(t, ShouldRetryByStatusCode(524))
-	require.False(t, ShouldRetryByStatusCode(400))
-	require.False(t, ShouldRetryByStatusCode(200))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 429))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 500))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 504))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 524))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 400))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 200))
 }
 
 func TestShouldRetryByStatusCode_DefaultMatchesLegacyBehavior(t *testing.T) {
-	require.False(t, ShouldRetryByStatusCode(200))
-	require.False(t, ShouldRetryByStatusCode(400))
-	require.True(t, ShouldRetryByStatusCode(401))
-	require.False(t, ShouldRetryByStatusCode(408))
-	require.True(t, ShouldRetryByStatusCode(429))
-	require.True(t, ShouldRetryByStatusCode(500))
-	require.False(t, ShouldRetryByStatusCode(504))
-	require.False(t, ShouldRetryByStatusCode(524))
-	require.True(t, ShouldRetryByStatusCode(599))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 200))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 400))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 401))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 408))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 429))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 500))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 504))
+	require.False(t, ShouldRetryByStatusCode(testtenant.Context(), 524))
+	require.True(t, ShouldRetryByStatusCode(testtenant.Context(), 599))
 }
 
 func TestIsAlwaysSkipRetryStatusCode(t *testing.T) {

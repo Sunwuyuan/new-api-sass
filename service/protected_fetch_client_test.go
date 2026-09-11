@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/stretchr/testify/require"
 )
@@ -41,7 +42,7 @@ func testConn(t *testing.T) net.Conn {
 
 func configureSSRFTestFetchSetting(t *testing.T) {
 	t.Helper()
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSetting(testtenant.Context())
 	original := *fetchSetting
 	t.Cleanup(func() {
 		*fetchSetting = original
@@ -81,7 +82,7 @@ func TestProtectedFetchDialerRejectsPrivateReboundAddress(t *testing.T) {
 		}),
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp", "safe.example:80")
+	conn, err := dialer.DialContext(testtenant.Context(), "tcp", "safe.example:80")
 
 	require.Error(t, err)
 	require.Nil(t, conn)
@@ -109,7 +110,7 @@ func TestProtectedFetchDialerRejectsMixedResolvedIPs(t *testing.T) {
 		}),
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp", "safe.example:443")
+	conn, err := dialer.DialContext(testtenant.Context(), "tcp", "safe.example:443")
 	require.Error(t, err)
 	require.Nil(t, conn)
 
@@ -138,7 +139,7 @@ func TestProtectedFetchDialerDialsWhenAllResolvedIPsAllowed(t *testing.T) {
 		}),
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp", "safe.example:443")
+	conn, err := dialer.DialContext(testtenant.Context(), "tcp", "safe.example:443")
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
@@ -164,7 +165,7 @@ func TestProtectedFetchDialerAllowsPrivateIPWhenWhitelisted(t *testing.T) {
 		}),
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp", "internal.example:80")
+	conn, err := dialer.DialContext(testtenant.Context(), "tcp", "internal.example:80")
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
@@ -187,7 +188,7 @@ func TestProtectedFetchDialerSkipsResolvedIPCheckWhenDisabled(t *testing.T) {
 		}),
 	}
 
-	conn, err := dialer.DialContext(context.Background(), "tcp", "safe.example:80")
+	conn, err := dialer.DialContext(testtenant.Context(), "tcp", "safe.example:80")
 	require.NoError(t, err)
 	require.NotNil(t, conn)
 
@@ -195,29 +196,29 @@ func TestProtectedFetchDialerSkipsResolvedIPCheckWhenDisabled(t *testing.T) {
 }
 
 func TestGetSSRFProtectedHTTPClientFallsBackToDefaultClientWhenProtectionDisabled(t *testing.T) {
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSetting(testtenant.Context())
 	originalFetchSetting := *fetchSetting
-	originalHTTPClient := httpClient
-	originalProtectedClient := ssrfProtectedHTTPClient
+	originalHTTPClient := TenantRuntime(testtenant.Context()).httpClient
+	originalProtectedClient := TenantRuntime(testtenant.Context()).ssrfProtectedHTTPClient
 	t.Cleanup(func() {
 		*fetchSetting = originalFetchSetting
-		httpClient = originalHTTPClient
-		ssrfProtectedHTTPClient = originalProtectedClient
+		TenantRuntime(testtenant.Context()).httpClient = originalHTTPClient
+		TenantRuntime(testtenant.Context()).ssrfProtectedHTTPClient = originalProtectedClient
 	})
 
 	fetchSetting.EnableSSRFProtection = false
 	expected := &http.Client{}
-	httpClient = expected
-	ssrfProtectedHTTPClient = &http.Client{}
+	TenantRuntime(testtenant.Context()).httpClient = expected
+	TenantRuntime(testtenant.Context()).ssrfProtectedHTTPClient = &http.Client{}
 
-	require.Same(t, expected, GetSSRFProtectedHTTPClient())
+	require.Same(t, expected, GetSSRFProtectedHTTPClient(testtenant.Context()))
 }
 
 func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
 	configureSSRFTestFetchSetting(t)
 	proxyURL := mustParseURL(t, "http://127.0.0.1:3128")
 	var dialed []string
-	client := newProtectedFetchHTTPClientWithProxy(
+	client := newProtectedFetchHTTPClientWithProxy(testtenant.Context(),
 		staticSSRFResolver{},
 		func(ctx context.Context, network, address string) (net.Conn, error) {
 			dialed = append(dialed, address)
@@ -233,7 +234,7 @@ func TestProtectedFetchRoundTripperUsesConfiguredProxy(t *testing.T) {
 			return proxyURL, nil
 		},
 	)
-	req, err := http.NewRequest(http.MethodGet, "http://93.184.216.34/resource", nil)
+	req, err := testtenant.HTTPRequest(http.MethodGet, "http://93.184.216.34/resource", nil)
 	require.NoError(t, err)
 
 	resp, err := client.Do(req)
@@ -246,7 +247,7 @@ func TestProtectedFetchRoundTripperRejectsPrivateTargetBeforeProxy(t *testing.T)
 	configureSSRFTestFetchSetting(t)
 	proxyURL := mustParseURL(t, "http://127.0.0.1:3128")
 	var dialed []string
-	client := newProtectedFetchHTTPClientWithProxy(
+	client := newProtectedFetchHTTPClientWithProxy(testtenant.Context(),
 		staticSSRFResolver{},
 		func(ctx context.Context, network, address string) (net.Conn, error) {
 			dialed = append(dialed, address)
@@ -262,7 +263,7 @@ func TestProtectedFetchRoundTripperRejectsPrivateTargetBeforeProxy(t *testing.T)
 			return proxyURL, nil
 		},
 	)
-	req, err := http.NewRequest(http.MethodGet, "http://localhost/resource", nil)
+	req, err := testtenant.HTTPRequest(http.MethodGet, "http://localhost/resource", nil)
 	require.NoError(t, err)
 
 	resp, err := client.Do(req)
@@ -275,7 +276,7 @@ func TestProtectedFetchRoundTripperRejectsPrivateTargetBeforeProxy(t *testing.T)
 func TestProtectedFetchRoundTripperNoProxyUsesProtectedDialer(t *testing.T) {
 	configureSSRFTestFetchSetting(t)
 	var dialed []string
-	client := newProtectedFetchHTTPClientWithProxy(
+	client := newProtectedFetchHTTPClientWithProxy(testtenant.Context(),
 		staticSSRFResolver{},
 		func(ctx context.Context, network, address string) (net.Conn, error) {
 			dialed = append(dialed, address)
@@ -291,7 +292,7 @@ func TestProtectedFetchRoundTripperNoProxyUsesProtectedDialer(t *testing.T) {
 			return nil, nil
 		},
 	)
-	req, err := http.NewRequest(http.MethodGet, "http://127.0.0.1/resource", nil)
+	req, err := testtenant.HTTPRequest(http.MethodGet, "http://127.0.0.1/resource", nil)
 	require.NoError(t, err)
 
 	resp, err := client.Do(req)
@@ -302,7 +303,7 @@ func TestProtectedFetchRoundTripperNoProxyUsesProtectedDialer(t *testing.T) {
 }
 
 func TestProtectedFetchRoundTripperReusesTransportPerProxy(t *testing.T) {
-	client := newProtectedFetchHTTPClientWithDialer(nil, nil, nil)
+	client := newProtectedFetchHTTPClientWithDialer(testtenant.Context(), nil, nil, nil)
 	roundTripper, ok := client.Transport.(*ssrfProtectedRoundTripper)
 	require.True(t, ok)
 

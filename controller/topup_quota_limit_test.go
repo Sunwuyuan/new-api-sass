@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -19,12 +20,12 @@ import (
 )
 
 func TestTopUpQuotaValidation(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
-	common.QuotaPerUnit = 500000
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
 	t.Cleanup(func() {
-		common.QuotaPerUnit = oldQuotaPerUnit
-		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = oldDisplayType
 	})
 
 	testCases := []struct {
@@ -62,8 +63,8 @@ func TestTopUpQuotaValidation(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			operation_setting.GetGeneralSetting().QuotaDisplayType = tc.displayType
-			quota, err := getTopUpQuota(tc.amount)
+			operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = tc.displayType
+			quota, err := getTopUpQuota(testtenant.Context(), tc.amount)
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -75,42 +76,42 @@ func TestTopUpQuotaValidation(t *testing.T) {
 }
 
 func TestValidateTopUpQuotaReturnsMaximumAmount(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
-	common.QuotaPerUnit = 500000
-	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
+	operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
 	t.Cleanup(func() {
-		common.QuotaPerUnit = oldQuotaPerUnit
-		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = oldDisplayType
 	})
 
 	maxAmount := decimal.NewFromInt(common.MaxWalletQuota).
-		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Div(decimal.NewFromFloat(common.TenantState(testtenant.Context()).QuotaPerUnit)).
 		Floor().IntPart()
 
-	_, err := validateTopUpQuota(maxAmount)
+	_, err := validateTopUpQuota(testtenant.Context(), maxAmount)
 	require.NoError(t, err)
-	_, err = validateTopUpQuota(maxAmount + 1)
+	_, err = validateTopUpQuota(testtenant.Context(), maxAmount+1)
 	require.EqualError(t, err, fmt.Sprintf("单笔充值数量不能大于 %d", maxAmount))
 }
 
 func TestRequestAmountRejectsTopUpThatCannotBeSettled(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
-	common.QuotaPerUnit = 500000
-	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
+	operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
 	t.Cleanup(func() {
-		common.QuotaPerUnit = oldQuotaPerUnit
-		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = oldDisplayType
 	})
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	maxAmount := decimal.NewFromInt(common.MaxWalletQuota).
-		Div(decimal.NewFromFloat(common.QuotaPerUnit)).
+		Div(decimal.NewFromFloat(common.TenantState(testtenant.Context()).QuotaPerUnit)).
 		Floor().IntPart()
-	ctx.Request = httptest.NewRequest(
+	ctx.Request = testtenant.NewRequest(
 		http.MethodPost,
 		"/api/user/amount",
 		strings.NewReader(fmt.Sprintf(`{"amount":%d}`, maxAmount+1)),
@@ -124,19 +125,19 @@ func TestRequestAmountRejectsTopUpThatCannotBeSettled(t *testing.T) {
 }
 
 func TestRequestAmountRejectsTopUpThatWouldOverflowWallet(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	oldDisplayType := operation_setting.GetGeneralSetting().QuotaDisplayType
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	oldDisplayType := operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType
 	oldDB := model.DB
-	common.QuotaPerUnit = 500000
-	operation_setting.GetGeneralSetting().QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
+	operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = operation_setting.QuotaDisplayTypeUSD
 
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	require.NoError(t, err)
 	require.NoError(t, db.AutoMigrate(&model.User{}))
 	model.DB = db
 	t.Cleanup(func() {
-		common.QuotaPerUnit = oldQuotaPerUnit
-		operation_setting.GetGeneralSetting().QuotaDisplayType = oldDisplayType
+		common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit
+		operation_setting.GetGeneralSetting(testtenant.Context()).QuotaDisplayType = oldDisplayType
 		model.DB = oldDB
 		sqlDB, dbErr := db.DB()
 		if dbErr == nil {
@@ -153,9 +154,9 @@ func TestRequestAmountRejectsTopUpThatWouldOverflowWallet(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Set("id", 42)
-	ctx.Request = httptest.NewRequest(
+	ctx.Request = testtenant.NewRequest(
 		http.MethodPost,
 		"/api/user/amount",
 		strings.NewReader(`{"amount":1}`),
@@ -182,22 +183,22 @@ func TestValidateCreditedQuotaRejectsOverflow(t *testing.T) {
 }
 
 func TestStripeCreditedQuotaIncludesGroupRatio(t *testing.T) {
-	oldQuotaPerUnit := common.QuotaPerUnit
-	oldTopupGroupRatio := common.TopupGroupRatio2JSONString()
-	common.QuotaPerUnit = 500000
-	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"vip":2}`))
+	oldQuotaPerUnit := common.TenantState(testtenant.Context()).QuotaPerUnit
+	oldTopupGroupRatio := common.TopupGroupRatio2JSONString(testtenant.Context())
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(testtenant.Context(), `{"vip":2}`))
 	t.Cleanup(func() {
-		common.QuotaPerUnit = oldQuotaPerUnit
-		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(oldTopupGroupRatio))
+		common.TenantState(testtenant.Context()).QuotaPerUnit = oldQuotaPerUnit
+		require.NoError(t, common.UpdateTopupGroupRatioByJSONString(testtenant.Context(), oldTopupGroupRatio))
 	})
 
-	_, err := validateCreditedQuota(getStripeCreditedQuota(2147, "vip"))
+	_, err := validateCreditedQuota(getStripeCreditedQuota(testtenant.Context(), 2147, "vip"))
 	require.NoError(t, err)
-	_, err = validateCreditedQuota(getStripeCreditedQuota(2148, "vip"))
+	_, err = validateCreditedQuota(getStripeCreditedQuota(testtenant.Context(), 2148, "vip"))
 	require.NoError(t, err)
-	_, err = validateCreditedQuota(getStripeCreditedQuota(int64(common.MaxWalletQuota), "vip"))
+	_, err = validateCreditedQuota(getStripeCreditedQuota(testtenant.Context(), int64(common.MaxWalletQuota), "vip"))
 	require.Error(t, err)
 
-	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(`{"free":0}`))
-	assert.True(t, decimal.NewFromInt(500000).Equal(getStripeCreditedQuota(1, "free")))
+	require.NoError(t, common.UpdateTopupGroupRatioByJSONString(testtenant.Context(), `{"free":0}`))
+	assert.True(t, decimal.NewFromInt(500000).Equal(getStripeCreditedQuota(testtenant.Context(), 1, "free")))
 }

@@ -1,9 +1,9 @@
 package jsplugin
 
 import (
-	"context"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -25,7 +25,7 @@ export const protocols = { openai_responses: {
 
 func TestReplayFixture(t *testing.T) {
 	t.Parallel()
-	report, err := ReplayFixture(context.Background(), fixturePlugin, []byte(`{
+	report, err := ReplayFixture(testtenant.Context(), fixturePlugin, []byte(`{
   "unixNow": 1700000000,
   "cases": [
     {"name":"deterministic time","hook":"stamp","args":["ok"],"expected":{"value":"ok","now":1700000000}},
@@ -40,7 +40,7 @@ func TestReplayFixture(t *testing.T) {
 
 func TestReplayFixtureReportsMismatch(t *testing.T) {
 	t.Parallel()
-	report, err := ReplayFixture(context.Background(), fixturePlugin, []byte(`{
+	report, err := ReplayFixture(testtenant.Context(), fixturePlugin, []byte(`{
   "cases": [{"name":"wrong output","hook":"stamp","args":["ok"],"expected":{"value":"different"}}]
 }`))
 	require.Error(t, err)

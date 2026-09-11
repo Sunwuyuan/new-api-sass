@@ -1,5 +1,8 @@
 package common
 
+import context "context"
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"fmt"
 	"os"
@@ -39,13 +42,17 @@ func EnsureDiskCacheDir() error {
 // CreateDiskCacheFile 创建磁盘缓存文件
 // cacheType: 缓存类型（body/file）
 // 返回文件路径和文件句柄
-func CreateDiskCacheFile(cacheType DiskCacheType) (string, *os.File, error) {
+func CreateDiskCacheFile(tenantCtx context.Context, cacheType DiskCacheType) (string, *os.File, error) {
 	if err := EnsureDiskCacheDir(); err != nil {
 		return "", nil, fmt.Errorf("failed to create cache directory: %w", err)
 	}
 
 	dir := GetDiskCacheDir()
-	filename := fmt.Sprintf("%s-%s-%d.tmp", cacheType, uuid.New().String()[:8], time.Now().UnixNano())
+	identity, err := tenant.FromContext(tenantCtx)
+	if err != nil {
+		return "", nil, err
+	}
+	filename := fmt.Sprintf("%s-tenant-%d-%s-%d.tmp", cacheType, identity.ID, uuid.New().String()[:8], time.Now().UnixNano())
 	filePath := filepath.Join(dir, filename)
 
 	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_RDWR|os.O_EXCL, 0600)
@@ -58,8 +65,8 @@ func CreateDiskCacheFile(cacheType DiskCacheType) (string, *os.File, error) {
 
 // WriteDiskCacheFile 写入数据到磁盘缓存文件
 // 返回文件路径
-func WriteDiskCacheFile(cacheType DiskCacheType, data []byte) (string, error) {
-	filePath, file, err := CreateDiskCacheFile(cacheType)
+func WriteDiskCacheFile(tenantCtx context.Context, cacheType DiskCacheType, data []byte) (string, error) {
+	filePath, file, err := CreateDiskCacheFile(tenantCtx, cacheType)
 	if err != nil {
 		return "", err
 	}
@@ -80,8 +87,8 @@ func WriteDiskCacheFile(cacheType DiskCacheType, data []byte) (string, error) {
 }
 
 // WriteDiskCacheFileString 写入字符串到磁盘缓存文件
-func WriteDiskCacheFileString(cacheType DiskCacheType, data string) (string, error) {
-	return WriteDiskCacheFile(cacheType, []byte(data))
+func WriteDiskCacheFileString(tenantCtx context.Context, cacheType DiskCacheType, data string) (string, error) {
+	return WriteDiskCacheFile(tenantCtx, cacheType, []byte(data))
 }
 
 // ReadDiskCacheFile 读取磁盘缓存文件

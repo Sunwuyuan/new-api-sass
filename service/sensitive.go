@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"errors"
 	"strings"
@@ -8,7 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/setting"
 )
 
-func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
+func CheckSensitiveMessages(tenantCtx context.Context, messages []dto.Message) ([]string, error) {
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -24,7 +26,7 @@ func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 			if m.Text == "" {
 				continue
 			}
-			if ok, words := SensitiveWordContains(m.Text); ok {
+			if ok, words := SensitiveWordContains(tenantCtx, m.Text); ok {
 				return words, errors.New("sensitive words detected")
 			}
 		}
@@ -32,29 +34,29 @@ func CheckSensitiveMessages(messages []dto.Message) ([]string, error) {
 	return nil, nil
 }
 
-func CheckSensitiveText(text string) (bool, []string) {
-	return SensitiveWordContains(text)
+func CheckSensitiveText(tenantCtx context.Context, text string) (bool, []string) {
+	return SensitiveWordContains(tenantCtx, text)
 }
 
 // SensitiveWordContains 是否包含敏感词，返回是否包含敏感词和敏感词列表
-func SensitiveWordContains(text string) (bool, []string) {
-	if len(setting.SensitiveWords) == 0 {
+func SensitiveWordContains(tenantCtx context.Context, text string) (bool, []string) {
+	if len(setting.TenantState(tenantCtx).SensitiveWords) == 0 {
 		return false, nil
 	}
 	if len(text) == 0 {
 		return false, nil
 	}
 	checkText := strings.ToLower(text)
-	return AcSearch(checkText, setting.SensitiveWords, true)
+	return AcSearch(checkText, setting.TenantState(tenantCtx).SensitiveWords, true)
 }
 
 // SensitiveWordReplace 敏感词替换，返回是否包含敏感词和替换后的文本
-func SensitiveWordReplace(text string, returnImmediately bool) (bool, []string, string) {
-	if len(setting.SensitiveWords) == 0 {
+func SensitiveWordReplace(tenantCtx context.Context, text string, returnImmediately bool) (bool, []string, string) {
+	if len(setting.TenantState(tenantCtx).SensitiveWords) == 0 {
 		return false, nil, text
 	}
 	checkText := strings.ToLower(text)
-	m := getOrBuildAC(setting.SensitiveWords)
+	m := getOrBuildAC(setting.TenantState(tenantCtx).SensitiveWords)
 	hits := m.MultiPatternSearch([]rune(checkText), returnImmediately)
 	if len(hits) > 0 {
 		words := make([]string, 0, len(hits))
