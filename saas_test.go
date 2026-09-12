@@ -134,6 +134,11 @@ func TestSaaSContracts(t *testing.T) {
 	roots := make(map[string]*saasBrowser)
 	activations := make(map[string]string)
 	for _, slug := range []string{"alpha", "beta"} {
+		if slug == "beta" {
+			// Capacity comes from a live Standard entitlement. Return Alpha to
+			// Lite afterwards so the original isolation/limit cases stay intact.
+			require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 3, "months": 1}, nil).Code)
+		}
 		var created struct {
 			Tenant tenant.Workspace
 			URL    string `json:"root_activation_url"`
@@ -169,6 +174,7 @@ func TestSaaSContracts(t *testing.T) {
 			alpha = created.Tenant
 		} else {
 			beta = created.Tenant
+			require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 1, "months": 1}, nil).Code)
 		}
 	}
 	alphaCtx := tenant.WithContext(context.Background(), tenant.Identity{ID: alpha.ID, Slug: alpha.Slug})
@@ -258,23 +264,35 @@ func TestSaaSContracts(t *testing.T) {
 	})
 
 	t.Run("settings footer capabilities and resource caps", func(t *testing.T) {
+		assert.Error(t, model.UpdateOption(alphaCtx, "SystemName", "Only Alpha"))
+		for key, value := range map[string]string{"SystemName": "Lite custom brand", "Logo": "https://example.test/logo.png"} {
+			assert.Equal(t, http.StatusForbidden, roots["alpha"].request(t, http.MethodPut, "/t/alpha/api/option/", map[string]string{"key": key, "value": value}, nil).Code)
+		}
+		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 3, "months": 1}, nil).Code)
 		original := common.TenantState(alphaCtx)
 		require.NoError(t, model.UpdateOption(alphaCtx, "SystemName", "Only Alpha"))
 		assert.Equal(t, "alpha", original.SystemName, "in-flight requests retain an immutable settings snapshot")
 		assert.Equal(t, "Only Alpha", common.TenantState(alphaCtx).SystemName)
 		assert.Equal(t, "beta", common.TenantState(betaCtx).SystemName)
+		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 1, "months": 1}, nil).Code)
 		assert.ErrorIs(t, model.UpdateOption(alphaCtx, "Footer", ""), plan.ErrCapability)
 		assert.Equal(t, http.StatusForbidden, roots["alpha"].request(t, http.MethodPost, "/t/alpha/api/performance/gc", nil, nil).Code)
 		assert.Error(t, model.UpdateOption(alphaCtx, "performance_setting.disk_cache_path", "/unavailable"))
 		assert.Equal(t, http.StatusForbidden, roots["alpha"].request(t, http.MethodPut, "/t/alpha/api/option/", map[string]string{"key": "Footer", "value": ""}, nil).Code)
 		var status struct {
 			Data struct {
-				Locked bool   `json:"platform_footer_locked"`
-				Footer string `json:"platform_footer"`
+				Locked         bool   `json:"platform_footer_locked"`
+				Footer         string `json:"platform_footer"`
+				BrandingLocked bool   `json:"platform_branding_locked"`
+				SystemName     string `json:"system_name"`
+				Logo           string `json:"logo"`
 			}
 		}
 		require.Equal(t, http.StatusOK, roots["alpha"].request(t, http.MethodGet, "/t/alpha/api/status", nil, &status).Code)
 		assert.True(t, status.Data.Locked)
+		assert.True(t, status.Data.BrandingLocked)
+		assert.Equal(t, "New API", status.Data.SystemName, "downgrades hide previously saved custom branding")
+		assert.Empty(t, status.Data.Logo)
 		assert.NotEmpty(t, status.Data.Footer)
 		view, err := plan.Current(alphaCtx, model.DB)
 		require.NoError(t, err)
@@ -409,6 +427,10 @@ func TestSaaSContracts(t *testing.T) {
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/status", alpha.ID), map[string]string{"status": "suspended"}, nil).Code)
 		assert.Equal(t, http.StatusForbidden, roots["alpha"].request(t, http.MethodGet, "/t/alpha/api/status", nil, nil).Code)
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/status", alpha.ID), map[string]string{"status": "active"}, nil).Code)
+	})
+
+	t.Run("phase two platform contracts", func(t *testing.T) {
+		testSaaSPhase2(t, saas, server, admin, adminPassword)
 	})
 
 	t.Run("activation expiry and platform password changes revoke sessions", func(t *testing.T) {

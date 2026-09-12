@@ -19,13 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 export type PlatformUser = {
   id: number
   email: string
-  role: 'admin' | 'user'
+  role: 'admin' | 'root' | 'user'
+  status: 'active' | 'disabled'
+  must_change_password: boolean
   tenant_count: number
 }
 
 export type PlatformSession = {
   user: PlatformUser
   csrf_token: string
+  authenticated_at: string
 }
 
 export type HostingPlan = {
@@ -33,7 +36,11 @@ export type HostingPlan = {
   name: string
   price: string
   limits: { requests: number; users: number; tokens: number; channels: number }
-  capabilities: { remove_platform_footer: boolean }
+  capabilities: {
+    remove_platform_footer: boolean
+    custom_branding: boolean
+    max_workspaces: number
+  }
 }
 
 export type Workspace = {
@@ -49,4 +56,78 @@ export type Workspace = {
 export type WorkspaceUsage = {
   tenant: Workspace
   usage: { month: string; requests: number }
+  owner_email: string
 }
+
+export type PageParams = {
+  page: number
+  page_size: number
+  search?: string
+  status?: string
+  role?: string
+}
+
+export type PageResult = {
+  pagination: { page: number; page_size: number; total: number }
+}
+
+export type WorkspacePage = PageResult & {
+  tenants: WorkspaceUsage[]
+  max_workspaces: number
+  workspace_count: number
+}
+
+export type PlatformRedemption = {
+  id: number
+  code_hint: string
+  plan_id: number
+  duration_months: number
+  status: 'active' | 'disabled'
+  max_uses: number
+  used: number
+  expires_at: string | null
+  created_by: number
+  created_at: string
+}
+
+export type RedemptionBatch = {
+  plan_id: number
+  duration_months: number
+  count: number
+  max_uses: number
+  expires_at: string | null
+}
+
+export type RedemptionUse = {
+  id: number
+  redemption_id: number
+  tenant_id: number
+  platform_user_id: number
+  assignment_id: number
+  created_at: string
+}
+
+export type PlatformAudit = {
+  id: number
+  actor_id: number
+  action: string
+  target_id: number
+  details: string
+  created_at: string
+}
+
+export type PlanAssignment = {
+  id: number
+  tenant_id: number
+  plan_id: number
+  source: 'manual' | 'redeem'
+  expires_at: string
+}
+
+export type UserAction =
+  | 'enable'
+  | 'disable'
+  | 'promote'
+  | 'demote'
+  | 'require_password_change'
+  | 'revoke_sessions'

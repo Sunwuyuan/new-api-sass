@@ -45,7 +45,7 @@ import { Input } from '@/components/ui/input'
 import { platformLogin, platformRegister } from './api'
 import { platformPasswordSchema } from './lib/schema'
 
-export function PlatformAuthForm() {
+export function PlatformAuthForm(props: { onSignedIn?: () => void }) {
   const { t } = useTranslation()
   const [register, setRegister] = useState(false)
   const [registered, setRegistered] = useState(false)
@@ -71,8 +71,14 @@ export function PlatformAuthForm() {
         return
       }
       const session = await platformLogin(values)
+      await queryClient.cancelQueries({ queryKey: ['platform'] })
+      queryClient.removeQueries({
+        queryKey: ['platform'],
+        predicate: (query) => query.queryKey[1] !== 'session',
+      })
       queryClient.setQueryData(['platform', 'session'], session)
       form.reset()
+      props.onSignedIn?.()
     },
   })
   return (

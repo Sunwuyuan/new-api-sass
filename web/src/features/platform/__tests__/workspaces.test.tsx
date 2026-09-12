@@ -23,6 +23,7 @@ import type { ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 
 import ActivateWorkspace from '../activate-workspace'
+import { AssignPlanDialog } from '../admin/assign-plan-dialog'
 import {
   createWorkspace,
   assignHostingPlan,
@@ -65,6 +66,7 @@ const workspace: WorkspaceUsage = {
     plan_expires_at: null,
   },
   usage: { month: '2026-09', requests: 1000 },
+  owner_email: 'owner@example.test',
 }
 const plans: HostingPlan[] = [
   {
@@ -72,14 +74,22 @@ const plans: HostingPlan[] = [
     name: 'Lite',
     price: 'Free',
     limits: { requests: 1000, users: 5, tokens: 20, channels: 3 },
-    capabilities: { remove_platform_footer: false },
+    capabilities: {
+      remove_platform_footer: false,
+      custom_branding: false,
+      max_workspaces: 1,
+    },
   },
   {
     id: 2,
     name: 'Pro',
     price: 'Contact administrator',
     limits: { requests: 100000, users: 1000, tokens: 10000, channels: 100 },
-    capabilities: { remove_platform_footer: true },
+    capabilities: {
+      remove_platform_footer: true,
+      custom_branding: true,
+      max_workspaces: 10,
+    },
   },
 ]
 
@@ -112,9 +122,7 @@ test('workspace creation rejects invalid slugs and shows the one-time activation
 })
 
 test('owners see usage while plan administration is reserved for administrators', () => {
-  renderWorkspaces(
-    <WorkspaceCard item={workspace} plans={plans} admin={false} />
-  )
+  renderWorkspaces(<WorkspaceCard item={workspace} plans={plans} />)
   expect(screen.getByText(/Monthly requests/)).toHaveTextContent(
     '1,000 / 1,000'
   )
@@ -132,7 +140,13 @@ test('an administrator can manually select Pro and a failed activation remains r
   vi.mocked(assignHostingPlan).mockRejectedValue(
     new Error('Please sign in again.')
   )
-  renderWorkspaces(<WorkspaceCard item={workspace} plans={plans} admin />)
+  renderWorkspaces(
+    <AssignPlanDialog
+      workspace={workspace.tenant}
+      plans={plans}
+      onClose={() => undefined}
+    />
+  )
   await user.selectOptions(screen.getByLabelText('Hosting plan'), '2')
   await user.click(
     screen.getByRole('button', { name: 'Activate plan manually' })
@@ -158,7 +172,6 @@ test('expired workspaces show their state and disable entry', () => {
         },
       }}
       plans={plans}
-      admin={false}
     />
   )
   expect(screen.getByText(/Expired/)).toBeVisible()

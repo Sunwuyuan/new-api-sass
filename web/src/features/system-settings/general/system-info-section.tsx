@@ -77,6 +77,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   const updateOption = useUpdateOption()
   const { status } = useStatus()
   const platformFooterLocked = status?.platform_footer_locked !== false
+  const platformBrandingLocked = status?.platform_branding_locked !== false
 
   const normalizedDefaults: SystemInfoFormValues = {
     SystemName: normalizeValue(defaultValues.SystemName),
@@ -124,6 +125,12 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       onSubmit: async (_data, changedFields) => {
         for (const [key, value] of Object.entries(changedFields)) {
           if (key === 'Footer' && platformFooterLocked) continue
+          if (
+            (key === 'SystemName' || key === 'Logo') &&
+            platformBrandingLocked
+          ) {
+            continue
+          }
           let v = normalizeValue(value)
           if (key === 'ServerAddress' || key === 'TaskPublicAddress') {
             v = v.replace(/\/+$/, '')
@@ -158,10 +165,18 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                   <FormItem>
                     <FormLabel>{t('System Name')}</FormLabel>
                     <FormControl>
-                      <Input placeholder={t('New API')} {...field} />
+                      <Input
+                        placeholder={t('New API')}
+                        {...field}
+                        disabled={platformBrandingLocked}
+                      />
                     </FormControl>
                     <FormDescription>
-                      {t('The name displayed across the application')}
+                      {platformBrandingLocked
+                        ? t(
+                            'Custom branding requires an eligible hosting plan.'
+                          )
+                        : t('The name displayed across the application')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -219,6 +234,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                       <Input
                         placeholder={t('https://example.com/logo.png')}
                         {...field}
+                        disabled={platformBrandingLocked}
                       />
                     </FormControl>
                     <FormDescription>

@@ -26,6 +26,8 @@ type Limits struct {
 
 type Capabilities struct {
 	RemovePlatformFooter bool `json:"remove_platform_footer"`
+	CustomBranding       bool `json:"custom_branding"`
+	MaxWorkspaces        int  `json:"max_workspaces"`
 }
 
 type Plan struct {
@@ -55,6 +57,9 @@ func (p Plan) View() (View, error) {
 	if v.Limits.Requests <= 0 || v.Limits.Users <= 0 || v.Limits.Tokens <= 0 || v.Limits.Channels <= 0 {
 		return v, errors.New("hosting plan contains invalid limits")
 	}
+	if v.Capabilities.MaxWorkspaces < 1 || v.Capabilities.MaxWorkspaces > 1000 {
+		return v, errors.New("hosting plan contains invalid workspace capacity")
+	}
 	return v, nil
 }
 
@@ -71,6 +76,9 @@ type Assignment struct {
 	TenantID        int64     `json:"tenant_id" gorm:"not null;index"`
 	PlanID          int64     `json:"plan_id" gorm:"not null"`
 	AdministratorID int64     `json:"administrator_id" gorm:"not null"`
+	PlatformUserID  int64     `json:"platform_user_id" gorm:"not null;default:0"`
+	Source          string    `json:"source" gorm:"size:16;not null;default:manual"`
+	RedemptionID    *int64    `json:"redemption_id" gorm:"index"`
 	ExpiresAt       time.Time `json:"expires_at"`
 	CreatedAt       time.Time `json:"created_at"`
 }
@@ -81,9 +89,27 @@ func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(&Plan{}, &tenant.Workspace{}, &Usage{}, &Assignment{}); err != nil {
 		return err
 	}
+	if common.UsingMainDatabase(common.DatabaseTypePostgreSQL) {
+		var existing, standard int64
+		if err := db.Model(&Plan{}).Count(&existing).Error; err != nil {
+			return err
+		}
+		if err := db.Model(&Plan{}).Where("name = ?", "Standard").Count(&standard).Error; err != nil {
+			return err
+		}
+		if existing > 0 && standard == 0 {
+			// Phase 1 seeded explicit IDs, which do not advance a PostgreSQL
+			// sequence. Advance it before GORM allocates the new Standard ID.
+			// SQLite/MySQL already advance their allocator for explicit IDs.
+			if err := db.Exec("SELECT setval(pg_get_serial_sequence('plans', 'id'), GREATEST((SELECT MAX(id) FROM plans), nextval(pg_get_serial_sequence('plans', 'id'))))").Error; err != nil {
+				return err
+			}
+		}
+	}
 	for _, entry := range []View{
-		{ID: 1, Name: "Lite", Price: "Free", Limits: Limits{Requests: 1000, Users: 5, Tokens: 20, Channels: 3}},
-		{ID: 2, Name: "Pro", Price: "Contact administrator", Limits: Limits{Requests: 100000, Users: 1000, Tokens: 10000, Channels: 100}, Capabilities: Capabilities{RemovePlatformFooter: true}},
+		{Name: "Lite", Price: "Free", Limits: Limits{Requests: 1000, Users: 5, Tokens: 20, Channels: 3}, Capabilities: Capabilities{MaxWorkspaces: 1}},
+		{Name: "Pro", Price: "Contact administrator", Limits: Limits{Requests: 100000, Users: 1000, Tokens: 10000, Channels: 100}, Capabilities: Capabilities{RemovePlatformFooter: true, CustomBranding: true, MaxWorkspaces: 10}},
+		{Name: "Standard", Price: "Contact administrator", Limits: Limits{Requests: 20000, Users: 50, Tokens: 200, Channels: 20}, Capabilities: Capabilities{CustomBranding: true, MaxWorkspaces: 3}},
 	} {
 		limits, err := common.Marshal(entry.Limits)
 		if err != nil {
@@ -93,12 +119,41 @@ func Migrate(db *gorm.DB) error {
 		if err != nil {
 			return err
 		}
-		p := Plan{ID: entry.ID, Name: entry.Name, Price: entry.Price, Limits: string(limits), Capabilities: string(capabilities)}
+		p := Plan{Name: entry.Name, Price: entry.Price, Limits: string(limits), Capabilities: string(capabilities)}
 		if err := db.Where("name = ?", p.Name).FirstOrCreate(&p).Error; err != nil {
 			return err
 		}
+		// Backfill only absent capabilities. Existing Pro IDs, prices, limits,
+		// and explicit administrator capability overrides survive upgrades.
+		var stored, defaults map[string]any
+		if err := common.UnmarshalJsonStr(p.Capabilities, &stored); err != nil {
+			return err
+		}
+		if stored == nil {
+			return errors.New("hosting plan capabilities must be an object")
+		}
+		if err := common.Unmarshal(capabilities, &defaults); err != nil {
+			return err
+		}
+		changed := false
+		for key, value := range defaults {
+			if _, exists := stored[key]; !exists {
+				stored[key] = value
+				changed = true
+			}
+		}
+		if changed {
+			encoded, err := common.Marshal(stored)
+			if err != nil {
+				return err
+			}
+			if err := db.Model(&p).Update("capabilities", string(encoded)).Error; err != nil {
+				return err
+			}
+		}
 	}
-	return nil
+	return db.Model(&Assignment{}).Where("platform_user_id = ?", 0).
+		UpdateColumn("platform_user_id", gorm.Expr("administrator_id")).Error
 }
 
 func ForWorkspace(db *gorm.DB, workspace tenant.Workspace, now time.Time) (View, error) {

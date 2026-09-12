@@ -18,18 +18,22 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
 type User struct {
-	ID           int64     `json:"id" gorm:"primaryKey"`
-	Email        string    `json:"email" gorm:"size:254;not null;uniqueIndex"`
-	PasswordHash string    `json:"-" gorm:"type:text;not null"`
-	Role         string    `json:"role" gorm:"size:16;not null"`
-	TenantCount  int       `json:"tenant_count" gorm:"not null"`
-	CreatedAt    time.Time `json:"created_at"`
+	ID                 int64     `json:"id" gorm:"primaryKey"`
+	Email              string    `json:"email" gorm:"size:254;not null;uniqueIndex"`
+	PasswordHash       string    `json:"-" gorm:"type:text;not null"`
+	Role               string    `json:"role" gorm:"size:16;not null"`
+	Status             string    `json:"status" gorm:"size:16;not null;default:active"`
+	MustChangePassword bool      `json:"must_change_password"`
+	SessionVersion     int64     `json:"-" gorm:"not null;default:1"`
+	TenantCount        int       `json:"tenant_count" gorm:"not null"`
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (User) TableName() string { return "platform_users" }
@@ -41,6 +45,7 @@ type Session struct {
 	LastSeen          time.Time `gorm:"not null"`
 	ExpiresAt         time.Time `gorm:"not null;index"`
 	CredentialVersion string    `gorm:"size:64;not null;default:''"`
+	UserVersion       int64     `gorm:"not null;default:1"`
 }
 
 func (Session) TableName() string { return "platform_sessions" }
@@ -104,14 +109,34 @@ func (s *Server) BrowserSecurity(c *gin.Context) {
 		return
 	}
 	if c.GetHeader("X-Requested-With") != "NewAPIPlatform" {
+		logCSRFReject(c, "xrw", s.Origin)
 		writeError(c, http.StatusForbidden, "csrf_invalid")
 		return
 	}
-	if origins := c.Request.Header.Values("Origin"); len(origins) > 1 || len(origins) == 1 && origins[0] != s.Origin {
+	origins := c.Request.Header.Values("Origin")
+	if len(origins) > 1 {
+		writeError(c, http.StatusForbidden, "csrf_invalid")
+		return
+	}
+	// Compare with configured public origin even behind a proxy. Host and
+	// forwarded headers cannot authorize a different origin. Same-origin
+	// browsers omitting Origin must provide a matching Referer instead.
+	source := c.GetHeader("Origin")
+	if len(origins) == 0 {
+		ref, err := url.Parse(c.GetHeader("Referer"))
+		if err == nil && ref.User == nil && ref.Host != "" {
+			source = ref.Scheme + "://" + ref.Host
+		}
+	}
+	normalized, err := common.NormalizeOrigin(source)
+	originOK := err == nil && normalized == s.Origin
+	if !originOK {
+		logCSRFReject(c, "origin", s.Origin)
 		writeError(c, http.StatusForbidden, "csrf_invalid")
 		return
 	}
 	if c.GetHeader("Sec-Fetch-Site") == "cross-site" {
+		logCSRFReject(c, "sec-fetch", s.Origin)
 		writeError(c, http.StatusForbidden, "csrf_invalid")
 		return
 	}
@@ -138,7 +163,7 @@ func (s *Server) authenticate(c *gin.Context) {
 		writeError(c, http.StatusUnauthorized, "platform_login_required")
 		return
 	}
-	if subtle.ConstantTimeCompare([]byte(session.CredentialVersion), []byte(digest(user.PasswordHash))) != 1 {
+	if user.Status != "active" || session.UserVersion != user.SessionVersion || subtle.ConstantTimeCompare([]byte(session.CredentialVersion), []byte(digest(user.PasswordHash))) != 1 {
 		writeError(c, http.StatusUnauthorized, "platform_login_required")
 		return
 	}
@@ -155,12 +180,16 @@ func (s *Server) authenticate(c *gin.Context) {
 	c.Set("platform_user", user)
 	c.Set("platform_session", session)
 	c.Set("platform_csrf", csrfToken(raw))
+	if user.MustChangePassword && c.FullPath() != "/platform/api/session" && c.FullPath() != "/platform/api/password" && c.FullPath() != "/platform/api/logout" {
+		writeError(c, http.StatusForbidden, "password_change_required")
+		return
+	}
 	c.Next()
 }
 
 func requireAdmin(c *gin.Context) {
 	user := c.MustGet("platform_user").(User)
-	if user.Role != "admin" {
+	if !isAdmin(user) {
 		writeError(c, http.StatusForbidden, "platform_admin_required")
 		return
 	}
@@ -236,32 +265,64 @@ func (s *Server) login(c *gin.Context) {
 		hash = user.PasswordHash
 	}
 	valid := common.ValidatePasswordAndHash(input.Password, hash)
-	if err != nil || !valid {
+	if err != nil || !valid || user.Status != "active" {
 		common.SysLog("platform authentication failed: account_ref=" + digest(input.Email))
 		writeError(c, http.StatusUnauthorized, "invalid_credentials")
 		return
 	}
+	s.issueSession(c, user, "auth.login")
+}
+
+func (s *Server) reauthenticate(c *gin.Context) {
+	var input struct {
+		Password string `json:"password"`
+	}
+	user := c.MustGet("platform_user").(User)
+	if !s.authRateLimit(c, user.Email) {
+		return
+	}
+	if c.ShouldBindJSON(&input) != nil || len(input.Password) > 512 || !common.ValidatePasswordAndHash(input.Password, user.PasswordHash) {
+		common.SysLog(fmt.Sprintf("platform reauthentication failed: user_id=%d", user.ID))
+		writeError(c, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+	s.issueSession(c, user, "auth.reauthenticate")
+}
+
+func (s *Server) issueSession(c *gin.Context, user User, action string) {
 	raw, err := randomSecret()
 	if err != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
 	}
 	now := time.Now().UTC()
-	session := Session{TokenHash: digest(raw), UserID: user.ID, CreatedAt: now, LastSeen: now, ExpiresAt: now.Add(8 * time.Hour), CredentialVersion: digest(user.PasswordHash)}
+	session := Session{TokenHash: digest(raw), UserID: user.ID, CreatedAt: now, LastSeen: now, ExpiresAt: now.Add(8 * time.Hour), CredentialVersion: digest(user.PasswordHash), UserVersion: user.SessionVersion}
 	err = s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		current, err := activeUser(tx, user)
+		if err != nil {
+			return err
+		}
+		user = current
 		if previous, _ := c.Cookie(sessionCookie); len(previous) == 64 {
-			if err := tx.Where("token_hash = ?", digest(previous)).Delete(&Session{}).Error; err != nil {
-				return err
+			result := tx.Where("token_hash = ?", digest(previous)).Delete(&Session{})
+			if result.Error != nil {
+				return result.Error
+			}
+			if action == "auth.reauthenticate" && result.RowsAffected != 1 {
+				return &tenant.HTTPError{Status: http.StatusUnauthorized, Code: "platform_login_required"}
 			}
 		}
-		return tx.Create(&session).Error
+		if err := tx.Create(&session).Error; err != nil {
+			return err
+		}
+		return audit(tx, user.ID, action, user.ID, nil)
 	})
 	if err != nil {
-		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		transactionError(c, err)
 		return
 	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookie, Value: raw, Path: "/platform/api", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteStrictMode, MaxAge: 8 * 3600, Expires: session.ExpiresAt})
-	c.JSON(http.StatusOK, gin.H{"success": true, "user": user, "csrf_token": csrfToken(raw)})
+	c.JSON(http.StatusOK, gin.H{"success": true, "user": user, "csrf_token": csrfToken(raw), "authenticated_at": session.CreatedAt})
 }
 
 func (s *Server) logout(c *gin.Context) {
@@ -302,14 +363,21 @@ func (s *Server) changePassword(c *gin.Context) {
 		return
 	}
 	err = s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&User{}).Where("id = ? AND password_hash = ?", user.ID, user.PasswordHash).Update("password_hash", hash)
+		if _, err := activeUser(tx, user); err != nil {
+			return err
+		}
+		result := tx.Model(&User{}).Where("id = ? AND password_hash = ?", user.ID, user.PasswordHash).
+			Updates(map[string]any{"password_hash": hash, "must_change_password": false, "session_version": gorm.Expr("session_version + 1")})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
 		}
-		return tx.Where("user_id = ?", user.ID).Delete(&Session{}).Error
+		if err := tx.Where("user_id = ?", user.ID).Delete(&Session{}).Error; err != nil {
+			return err
+		}
+		return audit(tx, user.ID, "auth.password_changed", user.ID, nil)
 	})
 	if err != nil {
 		writeError(c, http.StatusConflict, "platform_unavailable")
@@ -321,17 +389,20 @@ func (s *Server) changePassword(c *gin.Context) {
 }
 
 func (s *Server) bootstrapAdmin() error {
+	var count int64
+	if err := s.DB.Model(&User{}).Where("role IN ? AND status = ?", []string{"admin", "root"}, "active").Count(&count).Error; err != nil {
+		return err
+	}
+	// These credentials only provision the first administrator. Subsequent
+	// role changes belong to platform governance, including demoting the
+	// original account after appointing a replacement administrator.
+	if count > 0 {
+		return nil
+	}
 	email := os.Getenv("PLATFORM_ADMIN_EMAIL")
 	password := os.Getenv("PLATFORM_ADMIN_PASSWORD")
 	if email == "" && password == "" {
-		var count int64
-		if err := s.DB.Model(&User{}).Where("role = ?", "admin").Count(&count).Error; err != nil {
-			return err
-		}
-		if count == 0 {
-			return errors.New("set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to create the first platform administrator")
-		}
-		return nil
+		return errors.New("set PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to create the first platform administrator")
 	}
 	input := credentials{Email: email, Password: password}
 	if err := validateCredentials(&input, true); err != nil {
@@ -340,7 +411,7 @@ func (s *Server) bootstrapAdmin() error {
 	var existing User
 	err := s.DB.Where("email = ?", input.Email).First(&existing).Error
 	if err == nil {
-		if existing.Role != "admin" {
+		if !isAdmin(existing) || existing.Status != "active" {
 			return errors.New("bootstrap email already belongs to a non-administrator")
 		}
 		return nil
@@ -353,6 +424,9 @@ func (s *Server) bootstrapAdmin() error {
 		return err
 	}
 	return s.DB.Create(&User{Email: input.Email, PasswordHash: hash, Role: "admin"}).Error
+}
+func logCSRFReject(c *gin.Context, reason, wantOrigin string) {
+	common.SysLog(fmt.Sprintf("platform csrf rejected: reason=%s method=%s route=%q configured_origin=%s", reason, c.Request.Method, c.FullPath(), wantOrigin))
 }
 
 func configuredOrigin() (string, bool, error) {

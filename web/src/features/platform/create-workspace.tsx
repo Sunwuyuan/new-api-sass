@@ -43,7 +43,7 @@ import { Input } from '@/components/ui/input'
 
 import { createWorkspace } from './api'
 
-export function CreateWorkspace() {
+export function CreateWorkspace(props: { disabled?: boolean }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [activationURL, setActivationURL] = useState('')
@@ -77,11 +77,18 @@ export function CreateWorkspace() {
         <CardTitle>{t('Create workspace')}</CardTitle>
         <CardDescription>
           {t(
-            'New workspaces start on Lite. Contact a platform administrator to activate a monthly plan.'
+            'New workspaces start on Lite. Redeem a code or contact an administrator to activate a hosting plan.'
           )}
         </CardDescription>
       </CardHeader>
       <CardContent>
+        {props.disabled && (
+          <p className='text-muted-foreground mb-4'>
+            {t(
+              'Your workspace limit has been reached. Upgrade an active workspace to increase your capacity.'
+            )}
+          </p>
+        )}
         <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
           <FieldGroup className='md:grid md:grid-cols-2'>
             <Field data-invalid={!!form.formState.errors.name}>
@@ -90,6 +97,7 @@ export function CreateWorkspace() {
                 id='workspace-name'
                 {...form.register('name')}
                 aria-invalid={!!form.formState.errors.name}
+                disabled={props.disabled || mutation.isPending}
               />
               <FieldError>{form.formState.errors.name?.message}</FieldError>
             </Field>
@@ -101,12 +109,16 @@ export function CreateWorkspace() {
                 id='workspace-slug'
                 {...form.register('slug')}
                 aria-invalid={!!form.formState.errors.slug}
+                disabled={props.disabled || mutation.isPending}
                 placeholder='my-workspace'
               />
               <FieldError>{form.formState.errors.slug?.message}</FieldError>
             </Field>
             {mutation.isError && <p role='alert'>{mutation.error.message}</p>}
-            <Button type='submit' disabled={mutation.isPending}>
+            <Button
+              type='submit'
+              disabled={props.disabled || mutation.isPending}
+            >
               {mutation.isPending && <LoadingState inline size='sm' />}
               {t('Create workspace')}
             </Button>

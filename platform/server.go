@@ -3,7 +3,6 @@ package platform
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Server struct {
@@ -42,7 +42,10 @@ func New(db *gorm.DB) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &RootActivation{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}); err != nil {
+		return nil, err
+	}
+	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&AdminGuard{ID: 1}).Error; err != nil {
 		return nil, err
 	}
 	if err := plan.Migrate(db); err != nil {
@@ -70,17 +73,27 @@ func (s *Server) Routes(router *gin.Engine) {
 	api.GET("/plans", s.plans)
 	auth := api.Group("", s.authenticate)
 	auth.GET("/session", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{"success": true, "user": c.MustGet("platform_user"), "csrf_token": c.MustGet("platform_csrf")})
+		c.JSON(http.StatusOK, gin.H{"success": true, "user": c.MustGet("platform_user"), "csrf_token": c.MustGet("platform_csrf"), "authenticated_at": c.MustGet("platform_session").(Session).CreatedAt})
 	})
 	auth.POST("/logout", s.logout)
 	auth.POST("/password", s.changePassword)
+	auth.POST("/reauthenticate", s.reauthenticate)
 	auth.GET("/tenants", s.tenants)
 	auth.POST("/tenants", s.createTenant)
+	auth.POST("/redeem", s.redeem)
 	admin := auth.Group("/admin", requireAdmin)
 	admin.GET("/users", s.users)
+	admin.POST("/users/:id", s.updateUser)
 	admin.GET("/tenants", s.tenants)
 	admin.POST("/tenants/:id/plan", s.assignPlan)
 	admin.POST("/tenants/:id/status", s.setTenantStatus)
+	admin.GET("/plans", s.plans)
+	admin.POST("/plans/:id", s.updatePlan)
+	admin.GET("/redemptions", s.redemptions)
+	admin.POST("/redemptions", s.createRedemptions)
+	admin.POST("/redemptions/:id/disable", s.disableRedemption)
+	admin.GET("/redemptions/:id/uses", s.redemptionUses)
+	admin.GET("/audits", s.audits)
 }
 
 func (s *Server) plans(c *gin.Context) {
@@ -101,37 +114,78 @@ func (s *Server) plans(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true, "plans": views})
 }
 
-func (s *Server) users(c *gin.Context) {
-	var users []User
-	if s.DB.WithContext(c.Request.Context()).Order("id desc").Limit(200).Find(&users).Error != nil {
-		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
-		return
-	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "users": users})
-}
-
 func (s *Server) tenants(c *gin.Context) {
 	user := c.MustGet("platform_user").(User)
-	query := s.DB.WithContext(c.Request.Context())
+	page, ok := pageQuery(c)
+	if !ok {
+		return
+	}
+	query := s.DB.WithContext(c.Request.Context()).Model(&tenant.Workspace{})
 	if !strings.Contains(c.FullPath(), "/admin/") {
 		query = query.Where("owner_platform_user_id = ?", user.ID)
 	}
+	if search := strings.TrimSpace(c.Query("search")); search != "" {
+		query = query.Where("name LIKE ? OR slug LIKE ?", "%"+search+"%", "%"+search+"%")
+	}
+	now := time.Now().UTC()
+	switch c.Query("status") {
+	case "":
+	case "active":
+		query = query.Where("status = ? AND (plan_expires_at IS NULL OR plan_expires_at > ?)", "active", now)
+	case "suspended":
+		query = query.Where("status = ?", "suspended")
+	case "expired":
+		query = query.Where("status = ? AND plan_expires_at <= ?", "active", now)
+	default:
+		writeError(c, http.StatusBadRequest, "invalid_workspace_status")
+		return
+	}
 	var tenants []tenant.Workspace
-	if query.Order("id desc").Limit(200).Find(&tenants).Error != nil {
+	if query.Count(&page.Total).Error != nil || query.Order("id desc").Offset((page.Page-1)*page.PageSize).Limit(page.PageSize).Find(&tenants).Error != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
 	}
-	month := time.Now().UTC().Format("2006-01")
+	month := now.Format("2006-01")
+	tenantIDs := make([]int64, 0, len(tenants))
+	ownerIDs := make([]int64, 0, len(tenants))
+	for _, workspace := range tenants {
+		tenantIDs = append(tenantIDs, workspace.ID)
+		ownerIDs = append(ownerIDs, workspace.OwnerPlatformUserID)
+	}
+	var usages []plan.Usage
+	var owners []User
+	db := s.DB.WithContext(c.Request.Context())
+	if len(tenants) > 0 && (db.Where("tenant_id IN ? AND month = ?", tenantIDs, month).Find(&usages).Error != nil || db.Where("id IN ?", ownerIDs).Find(&owners).Error != nil) {
+		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		return
+	}
+	usageByID := make(map[int64]plan.Usage, len(usages))
+	ownerByID := make(map[int64]string, len(owners))
+	for _, usage := range usages {
+		usageByID[usage.TenantID] = usage
+	}
+	for _, owner := range owners {
+		ownerByID[owner.ID] = owner.Email
+	}
 	views := make([]gin.H, 0, len(tenants))
 	for _, workspace := range tenants {
-		usage := plan.Usage{TenantID: workspace.ID, Month: month}
-		if err := s.DB.WithContext(c.Request.Context()).Where("tenant_id = ? AND month = ?", workspace.ID, month).First(&usage).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		usage, ok := usageByID[workspace.ID]
+		if !ok {
+			usage = plan.Usage{TenantID: workspace.ID, Month: month}
+		}
+		views = append(views, gin.H{"tenant": workspace, "usage": usage, "owner_email": ownerByID[workspace.OwnerPlatformUserID]})
+	}
+	response := gin.H{"success": true, "tenants": views, "pagination": page}
+	if !strings.Contains(c.FullPath(), "/admin/") {
+		capacity, err := workspaceCapacity(db, user.ID, now)
+		if err != nil {
+			transactionError(c, err)
 			return
 		}
-		views = append(views, gin.H{"tenant": workspace, "usage": usage})
+		response["max_workspaces"] = capacity
+		response["workspace_count"] = user.TenantCount
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "tenants": views})
+	c.JSON(http.StatusOK, response)
 }
 
 var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
@@ -146,7 +200,7 @@ func (s *Server) createTenant(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("platform_user").(User)
-	workspace := tenant.Workspace{Slug: input.Slug, Name: strings.TrimSpace(input.Name), OwnerPlatformUserID: user.ID, PlanID: 1, Status: "active"}
+	workspace := tenant.Workspace{Slug: input.Slug, Name: strings.TrimSpace(input.Name), OwnerPlatformUserID: user.ID, Status: "active"}
 	activationSecret, err := randomSecret()
 	if err != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
@@ -163,7 +217,19 @@ func (s *Server) createTenant(c *gin.Context) {
 		return
 	}
 	err = s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&User{}).Where("id = ? AND tenant_count < ?", user.ID, 10).UpdateColumn("tenant_count", gorm.Expr("tenant_count + 1"))
+		if _, err := activeUser(tx, user); err != nil {
+			return err
+		}
+		capacity, err := workspaceCapacity(tx, user.ID, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		var lite plan.Plan
+		if err := tx.Where("name = ?", "Lite").First(&lite).Error; err != nil {
+			return err
+		}
+		workspace.PlanID = lite.ID
+		result := tx.Model(&User{}).Where("id = ? AND tenant_count < ?", user.ID, capacity).UpdateColumn("tenant_count", gorm.Expr("tenant_count + 1"))
 		if result.Error != nil {
 			return result.Error
 		}
@@ -186,7 +252,10 @@ func (s *Server) createTenant(c *gin.Context) {
 				return err
 			}
 		}
-		return tx.Create(&RootActivation{TenantID: workspace.ID, UserID: root.Id, TokenHash: digest(activationSecret), ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}).Error
+		if err := tx.Create(&RootActivation{TenantID: workspace.ID, UserID: root.Id, TokenHash: digest(activationSecret), ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}).Error; err != nil {
+			return err
+		}
+		return audit(tx, user.ID, "workspace.create", workspace.ID, gin.H{"slug": workspace.Slug})
 	})
 	if err != nil {
 		writeError(c, http.StatusConflict, "workspace_unavailable_or_limit_reached")
@@ -246,30 +315,17 @@ func (s *Server) assignPlan(c *gin.Context) {
 		return
 	}
 	user := c.MustGet("platform_user").(User)
-	expiresAt := time.Now().UTC().AddDate(0, input.Months, 0)
-	err = s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
-		var p plan.Plan
-		if err := tx.First(&p, input.PlanID).Error; err != nil {
-			return err
-		}
-		if _, err := p.View(); err != nil {
-			return err
-		}
-		result := tx.Model(&tenant.Workspace{}).Where("id = ?", id).Updates(map[string]any{"plan_id": p.ID, "plan_expires_at": expiresAt})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return gorm.ErrRecordNotFound
-		}
-		return tx.Create(&plan.Assignment{TenantID: id, PlanID: p.ID, AdministratorID: user.ID, ExpiresAt: expiresAt}).Error
+	var assignment plan.Assignment
+	err = s.adminTransaction(c, func(tx *gorm.DB) error {
+		var err error
+		assignment, err = assignWorkspacePlan(tx, id, input.PlanID, input.Months, user, "manual", nil)
+		return err
 	})
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "invalid_plan_assignment")
+		transactionError(c, err)
 		return
 	}
-	common.SysLog(fmt.Sprintf("platform plan assigned: administrator_id=%d tenant_id=%d plan_id=%d", user.ID, id, input.PlanID))
-	c.JSON(http.StatusOK, gin.H{"success": true})
+	c.JSON(http.StatusOK, gin.H{"success": true, "assignment": assignment})
 }
 
 func (s *Server) setTenantStatus(c *gin.Context) {
@@ -281,10 +337,46 @@ func (s *Server) setTenantStatus(c *gin.Context) {
 		writeError(c, http.StatusBadRequest, "invalid_workspace_status")
 		return
 	}
-	result := s.DB.WithContext(c.Request.Context()).Model(&tenant.Workspace{}).Where("id = ?", id).Update("status", input.Status)
-	if result.Error != nil || result.RowsAffected != 1 {
-		writeError(c, http.StatusNotFound, "workspace_not_found")
+	err = s.adminTransaction(c, func(tx *gorm.DB) error {
+		var workspace tenant.Workspace
+		if err := tx.First(&workspace, id).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&workspace).Update("status", input.Status).Error; err != nil {
+			return err
+		}
+		return audit(tx, c.MustGet("platform_user").(User).ID, "workspace."+input.Status, id, nil)
+	})
+	if err != nil {
+		transactionError(c, err)
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+// An owner's capacity is the largest entitlement among their active, unexpired
+// workspaces, with Lite as the baseline. Downgrades preserve existing spaces but
+// prevent new creation until the owner is below the effective limit.
+func workspaceCapacity(db *gorm.DB, userID int64, now time.Time) (int, error) {
+	var workspaces []tenant.Workspace
+	if err := db.Where("owner_platform_user_id = ? AND status = ? AND (plan_expires_at IS NULL OR plan_expires_at > ?)", userID, "active", now).Find(&workspaces).Error; err != nil {
+		return 0, err
+	}
+	ids := make([]int64, 0, len(workspaces))
+	for _, workspace := range workspaces {
+		ids = append(ids, workspace.PlanID)
+	}
+	var plans []plan.Plan
+	if err := db.Where("name = ? OR id IN ?", "Lite", ids).Find(&plans).Error; err != nil {
+		return 0, err
+	}
+	capacity := 0
+	for _, p := range plans {
+		view, err := p.View()
+		if err != nil {
+			return 0, err
+		}
+		capacity = max(capacity, view.Capabilities.MaxWorkspaces)
+	}
+	return capacity, nil
 }

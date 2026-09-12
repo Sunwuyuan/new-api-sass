@@ -39,6 +39,7 @@ import { platformPasswordSchema } from './lib/schema'
 
 export function PlatformPasswordDialog(props: {
   open: boolean
+  required?: boolean
   onOpenChange: (open: boolean) => void
 }) {
   const { t } = useTranslation()
@@ -67,8 +68,11 @@ export function PlatformPasswordDialog(props: {
     onSuccess: () => {
       form.reset()
       props.onOpenChange(false)
-      queryClient.removeQueries({ queryKey: ['platform', 'tenants'] })
-      queryClient.removeQueries({ queryKey: ['platform', 'users'] })
+      void queryClient.cancelQueries({ queryKey: ['platform'] })
+      queryClient.removeQueries({
+        queryKey: ['platform'],
+        predicate: (query) => query.queryKey[1] !== 'session',
+      })
       queryClient.setQueryData(['platform', 'session'], null)
       toast.success(
         t('Password changed. Sign in again with your new password.')
@@ -87,6 +91,9 @@ export function PlatformPasswordDialog(props: {
     >
       <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
         <FieldGroup>
+          {props.required && (
+            <p role='alert'>{t('Change your password before continuing.')}</p>
+          )}
           <Field data-invalid={!!form.formState.errors.current_password}>
             <FieldLabel htmlFor='platform-current-password'>
               {t('Current Password')}

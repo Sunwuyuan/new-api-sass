@@ -132,6 +132,11 @@ func GetStatus(c *gin.Context) {
 
 	if view, ok := plan.FromContext(c.Request.Context()); ok {
 		data["platform_footer_locked"] = !view.Capabilities.RemovePlatformFooter
+		data["platform_branding_locked"] = !view.Capabilities.CustomBranding
+		if !view.Capabilities.CustomBranding {
+			data["system_name"] = "New API"
+			data["logo"] = ""
+		}
 		if !view.Capabilities.RemovePlatformFooter {
 			data["footer_html"] = ""
 		}

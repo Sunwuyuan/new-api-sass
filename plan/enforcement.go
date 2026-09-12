@@ -79,15 +79,18 @@ func ValidateOption(ctx context.Context, db *gorm.DB, key string) error {
 	if strings.HasPrefix(key, "performance_setting.") {
 		return &tenant.HTTPError{Status: 403, Code: "platform_managed_operation", Message: "Host performance settings are managed by the platform operator"}
 	}
-	if key != "Footer" {
+	if key != "Footer" && key != "SystemName" && key != "Logo" {
 		return nil
 	}
 	view, err := Current(ctx, db)
 	if err != nil {
 		return err
 	}
-	if !view.Capabilities.RemovePlatformFooter {
+	if key == "Footer" && !view.Capabilities.RemovePlatformFooter {
 		return ErrCapability
+	}
+	if key != "Footer" && !view.Capabilities.CustomBranding {
+		return &tenant.HTTPError{Status: 403, Code: "plan_capability_denied", Message: "Your hosting plan does not allow custom branding"}
 	}
 	return nil
 }

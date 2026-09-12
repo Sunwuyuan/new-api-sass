@@ -27,7 +27,15 @@ import type {
   PlatformSession,
   PlatformUser,
   Workspace,
-  WorkspaceUsage,
+  WorkspacePage,
+  PageParams,
+  PageResult,
+  PlatformRedemption,
+  RedemptionBatch,
+  RedemptionUse,
+  PlatformAudit,
+  PlanAssignment,
+  UserAction,
 } from './types'
 
 let csrfToken = ''
@@ -55,7 +63,7 @@ client.interceptors.response.use(undefined, (error: unknown) => {
     message = t('Too many attempts. Please try again later.')
   }
   if (code === 'recent_login_required') {
-    message = t('Please sign in again before changing a workspace.')
+    message = t('Verify administrator access, then try again.')
   }
   if (code === 'workspace_unavailable_or_limit_reached') {
     message = t(
@@ -77,6 +85,25 @@ client.interceptors.response.use(undefined, (error: unknown) => {
     )
   }
   if (code === 'platform_login_required') message = t('Please sign in again.')
+  if (code === 'last_platform_admin') {
+    message = t('Keep at least one enabled platform administrator.')
+  }
+  if (code === 'redemption_unavailable') {
+    message = t('This code cannot be redeemed for the selected workspace.')
+  }
+  if (code === 'password_change_required') {
+    message = t('Change your password before continuing.')
+  }
+  if (code === 'platform_admin_required') {
+    message = t('Platform administrator access required')
+  }
+  if (code === 'csrf_invalid') message = t('Refresh this page and try again.')
+  if (code === 'invalid_plan') {
+    message = t('Check the plan limits and capabilities.')
+  }
+  if (code === 'invalid_redemption_batch') {
+    message = t('Check the code count, duration, use limit and expiry.')
+  }
   const failure = new Error(message, { cause: error })
   Object.defineProperty(failure, safeServerErrorMessage, { value: true })
   throw failure
@@ -89,7 +116,10 @@ export async function getPlatformSession(): Promise<PlatformSession | null> {
     return data
   } catch (error) {
     const cause = error instanceof Error ? error.cause : error
-    if (axios.isAxiosError(cause) && cause.response?.status === 401) return null
+    if (axios.isAxiosError(cause) && cause.response?.status === 401) {
+      csrfToken = ''
+      return null
+    }
     throw error
   }
 }
@@ -138,17 +168,25 @@ export async function getHostingPlans(): Promise<HostingPlan[]> {
   return (await client.get<{ plans: HostingPlan[] }>('/plans')).data.plans
 }
 
-export async function getWorkspaces(admin: boolean): Promise<WorkspaceUsage[]> {
+export async function getWorkspaces(
+  admin: boolean,
+  params: PageParams
+): Promise<WorkspacePage> {
   return (
-    await client.get<{ tenants: WorkspaceUsage[] }>(
-      admin ? '/admin/tenants' : '/tenants'
-    )
-  ).data.tenants
+    await client.get<WorkspacePage>(admin ? '/admin/tenants' : '/tenants', {
+      params,
+    })
+  ).data
 }
 
-export async function getPlatformUsers(): Promise<PlatformUser[]> {
-  return (await client.get<{ users: PlatformUser[] }>('/admin/users')).data
-    .users
+export async function getPlatformUsers(
+  params: PageParams
+): Promise<PageResult & { users: PlatformUser[] }> {
+  return (
+    await client.get<PageResult & { users: PlatformUser[] }>('/admin/users', {
+      params,
+    })
+  ).data
 }
 
 export async function createWorkspace(input: {
@@ -162,8 +200,13 @@ export async function assignHostingPlan(
   id: number,
   planId: number,
   months: number
-): Promise<void> {
-  await client.post(`/admin/tenants/${id}/plan`, { plan_id: planId, months })
+): Promise<PlanAssignment> {
+  return (
+    await client.post<{ assignment: PlanAssignment }>(
+      `/admin/tenants/${id}/plan`,
+      { plan_id: planId, months }
+    )
+  ).data.assignment
 }
 
 export async function setWorkspaceStatus(
@@ -171,4 +214,88 @@ export async function setWorkspaceStatus(
   status: Workspace['status']
 ): Promise<void> {
   await client.post(`/admin/tenants/${id}/status`, { status })
+}
+
+export async function reauthenticatePlatform(
+  password: string
+): Promise<PlatformSession> {
+  const { data } = await client.post<PlatformSession>('/reauthenticate', {
+    password,
+  })
+  csrfToken = data.csrf_token
+  return data
+}
+
+export async function updatePlatformUser(
+  id: number,
+  action: UserAction
+): Promise<void> {
+  await client.post(`/admin/users/${id}`, { action })
+}
+
+export async function updateHostingPlan(plan: HostingPlan): Promise<void> {
+  await client.post(`/admin/plans/${plan.id}`, plan)
+}
+
+export async function getPlatformRedemptions(
+  params: PageParams
+): Promise<PageResult & { redemptions: PlatformRedemption[] }> {
+  return (
+    await client.get<PageResult & { redemptions: PlatformRedemption[] }>(
+      '/admin/redemptions',
+      { params }
+    )
+  ).data
+}
+
+export async function createPlatformRedemptions(
+  input: RedemptionBatch
+): Promise<{ codes: string[] }> {
+  return (await client.post<{ codes: string[] }>('/admin/redemptions', input))
+    .data
+}
+
+export async function disablePlatformRedemption(id: number): Promise<void> {
+  await client.post(`/admin/redemptions/${id}/disable`)
+}
+
+export async function getRedemptionUses(
+  id: number,
+  params: PageParams
+): Promise<PageResult & { uses: RedemptionUse[] }> {
+  return (
+    await client.get<PageResult & { uses: RedemptionUse[] }>(
+      `/admin/redemptions/${id}/uses`,
+      { params }
+    )
+  ).data
+}
+
+export async function redeemHostingPlan(
+  tenantId: number,
+  code: string
+): Promise<PlanAssignment> {
+  return (
+    await client.post<{ assignment: PlanAssignment }>('/redeem', {
+      tenant_id: tenantId,
+      code,
+    })
+  ).data.assignment
+}
+
+export async function getPlatformAudits(
+  params: PageParams
+): Promise<PageResult & { audits: PlatformAudit[] }> {
+  return (
+    await client.get<PageResult & { audits: PlatformAudit[] }>(
+      '/admin/audits',
+      { params }
+    )
+  ).data
+}
+
+export const platformSessionQuery = {
+  queryKey: ['platform', 'session'],
+  queryFn: getPlatformSession,
+  retry: false,
 }
