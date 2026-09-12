@@ -72,7 +72,7 @@ export default function PlatformDashboard() {
         <div>
           <h1 className='text-2xl font-semibold'>{t('My workspaces')}</h1>
           <p className='text-muted-foreground mt-1 text-sm'>
-            {t('Your independent API workspaces')}
+            {t('Create an instance, finish setup, then open it to manage models and keys.')}
           </p>
         </div>
         <PlatformLink
@@ -82,20 +82,25 @@ export default function PlatformDashboard() {
           {t('Create workspace')}
         </PlatformLink>
       </header>
-      {workspaces.data && (
-        <p className='text-muted-foreground'>
-          {t('Workspace capacity: {{used}} / {{limit}}', {
-            used: workspaces.data.workspace_count,
-            limit: workspaces.data.max_workspaces,
-          })}
-        </p>
-      )}
       {workspaces.isPending && <LoadingState />}
       {workspaces.isError && (
         <ErrorState onRetry={() => void workspaces.refetch()} />
       )}
       {workspaces.data?.tenants.length === 0 && (
-        <EmptyState title={t('No workspaces yet')} />
+        <EmptyState
+          title={t('No workspaces yet')}
+          description={t(
+            'Create an instance, finish setup, then open it to manage models and keys.'
+          )}
+          action={
+            <PlatformLink
+              to='/platform/workspaces/new'
+              className={buttonVariants()}
+            >
+              {t('Create workspace')}
+            </PlatformLink>
+          }
+        />
       )}
       <div className='grid gap-4 xl:grid-cols-2'>
         {workspaces.data?.tenants.map((item) => (

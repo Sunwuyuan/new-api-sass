@@ -65,6 +65,12 @@ client.interceptors.response.use(undefined, (error: unknown) => {
     : undefined
   let message = t('Unable to complete the request')
   if (code === 'invalid_credentials') message = t('Invalid email or password')
+  if (code === 'email_not_verified') {
+    message = t('Verify your email before signing in.')
+  }
+  if (code === 'invalid_verification_code') {
+    message = t('That verification code is invalid or expired.')
+  }
   if (code === 'authentication_failed') {
     message = t(
       'Authentication failed. Start again or use another sign-in method.'
@@ -95,6 +101,14 @@ client.interceptors.response.use(undefined, (error: unknown) => {
   if (code === 'workspace_unavailable_or_limit_reached') {
     message = t(
       'This workspace address is unavailable or your workspace limit has been reached.'
+    )
+  }
+  if (code === 'lite_workspace_already_exists') {
+    message = t('You already have a free Lite workspace.')
+  }
+  if (code === 'invalid_workspace_administrator') {
+    message = t(
+      'Check the administrator username, email and password.'
     )
   }
   if (code === 'invalid_email_or_password_length') {
@@ -167,6 +181,17 @@ export async function platformRegister(input: {
   await client.post('/register', input)
 }
 
+export async function verifyPlatformEmail(input: {
+  email: string
+  code: string
+}): Promise<void> {
+  await client.post('/verify-email', input)
+}
+
+export async function resendPlatformVerification(email: string): Promise<void> {
+  await client.post('/resend-verification', { email })
+}
+
 export async function platformLogout(): Promise<void> {
   await client.post('/logout')
   csrfToken = ''
@@ -219,7 +244,16 @@ export async function getPlatformUsers(
 export async function createWorkspace(input: {
   name: string
   slug: string
-}): Promise<{ tenant: Workspace; root_activation_url: string }> {
+  username: string
+  display_name?: string
+  email?: string
+  password: string
+  plan_id: number
+  code?: string
+}): Promise<{
+  tenant: Workspace
+  setup_url?: string
+}> {
   return (await client.post('/tenants', input)).data
 }
 
@@ -234,6 +268,38 @@ export async function assignHostingPlan(
       { plan_id: planId, months }
     )
   ).data.assignment
+}
+
+export async function updateWorkspace(
+  id: number,
+  input: { name: string; slug?: string },
+  admin: boolean
+): Promise<void> {
+  await client.post(`${admin ? '/admin' : ''}/tenants/${id}`, input)
+}
+
+export async function transferWorkspace(
+  id: number,
+  email: string
+): Promise<void> {
+  await client.post(`/admin/tenants/${id}/owner`, { email })
+}
+
+export async function updateWorkspaceAdministrator(
+  id: number,
+  input: {
+    id?: number
+    username?: string
+    display_name?: string
+    email?: string
+    password?: string
+  },
+  admin: boolean
+): Promise<void> {
+  await client.post(
+    `${admin ? '/admin' : ''}/tenants/${id}/administrator`,
+    input
+  )
 }
 
 export async function setWorkspaceStatus(
@@ -319,6 +385,54 @@ export async function getPlatformAudits(
       { params }
     )
   ).data
+}
+
+export type PlatformOAuthProviderSetting = {
+  slug: string
+  name: string
+  enabled: boolean
+  client_id: string
+  issuer: string
+  configured: boolean
+}
+
+export type PlatformAdminSettings = {
+  auth: {
+    registration: boolean
+    password_login: boolean
+    oauth_registration: boolean
+    passkey: boolean
+    name: string
+    logo: string
+    agreement_url: string
+    privacy_url: string
+    providers: PlatformOAuthProviderSetting[]
+  }
+  mail: {
+    enabled: boolean
+    base_url: string
+    provider_id: string
+    from: string
+    from_name: string
+    email_verification: boolean
+    notifications: boolean
+    configured: boolean
+  }
+}
+
+export async function getPlatformSettings(): Promise<PlatformAdminSettings> {
+  return (await client.get<PlatformAdminSettings>('/admin/settings')).data
+}
+
+export async function updatePlatformSettings(input: {
+  auth?: Partial<PlatformAdminSettings['auth']> & {
+    providers?: Array<
+      PlatformOAuthProviderSetting & { client_secret?: string }
+    >
+  }
+  mail?: Partial<PlatformAdminSettings['mail']> & { api_key?: string }
+}): Promise<void> {
+  await client.post('/admin/settings', input)
 }
 
 export const platformSessionQuery = {

@@ -252,93 +252,26 @@ test('forced password changes hide workspace and administration controls', async
   ).toBe(false)
 })
 
-test('reauthentication rotates CSRF without replaying a rejected administrative change', async () => {
+test('platform administrators can change users without a second identity check', async () => {
   const user = userEvent.setup()
-  let verified = false
   network.adapter.mockImplementation(async (config) => {
-    if (config.url === '/reauthenticate') {
-      if (
-        JSON.parse(config.data).password !== 'the correct testing passphrase'
-      ) {
-        throw new axios.AxiosError(
-          'Unauthorized',
-          undefined,
-          config,
-          undefined,
-          { ...reply(config, { code: 'invalid_credentials' }), status: 401 }
-        )
-      }
-      verified = true
-      session = { ...administratorSession, csrf_token: 'rotated-test-csrf' }
-      return reply(config, session)
-    }
     if (config.url === '/admin/users/7') {
-      if (!verified) {
-        throw new axios.AxiosError(
-          'Unauthorized',
-          undefined,
-          config,
-          undefined,
-          { ...reply(config, { code: 'recent_login_required' }), status: 401 }
-        )
-      }
       return reply(config, { success: true })
     }
     return defaultAdapter(config)
   })
   await renderPlatform('/platform/admin/users')
   await within(await screen.findByRole('table')).findByText(member.email)
-  await user.click(
-    screen.getByRole('button', { name: `Actions for ${member.email}` })
-  )
-  await user.click(
-    await screen.findByRole('menuitem', { name: 'Revoke platform sessions' })
-  )
-  let confirmation = await screen.findByRole('alertdialog')
-  await user.click(
-    within(confirmation).getByRole('button', { name: 'Continue' })
-  )
-  expect(await within(confirmation).findByRole('alert')).toHaveTextContent(
-    'Verify administrator access, then try again.'
-  )
-  await user.click(within(confirmation).getByRole('button', { name: 'Cancel' }))
-  await user.click(
-    screen.getByRole('button', { name: 'Verify administrator access' })
-  )
-  const dialog = await screen.findByRole('dialog')
-  await user.type(
-    within(dialog).getByLabelText('Current Password'),
-    'wrong testing passphrase'
-  )
-  await user.click(
-    within(dialog).getByRole('button', { name: 'Verify administrator access' })
-  )
-  expect(await within(dialog).findByRole('alert')).toHaveTextContent(
-    'Invalid email or password'
-  )
-  await user.clear(within(dialog).getByLabelText('Current Password'))
-  await user.type(
-    within(dialog).getByLabelText('Current Password'),
-    'the correct testing passphrase'
-  )
-  await user.click(
-    within(dialog).getByRole('button', { name: 'Verify administrator access' })
-  )
-  await waitFor(() =>
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
-  )
   expect(
-    network.adapter.mock.calls.filter(
-      ([config]) => config.url === '/admin/users/7'
-    )
-  ).toHaveLength(1)
+    screen.queryByRole('button', { name: 'Verify administrator access' })
+  ).not.toBeInTheDocument()
   await user.click(
     screen.getByRole('button', { name: `Actions for ${member.email}` })
   )
   await user.click(
     await screen.findByRole('menuitem', { name: 'Revoke platform sessions' })
   )
-  confirmation = await screen.findByRole('alertdialog')
+  const confirmation = await screen.findByRole('alertdialog')
   await user.click(
     within(confirmation).getByRole('button', { name: 'Continue' })
   )
@@ -348,8 +281,8 @@ test('reauthentication rotates CSRF without replaying a rejected administrative 
   const changes = network.adapter.mock.calls.filter(
     ([config]) => config.url === '/admin/users/7'
   )
-  expect(changes).toHaveLength(2)
-  expect(changes[1][0].headers.get('X-CSRF-Token')).toBe('rotated-test-csrf')
+  expect(changes).toHaveLength(1)
+  expect(changes[0][0].headers.get('X-CSRF-Token')).toBe('test-csrf')
 })
 
 test.each(['/platform', '/platform/workspaces/42', '/platform/admin/usage'])(
@@ -770,4 +703,219 @@ test('usage analytics renders real totals, scoped workspace links, and an empty 
       config.url?.startsWith('/admin/')
     )
   ).toBe(false)
+})
+
+test('plans page shows hosting cards and a workspace redemption form', async () => {
+  session = { ...administratorSession, user: member }
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/plans') {
+      return reply(config, {
+        plans: [
+          {
+            id: 1,
+            name: 'Lite',
+            price: 'Free',
+            limits: { requests: 1000, users: 5, tokens: 20, channels: 3 },
+            capabilities: {
+              remove_platform_footer: false,
+              custom_branding: false,
+              max_workspaces: 1,
+            },
+          },
+          {
+            id: 2,
+            name: 'Standard',
+            price: 'Contact administrator',
+            limits: { requests: 50000, users: 50, tokens: 200, channels: 20 },
+            capabilities: {
+              remove_platform_footer: false,
+              custom_branding: true,
+              max_workspaces: 3,
+              task_plugins: true,
+            },
+          },
+          {
+            id: 3,
+            name: 'Pro',
+            price: 'Contact administrator',
+            limits: {
+              requests: 100000,
+              users: 1000,
+              tokens: 10000,
+              channels: 100,
+            },
+            capabilities: {
+              remove_platform_footer: true,
+              custom_branding: true,
+              max_workspaces: 10,
+              task_plugins: true,
+            },
+          },
+        ],
+      })
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/plans')
+  expect(await screen.findByRole('heading', { name: 'Plans' })).toBeVisible()
+  expect(await screen.findByRole('heading', { name: 'Lite' })).toBeVisible()
+  expect(screen.getByRole('heading', { name: 'Standard' })).toBeVisible()
+  expect(screen.queryByText('Recommended')).not.toBeInTheDocument()
+  expect(screen.queryByRole('table')).not.toBeInTheDocument()
+  expect(screen.queryByText('Tokens')).not.toBeInTheDocument()
+  expect(screen.getByLabelText('Apply a plan code')).toBeVisible()
+  expect(screen.getByRole('button', { name: 'Enter code' })).toBeDisabled()
+  const chrome = screen
+    .getByRole('button', { name: 'Toggle Sidebar' })
+    .closest('header')
+  if (!(chrome instanceof HTMLElement)) {
+    throw new Error('plans page is missing the console header')
+  }
+  expect(within(chrome).queryByText('Workspace')).not.toBeInTheDocument()
+})
+
+test('administrators edit plan limits and features in one comparison table', async () => {
+  const user = userEvent.setup()
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/plans') {
+      return reply(config, {
+        plans: [
+          {
+            id: 1,
+            name: 'Lite',
+            price: 'Free',
+            limits: { requests: 10000, users: 1, tokens: 50, channels: 10 },
+            capabilities: {
+              remove_platform_footer: false,
+              custom_branding: false,
+              max_workspaces: 1,
+            },
+          },
+          {
+            id: 2,
+            name: 'Standard',
+            price: 'Contact administrator',
+            limits: { requests: 100000, users: 1000, tokens: 0, channels: 0 },
+            capabilities: {
+              remove_platform_footer: false,
+              custom_branding: true,
+              max_workspaces: 5,
+            },
+          },
+          {
+            id: 3,
+            name: 'Pro',
+            price: 'Contact administrator',
+            limits: { requests: 0, users: 0, tokens: 0, channels: 0 },
+            capabilities: {
+              remove_platform_footer: true,
+              custom_branding: true,
+              max_workspaces: 20,
+            },
+          },
+        ],
+      })
+    }
+    if (config.url === '/admin/plans/1') {
+      return reply(config, { success: true })
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/admin/plans')
+  expect(
+    await screen.findByRole('heading', { name: 'Hosting plans' })
+  ).toBeVisible()
+  expect(screen.getByRole('columnheader', { name: 'Lite' })).toBeVisible()
+  expect(screen.getByRole('columnheader', { name: 'Standard' })).toBeVisible()
+  expect(screen.getByRole('columnheader', { name: 'Pro' })).toBeVisible()
+  expect(screen.queryByText('Tokens')).not.toBeInTheDocument()
+  const requests = screen.getByRole('spinbutton', {
+    name: 'Lite: Monthly requests',
+  })
+  await user.clear(requests)
+  await user.type(requests, '20000')
+  await user.click(screen.getByRole('checkbox', { name: 'Lite: Custom branding' }))
+  const saveButtons = screen.getAllByRole('button', { name: 'Save changes' })
+  expect(saveButtons[0]).toBeEnabled()
+  expect(saveButtons[1]).toBeDisabled()
+  await user.click(saveButtons[0])
+  await waitFor(() =>
+    expect(
+      network.adapter.mock.calls.some(([config]) => {
+        if (config.url !== '/admin/plans/1') return false
+        const body = JSON.parse(config.data) as {
+          limits: { requests: number; tokens: number }
+          capabilities: { custom_branding: boolean }
+        }
+        return (
+          body.limits.requests === 20000 &&
+          body.limits.tokens === 0 &&
+          body.capabilities.custom_branding
+        )
+      })
+    ).toBe(true)
+  )
+})
+
+test('workspace administrators page lists accounts and saves edits', async () => {
+  const user = userEvent.setup()
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/tenants/1') {
+      return reply(config, {
+        tenant: {
+          id: 1,
+          slug: 'alpha',
+          name: 'Alpha',
+          owner_platform_user_id: 7,
+          plan_id: 1,
+          status: 'active',
+          plan_expires_at: null,
+        },
+        owner_name: member.email,
+        plan: {
+          id: 1,
+          name: 'Lite',
+          price: 'Free',
+          limits: { requests: 5000, users: 1, tokens: 50, channels: 10 },
+          capabilities: { max_workspaces: 1 },
+        },
+        usage: { month: '2026-09', requests: 0 },
+        history: [],
+        assignments: [],
+        administrators: [
+          {
+            id: 3,
+            username: 'root',
+            display_name: 'Owner',
+            email: 'root@example.test',
+            status: 1,
+            role: 'root',
+          },
+        ],
+      })
+    }
+    if (config.url === '/tenants/1/administrator') {
+      return reply(config, { success: true })
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/workspaces/1/administrators')
+  expect(
+    await screen.findByRole('heading', { name: 'Workspace administrators' })
+  ).toBeVisible()
+  expect(screen.getByText('root')).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Edit' }))
+  const dialog = await screen.findByRole('alertdialog')
+  await user.clear(within(dialog).getByLabelText('Username'))
+  await user.type(within(dialog).getByLabelText('Username'), 'adminroot')
+  await user.click(within(dialog).getByRole('button', { name: 'Save changes' }))
+  await waitFor(() =>
+    expect(
+      network.adapter.mock.calls.some(
+        ([config]) =>
+          config.url === '/tenants/1/administrator' &&
+          JSON.parse(config.data).username === 'adminroot'
+      )
+    ).toBe(true)
+  )
 })

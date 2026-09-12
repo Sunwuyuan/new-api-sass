@@ -48,6 +48,7 @@ import {
 } from '@/lib/passkey'
 import { AuthOperationError } from '@/lib/secure-verification'
 
+import { platformSessionQuery } from './api'
 import {
   beginPlatformPasskey,
   finishPlatformPasskey,
@@ -67,6 +68,7 @@ export default function PlatformSecurity() {
   const busy = useIsMutating({ mutationKey: ['platform', 'authenticate'] }) > 0
   const status = useQuery(platformStatusQuery)
   const methods = useQuery(platformAuthMethodsQuery)
+  const session = useQuery(platformSessionQuery)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [verifyOpen, setVerifyOpen] = useState(false)
   const [deleteID, setDeleteID] = useState<string | null>(null)
@@ -153,6 +155,7 @@ export default function PlatformSecurity() {
     github_oauth: status.data.github_oauth && !linked.includes('github'),
     discord_oauth: status.data.discord_oauth && !linked.includes('discord'),
     oidc_enabled: status.data.oidc_enabled && !linked.includes('oidc'),
+    logto_oauth: Boolean(status.data.logto_oauth) && !linked.includes('logto'),
     linuxdo_oauth: status.data.linuxdo_oauth && !linked.includes('linuxdo'),
     telegram_oauth: status.data.telegram_oauth && !linked.includes('telegram'),
     wechat_login: status.data.wechat_login && !linked.includes('wechat'),
@@ -162,11 +165,16 @@ export default function PlatformSecurity() {
   }
   return (
     <section className='space-y-6'>
-      <header className='flex flex-wrap items-center justify-between gap-3'>
+      <header className='flex flex-wrap items-start justify-between gap-3'>
         <div>
-          <h1 className='text-2xl font-semibold'>{t('Account security')}</h1>
+          <h1 className='text-2xl font-semibold'>{t('Account')}</h1>
+          {session.data?.user.email && (
+            <p className='mt-1 text-sm'>{session.data.user.email}</p>
+          )}
           <p className='text-muted-foreground mt-1 text-sm'>
-            {t('Manage sign-in methods for your platform account.')}
+            {t(
+              'Password, Passkeys and connected sign-in methods for this platform account.'
+            )}
           </p>
         </div>
         <Button
@@ -177,6 +185,8 @@ export default function PlatformSecurity() {
           {t('Verify your identity')}
         </Button>
       </header>
+      <div className='grid items-start gap-4 lg:grid-cols-2'>
+        <div className='space-y-4'>
       <Card>
         <CardHeader>
           <CardTitle>{t('Password')}</CardTitle>
@@ -271,6 +281,7 @@ export default function PlatformSecurity() {
           </CardContent>
         </Card>
       )}
+        </div>
       <Card>
         <CardHeader>
           <CardTitle>{t('Connected accounts')}</CardTitle>
@@ -306,6 +317,7 @@ export default function PlatformSecurity() {
           </div>
         </CardContent>
       </Card>
+      </div>
       {passwordOpen && (
         <PlatformPasswordDialog open onOpenChange={setPasswordOpen} />
       )}

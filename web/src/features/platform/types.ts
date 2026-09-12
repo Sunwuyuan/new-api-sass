@@ -38,11 +38,25 @@ export type HostingPlan = {
   id: number
   name: string
   price: string
-  limits: { requests: number; users: number; tokens: number; channels: number }
+  limits: {
+    requests: number
+    users: number
+    tokens: number
+    channels: number
+    emails?: number
+  }
   capabilities: {
     remove_platform_footer: boolean
     custom_branding: boolean
     max_workspaces: number
+    platform_email?: boolean
+    task_plugins?: boolean
+    data_export?: boolean
+    workspace_oauth?: boolean
+    topup?: boolean
+    affiliate?: boolean
+    passkey?: boolean
+    custom_models?: boolean
   }
 }
 
@@ -58,7 +72,7 @@ export type Workspace = {
 
 export type WorkspaceUsage = {
   tenant: Workspace
-  usage: { month: string; requests: number }
+  usage: { month: string; requests: number; emails?: number }
   owner_email: string
 }
 
@@ -76,7 +90,8 @@ export type PageResult = {
 
 export type WorkspacePage = PageResult & {
   tenants: WorkspaceUsage[]
-  max_workspaces: number
+  lite_available?: boolean
+  max_workspaces?: number
   workspace_count: number
 }
 

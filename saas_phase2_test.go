@@ -63,8 +63,8 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 	require.NoError(t, model.DB.Where("email = ?", "phase2-bob@example.test").First(&bobUser).Error)
 	assert.Equal(t, "user", aliceUser.Role, "registration cannot set its own role")
 	var alpha, beta struct{ Tenant tenant.Workspace }
-	require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Phase Two Alpha", "slug": "phase2-alpha"}, &alpha).Code)
-	require.Equal(t, http.StatusCreated, bob.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Phase Two Beta", "slug": "phase2-beta"}, &beta).Code)
+	require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Phase Two Alpha", "phase2-alpha", saasPassword(t)), &alpha).Code)
+	require.Equal(t, http.StatusCreated, bob.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Phase Two Beta", "phase2-beta", saasPassword(t)), &beta).Code)
 
 	t.Run("users cannot reach any administrator endpoint or enumerate foreign workspaces", func(t *testing.T) {
 		for _, path := range []string{"/users", "/tenants", "/plans", "/redemptions", "/redemptions/1/uses", "/audits"} {
@@ -98,14 +98,29 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		for _, p := range plans.Plans {
 			byName[p.Name] = p
 		}
-		assert.EqualValues(t, 20000, byName["Standard"].Limits.Requests)
-		assert.EqualValues(t, 50, byName["Standard"].Limits.Users)
-		assert.EqualValues(t, 200, byName["Standard"].Limits.Tokens)
-		assert.EqualValues(t, 20, byName["Standard"].Limits.Channels)
-		assert.Equal(t, plan.Capabilities{MaxWorkspaces: 1}, byName["Lite"].Capabilities)
-		assert.Equal(t, plan.Capabilities{MaxWorkspaces: 3, CustomBranding: true}, byName["Standard"].Capabilities)
-		assert.Equal(t, plan.Capabilities{MaxWorkspaces: 10, CustomBranding: true, RemovePlatformFooter: true}, byName["Pro"].Capabilities)
-		assert.Equal(t, http.StatusConflict, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Too many", "slug": "phase2-limit"}, nil).Code)
+		assert.EqualValues(t, 10000, byName["Lite"].Limits.Requests)
+		assert.EqualValues(t, 100000, byName["Standard"].Limits.Requests)
+		assert.EqualValues(t, 0, byName["Pro"].Limits.Requests)
+		assert.EqualValues(t, 1000, byName["Standard"].Limits.Users)
+		assert.EqualValues(t, 0, byName["Standard"].Limits.Tokens)
+		assert.EqualValues(t, 0, byName["Standard"].Limits.Channels)
+		assert.EqualValues(t, 0, byName["Standard"].Limits.Emails)
+		assert.EqualValues(t, 1, byName["Lite"].Limits.Users)
+		assert.EqualValues(t, 0, byName["Pro"].Limits.Users)
+		assert.Equal(t, plan.Capabilities{MaxWorkspaces: 1, PlatformEmail: true, TaskPlugins: true, DataExport: true, Passkey: true}, byName["Lite"].Capabilities)
+		assert.Equal(t, plan.Capabilities{
+			CustomBranding: true, MaxWorkspaces: 5, PlatformEmail: true, TaskPlugins: true,
+			DataExport: true, WorkspaceOAuth: true, Topup: true, Passkey: true,
+		}, byName["Standard"].Capabilities)
+		assert.Equal(t, plan.Capabilities{
+			RemovePlatformFooter: true, CustomBranding: true, MaxWorkspaces: 20,
+			PlatformEmail: true, TaskPlugins: true, DataExport: true, WorkspaceOAuth: true,
+			Topup: true, Affiliate: true, Passkey: true, CustomModels: true,
+		}, byName["Pro"].Capabilities)
+		assert.Equal(t, http.StatusConflict, alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Too many", "phase2-limit", saasPassword(t)), nil).Code)
+		limit := alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Too many", "phase2-limit-code", saasPassword(t)), nil)
+		assert.Equal(t, http.StatusConflict, limit.Code)
+		assert.Contains(t, limit.Body.String(), "lite_workspace_already_exists")
 		ctx := tenant.WithContext(t.Context(), tenant.Identity{ID: alpha.Tenant.ID, Slug: alpha.Tenant.Slug})
 		assert.Error(t, plan.ValidateOption(ctx, model.DB, "SystemName"))
 		assert.Error(t, plan.ValidateOption(ctx, model.DB, "Logo"))
@@ -121,10 +136,10 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		assert.NoError(t, plan.ValidateOption(ctx, model.DB, "Logo"))
 		assert.ErrorIs(t, plan.ValidateOption(ctx, model.DB, "Footer"), plan.ErrCapability)
 		var listed struct {
-			MaxWorkspaces int `json:"max_workspaces"`
+			LiteAvailable bool `json:"lite_available"`
 		}
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/platform/api/tenants", nil, &listed).Code)
-		assert.Equal(t, 3, listed.MaxWorkspaces)
+		assert.True(t, listed.LiteAvailable)
 	})
 
 	t.Run("renewal preserves calendar months and replay does not spend a use", func(t *testing.T) {
@@ -160,7 +175,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		resetPlatformAuthAttempts(t)
 		batch := createPlatformCodes(t, admin, 2, 1, 1, 3)
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/redemptions/%d/disable", batch.Redemptions[0].ID), nil, nil).Code)
-		require.NoError(t, model.DB.Model(&platform.Redemption{}).Where("id = ?", batch.Redemptions[1].ID).Update("expires_at", time.Now().Add(-time.Minute)).Error)
+		require.NoError(t, model.DB.Model(&platform.Redemption{}).Where("id = ?", batch.Redemptions[1].ID).Update("expires_at", time.Now().UTC().Add(-time.Minute)).Error)
 		var response string
 		for _, code := range []string{batch.Codes[0], batch.Codes[1], "unknown", fmt.Sprintf("%064x", 0)} {
 			res := alice.request(t, http.MethodPost, "/platform/api/redeem", map[string]any{"tenant_id": alpha.Tenant.ID, "code": code}, nil)
@@ -339,7 +354,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		assert.Equal(t, http.StatusOK, bob.request(t, http.MethodGet, "/platform/api/admin/users", nil, nil).Code)
 	})
 
-	t.Run("plan edits and expiry immediately change workspace capacity", func(t *testing.T) {
+	t.Run("expired workspaces stay on Lite without dropping users", func(t *testing.T) {
 		var original plan.Plan
 		require.NoError(t, model.DB.First(&original, 3).Error)
 		view, err := original.View()
@@ -352,20 +367,54 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, "/platform/api/admin/plans/3", view, nil).Code)
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.Tenant.ID), map[string]int{"plan_id": 3, "months": 1}, nil).Code)
 		var second struct{ Tenant tenant.Workspace }
-		require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Second", "slug": "phase2-second"}, &second).Code)
-		assert.Equal(t, http.StatusConflict, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Over capacity", "slug": "phase2-capacity"}, nil).Code)
-		require.NoError(t, model.DB.Model(&tenant.Workspace{}).Where("id = ?", alpha.Tenant.ID).Update("plan_expires_at", time.Now().Add(-time.Minute)).Error)
+		require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Second", "phase2-second", saasPassword(t)), &second).Code)
+		over := alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Over capacity", "phase2-capacity", saasPassword(t)), nil)
+		assert.Equal(t, http.StatusConflict, over.Code)
+		assert.Contains(t, over.Body.String(), "lite_workspace_already_exists")
+		paid := createPlatformCodes(t, admin, 2, 1, 1, 1)
+		var third struct{ Tenant tenant.Workspace }
+		require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]any{
+			"name": "Paid extra", "slug": "phase2-paid", "username": "root", "password": saasPassword(t),
+			"plan_id": 2, "code": paid.Codes[0],
+		}, &third).Code)
+		assert.EqualValues(t, 2, third.Tenant.PlanID)
+		require.NotNil(t, third.Tenant.PlanExpiresAt)
+		ctx := tenant.WithContext(t.Context(), tenant.Identity{ID: alpha.Tenant.ID, Slug: alpha.Tenant.Slug})
+		hash, err := common.HashAccountPassword(saasPassword(t))
+		require.NoError(t, err)
+		require.NoError(t, model.DB.WithContext(ctx).Create(&model.User{
+			Username: "phase2-extra", Password: hash, Role: common.RoleCommonUser,
+			Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: common.GetRandomString(8),
+		}).Error)
+		require.NoError(t, model.DB.WithContext(ctx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
+		require.NoError(t, model.DB.WithContext(ctx).Create(&model.Channel{Name: "phase2-channel", Key: saasPassword(t)}).Error)
+		require.NoError(t, model.DB.Model(&tenant.Workspace{}).Where("id = ?", alpha.Tenant.ID).Update("plan_expires_at", time.Now().UTC().Add(-time.Minute)).Error)
 		var listed struct {
-			MaxWorkspaces  int `json:"max_workspaces"`
-			WorkspaceCount int `json:"workspace_count"`
+			LiteAvailable  bool `json:"lite_available"`
+			WorkspaceCount int  `json:"workspace_count"`
 		}
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/platform/api/tenants", nil, &listed).Code)
-		assert.Equal(t, 1, listed.MaxWorkspaces)
-		assert.Equal(t, 2, listed.WorkspaceCount, "existing workspaces survive a downgrade")
-		assert.Equal(t, http.StatusForbidden, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		assert.False(t, listed.LiteAvailable)
+		assert.Equal(t, 3, listed.WorkspaceCount, "existing workspaces survive a downgrade")
+		assert.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		effective, err := plan.Current(ctx, model.DB)
+		require.NoError(t, err)
+		assert.Equal(t, "Lite", effective.Name)
+		var users int64
+		require.NoError(t, model.DB.WithContext(ctx).Model(&model.User{}).Count(&users).Error)
+		assert.GreaterOrEqual(t, users, int64(2))
+		var blocked *tenant.HTTPError
+		require.ErrorAs(t, model.DB.WithContext(ctx).Create(&model.User{
+			Username: "phase2-blocked", Password: hash, Role: common.RoleCommonUser,
+			Status: common.UserStatusEnabled, AuthVersion: 1, AffCode: common.GetRandomString(8),
+		}).Error, &blocked)
+		assert.Equal(t, "tenant_resource_limit_exceeded", blocked.Code)
+		assert.ErrorIs(t, model.DB.WithContext(ctx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error, plan.ErrExpiredResources)
+		assert.ErrorIs(t, model.DB.WithContext(ctx).Create(&model.Channel{Name: "phase2-blocked", Key: saasPassword(t)}).Error, plan.ErrExpiredResources)
 		batch := createPlatformCodes(t, admin, 3, 1, 1, 1)
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, "/platform/api/redeem", map[string]any{"tenant_id": alpha.Tenant.ID, "code": batch.Codes[0]}, nil).Code)
 		assert.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		require.NoError(t, model.DB.WithContext(ctx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
 		view.Capabilities.MaxWorkspaces = 0
 		assert.Equal(t, http.StatusBadRequest, admin.request(t, http.MethodPost, "/platform/api/admin/plans/3", view, nil).Code)
 	})
@@ -402,15 +451,15 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		assert.Equal(t, http.StatusOK, bob.request(t, http.MethodGet, "/platform/api/tenants", nil, nil).Code)
 	})
 
-	t.Run("last administrator protection and recent authentication are enforced", func(t *testing.T) {
+	t.Run("last administrator protection and reauthentication rotate sessions", func(t *testing.T) {
 		resetPlatformAuthAttempts(t)
 		for _, action := range []string{"disable", "demote"} {
 			assert.Equal(t, http.StatusConflict, admin.request(t, http.MethodPost, "/platform/api/admin/users/1", map[string]string{"action": action}, nil).Code)
 		}
-		require.NoError(t, model.DB.Model(&platform.Session{}).Where("user_id = ?", 1).Update("created_at", time.Now().Add(-6*time.Minute)).Error)
+		require.NoError(t, model.DB.Model(&platform.Session{}).Where("user_id = ?", 1).Update("created_at", time.Now().UTC().Add(-6*time.Minute)).Error)
 		res := admin.request(t, http.MethodPost, "/platform/api/admin/redemptions", map[string]any{}, nil)
-		assert.Equal(t, http.StatusUnauthorized, res.Code)
-		assert.Contains(t, res.Body.String(), "recent_login_required")
+		assert.Equal(t, http.StatusBadRequest, res.Code)
+		assert.NotContains(t, res.Body.String(), "recent_login_required")
 		old := *admin
 		assert.Equal(t, http.StatusUnauthorized, admin.request(t, http.MethodPost, "/platform/api/reauthenticate", map[string]string{"password": saasPassword(t)}, nil).Code)
 		var signed struct {
@@ -478,6 +527,63 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 				assert.Equal(t, tc.want, r.Code)
 			})
 		}
+	})
+
+	t.Run("owners can rename a workspace and edit its administrators", func(t *testing.T) {
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), map[string]string{"name": "Alpha renamed"}, nil).Code)
+		var detail struct {
+			Tenant         tenant.Workspace
+			Administrators []struct {
+				ID       int
+				Username string
+				Role     string
+			}
+			SetupComplete bool `json:"setup_complete"`
+		}
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), nil, &detail).Code)
+		assert.Equal(t, "Alpha renamed", detail.Tenant.Name)
+		require.NotEmpty(t, detail.Administrators)
+		assert.Equal(t, "root", detail.Administrators[0].Role)
+		assert.False(t, detail.SetupComplete)
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, fmt.Sprintf("/platform/api/tenants/%d/administrator", alpha.Tenant.ID), map[string]any{"id": detail.Administrators[0].ID, "username": "adminroot", "display_name": "Owner"}, nil).Code)
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), nil, &detail).Code)
+		assert.Equal(t, "adminroot", detail.Administrators[0].Username)
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), map[string]string{"name": "Phase Two Alpha", "slug": "phase2-alpha-tmp"}, nil).Code)
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), nil, &detail).Code)
+		assert.Equal(t, "phase2-alpha-tmp", detail.Tenant.Slug)
+		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, fmt.Sprintf("/platform/api/tenants/%d", alpha.Tenant.ID), map[string]string{"name": "Phase Two Alpha", "slug": "phase2-alpha"}, nil).Code)
+	})
+
+	t.Run("administrators can transfer workspace ownership", func(t *testing.T) {
+		batch := createPlatformCodes(t, admin, 3, 1, 1, 1)
+		var moved struct{ Tenant tenant.Workspace }
+		require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", map[string]any{
+			"name": "Move me", "slug": "phase2-move", "username": "root", "password": saasPassword(t),
+			"plan_id": 3, "code": batch.Codes[0],
+		}, &moved).Code)
+		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/owner", moved.Tenant.ID), map[string]string{"email": "phase2-bob@example.test"}, nil).Code)
+		assert.Equal(t, http.StatusNotFound, alice.request(t, http.MethodGet, fmt.Sprintf("/platform/api/tenants/%d", moved.Tenant.ID), nil, nil).Code)
+		require.Equal(t, http.StatusOK, bob.request(t, http.MethodGet, fmt.Sprintf("/platform/api/tenants/%d", moved.Tenant.ID), nil, nil).Code)
+	})
+
+	t.Run("administrators can read platform mail and oauth settings", func(t *testing.T) {
+		var settings struct {
+			Success bool
+			Mail    struct {
+				BaseURL string `json:"base_url"`
+			}
+			Auth struct {
+				Providers []struct{ Slug string }
+			}
+		}
+		require.Equal(t, http.StatusOK, admin.request(t, http.MethodGet, "/platform/api/admin/settings", nil, &settings).Code)
+		assert.Equal(t, "https://amail-service.192325.xyz", settings.Mail.BaseURL)
+		slugs := make([]string, 0, len(settings.Auth.Providers))
+		for _, provider := range settings.Auth.Providers {
+			slugs = append(slugs, provider.Slug)
+		}
+		assert.Contains(t, slugs, "github")
+		assert.Contains(t, slugs, "logto")
 	})
 
 	t.Run("redemption attempts are bounded per account", func(t *testing.T) {

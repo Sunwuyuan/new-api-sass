@@ -19,15 +19,99 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
-import {
-  StaticDataTable,
-  type StaticDataTableColumn,
-} from '@/components/data-table'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+} from '@/components/ui/card'
 
 import { getHostingPlans } from './api'
 import type { HostingPlan } from './types'
+
+function included(t: (key: string) => string, on: boolean | undefined) {
+  return on ? t('Included') : t('Not included')
+}
+
+function limitItems(plan: HostingPlan, t: (key: string) => string) {
+  return [
+    {
+      label: t('Monthly requests'),
+      value:
+        plan.limits.requests === 0
+          ? t('Unlimited')
+          : plan.limits.requests.toLocaleString(),
+    },
+    {
+      label: t('Users'),
+      value:
+        plan.limits.users === 0
+          ? t('Unlimited')
+          : plan.limits.users.toLocaleString(),
+    },
+    {
+      label: t('Redemption code'),
+      value:
+        plan.name === 'Lite' ? t('Not required') : t('Required'),
+    },
+  ]
+}
+
+function capabilityItems(plan: HostingPlan, t: (key: string) => string) {
+  return [
+    {
+      label: t('Branding'),
+      value: plan.capabilities.custom_branding
+        ? t('Custom branding')
+        : t('Basic branding'),
+      on: plan.capabilities.custom_branding,
+    },
+    {
+      label: t('Platform footer'),
+      value: plan.capabilities.remove_platform_footer
+        ? t('Custom platform footer')
+        : t('Platform footer required'),
+      on: plan.capabilities.remove_platform_footer,
+    },
+    {
+      label: t('Platform email'),
+      value: included(t, plan.capabilities.platform_email),
+      on: plan.capabilities.platform_email,
+    },
+    {
+      label: t('Image, video and task plugins'),
+      value: included(t, plan.capabilities.task_plugins),
+      on: plan.capabilities.task_plugins,
+    },
+    {
+      label: t('Workspace sign-in providers'),
+      value: included(t, plan.capabilities.workspace_oauth),
+      on: plan.capabilities.workspace_oauth,
+    },
+    {
+      label: t('Wallet top-up'),
+      value: included(t, plan.capabilities.topup),
+      on: plan.capabilities.topup,
+    },
+    {
+      label: t('Affiliate rewards'),
+      value: included(t, plan.capabilities.affiliate),
+      on: plan.capabilities.affiliate,
+    },
+    {
+      label: 'Passkey',
+      value: included(t, plan.capabilities.passkey),
+      on: plan.capabilities.passkey,
+    },
+    {
+      label: t('Custom model pricing'),
+      value: included(t, plan.capabilities.custom_models),
+      on: plan.capabilities.custom_models,
+    },
+  ]
+}
 
 export function HostingPlans() {
   const { t } = useTranslation()
@@ -37,71 +121,49 @@ export function HostingPlans() {
   })
   if (plans.isPending) return <LoadingState />
   if (plans.isError) return <ErrorState onRetry={() => void plans.refetch()} />
-  const rows = [
-    {
-      label: t('Monthly requests'),
-      value: (plan: HostingPlan) => plan.limits.requests.toLocaleString(),
-    },
-    {
-      label: t('Users'),
-      value: (plan: HostingPlan) => plan.limits.users.toLocaleString(),
-    },
-    {
-      label: t('Tokens'),
-      value: (plan: HostingPlan) => plan.limits.tokens.toLocaleString(),
-    },
-    {
-      label: t('Channels'),
-      value: (plan: HostingPlan) => plan.limits.channels.toLocaleString(),
-    },
-    {
-      label: t('Workspaces per account'),
-      value: (plan: HostingPlan) =>
-        plan.capabilities.max_workspaces.toLocaleString(),
-    },
-    {
-      label: t('Branding'),
-      value: (plan: HostingPlan) =>
-        plan.capabilities.custom_branding
-          ? t('Custom branding')
-          : t('Basic branding'),
-    },
-    {
-      label: t('Platform footer'),
-      value: (plan: HostingPlan) =>
-        plan.capabilities.remove_platform_footer
-          ? t('Custom platform footer')
-          : t('Platform footer required'),
-    },
-  ]
-  const columns: StaticDataTableColumn<(typeof rows)[number]>[] = [
-    {
-      id: 'capability',
-      header: t('Included capabilities'),
-      cell: (row) => row.label,
-    },
-    ...[...plans.data]
-      .sort((a, b) => a.limits.requests - b.limits.requests)
-      .map((plan) => ({
-        id: String(plan.id),
-        header: (
-          <div className='py-3'>
-            <p className='text-foreground font-semibold'>{plan.name}</p>
-            <p className='text-muted-foreground mt-1 text-xs font-normal'>
-              {t(plan.price)}
-            </p>
-          </div>
-        ),
-        cell: (row: (typeof rows)[number]) => row.value(plan),
-      })),
-  ]
+  const ordered = [...plans.data].sort((a, b) => {
+    const left = a.limits.requests === 0 ? Number.MAX_SAFE_INTEGER : a.limits.requests
+    const right = b.limits.requests === 0 ? Number.MAX_SAFE_INTEGER : b.limits.requests
+    return left - right
+  })
   return (
-    <section aria-label={t('Hosting plans')}>
-      <StaticDataTable
-        data={rows}
-        columns={columns}
-        getRowKey={(row) => row.label}
-      />
+    <section
+      aria-label={t('Hosting plans')}
+      className='grid gap-4 md:grid-cols-2 xl:grid-cols-3'
+    >
+      {ordered.map((plan) => (
+          <Card key={plan.id}>
+            <CardHeader className='gap-2'>
+              <h2 className='text-xl font-medium'>{plan.name}</h2>
+              <CardDescription>{t(plan.price)}</CardDescription>
+            </CardHeader>
+            <CardContent className='space-y-5'>
+              <dl className='grid grid-cols-2 gap-3'>
+                {limitItems(plan, t).map((item) => (
+                  <div key={item.label}>
+                    <dt className='text-muted-foreground text-xs'>{item.label}</dt>
+                    <dd className='mt-1 text-base font-semibold tabular-nums'>
+                      {item.value}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              <ul className='space-y-2 text-sm'>
+                {capabilityItems(plan, t).map((item) => (
+                  <li
+                    key={item.label}
+                    className={item.on ? undefined : 'text-muted-foreground'}
+                  >
+                    {item.label}
+                    {item.value !== t('Included')
+                      ? ` · ${item.value}`
+                      : null}
+                  </li>
+                ))}
+              </ul>
+            </CardContent>
+          </Card>
+      ))}
     </section>
   )
 }

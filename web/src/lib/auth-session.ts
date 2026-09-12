@@ -22,7 +22,13 @@ import { t } from 'i18next'
 
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
 import { hasSessionHint } from '@/lib/session-hint'
-import { tenantBasePath, tenantKey } from '@/lib/tenant'
+import {
+  applyTenantRequestURL,
+  tenantBasePath,
+  tenantKey,
+  WORKSPACE_HEADER,
+  workspaceSlug,
+} from '@/lib/tenant'
 import {
   useAuthStore,
   type AuthBootstrapState,
@@ -70,11 +76,21 @@ export class AuthRotationError extends Error {
 
 const authClient = axios.create({
   baseURL: tenantBasePath,
+  allowAbsoluteUrls: false,
   withCredentials: true,
   headers: {
     // no-store forbids storage; no-cache also revalidates any older cached response.
     'Cache-Control': 'no-cache, no-store',
   },
+})
+
+authClient.interceptors.request.use((config) => {
+  applyTenantRequestURL(config)
+  const slug = workspaceSlug()
+  if (slug) {
+    config.headers.set(WORKSPACE_HEADER, slug)
+  }
+  return config
 })
 
 const refreshRaceDelays = [80, 200, 500] as const

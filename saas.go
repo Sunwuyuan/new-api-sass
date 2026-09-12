@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/plan"
 	"github.com/QuantumNous/new-api/platform"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
@@ -96,7 +97,8 @@ func runWorkspaceScheduler(ctx context.Context) {
 			continue
 		}
 		for _, workspace := range workspaces {
-			if workspace.PlanExpiresAt != nil && workspace.PlanExpiresAt.Before(time.Now()) {
+			if err := plan.DowngradeExpired(model.DB.WithContext(ctx), &workspace, time.Now()); err != nil {
+				common.SysError("downgrade expired workspace: " + err.Error())
 				continue
 			}
 			tenantCtx := tenant.WithContext(ctx, tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})

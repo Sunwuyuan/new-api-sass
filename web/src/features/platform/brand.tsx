@@ -29,15 +29,20 @@ export function PlatformBrand() {
   return (
     <Link<PlatformRouter>
       to='/platform'
-      className='flex min-w-0 items-center gap-2 transition-opacity hover:opacity-80'
+      className='flex min-w-0 items-center gap-2.5'
     >
       <img
         src={status.data?.logo || '/logo.png'}
         alt={t('Logo')}
-        className='size-8 shrink-0 rounded-full object-cover'
+        className='size-8 shrink-0 object-cover'
       />
-      <span className='truncate text-lg font-medium'>
-        {status.data?.system_name || 'New API SaaS'}
+      <span className='min-w-0'>
+        <span className='block truncate text-sm font-medium'>
+          {status.data?.system_name || 'New API SaaS'}
+        </span>
+        <span className='text-muted-foreground block truncate text-xs'>
+          {t('Platform console')}
+        </span>
       </span>
     </Link>
   )

@@ -24,6 +24,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
+import axios from 'axios'
 
 import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
@@ -37,7 +38,7 @@ import {
 import { Input } from '@/components/ui/input'
 import { LegalConsent } from '@/features/auth/components/legal-consent'
 
-import { platformLogin, platformRegister } from './api'
+import { platformLogin, platformRegister, resendPlatformVerification, verifyPlatformEmail } from './api'
 import type { PlatformAuthStatus } from './auth-api'
 import { platformPasswordSchema } from './lib/schema'
 import { PlatformLoginMethods } from './login-methods'
@@ -53,6 +54,8 @@ export function PlatformAuthForm(props: {
   const { t } = useTranslation()
   const signUp = props.mode === 'sign-up'
   const [agreed, setAgreed] = useState(false)
+  const [pendingEmail, setPendingEmail] = useState('')
+  const [code, setCode] = useState('')
   const busy = useIsMutating({ mutationKey: ['platform', 'authenticate'] }) > 0
   const requiresConsent =
     props.status.user_agreement_enabled || props.status.privacy_policy_enabled
@@ -86,11 +89,40 @@ export function PlatformAuthForm(props: {
         form.reset()
         await props.onRegistered?.()
       } else {
-        const session = await platformLogin(input)
-        form.reset()
-        await props.onSignedIn(session)
+        try {
+          const session = await platformLogin(input)
+          form.reset()
+          await props.onSignedIn(session)
+        } catch (error) {
+          const cause = error instanceof Error ? error.cause : error
+          const code = axios.isAxiosError(cause)
+            ? cause.response?.data?.code
+            : undefined
+          if (code === 'email_not_verified') setPendingEmail(input.email)
+          throw error
+        }
       }
     },
+  })
+  const verify = useMutation({
+    mutationKey: ['platform', 'authenticate'],
+    meta: { errorToast: false },
+    mutationFn: async () => {
+      await verifyPlatformEmail({ email: pendingEmail, code: code.trim() })
+      const session = await platformLogin({
+        email: pendingEmail,
+        password: form.getValues('password'),
+      })
+      setPendingEmail('')
+      setCode('')
+      form.reset()
+      await props.onSignedIn(session)
+    },
+  })
+  const resend = useMutation({
+    mutationKey: ['platform', 'authenticate'],
+    meta: { errorToast: false },
+    mutationFn: () => resendPlatformVerification(pendingEmail),
   })
   const methods = (
     <PlatformLoginMethods
@@ -106,12 +138,59 @@ export function PlatformAuthForm(props: {
     : props.status.password_login_enabled
   return (
     <div className='grid gap-4'>
-      {!signUp && methods}
-      <form
-        onSubmit={form.handleSubmit((values) => {
-          if (!disabled) mutation.mutate(values)
-        })}
-      >
+      {pendingEmail && !signUp ? (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (!disabled) verify.mutate()
+          }}
+        >
+          <FieldGroup className='gap-4'>
+            <p className='text-sm'>
+              {t('Enter the verification code sent to {{email}}.', {
+                email: pendingEmail,
+              })}
+            </p>
+            <Field>
+              <FieldLabel htmlFor='platform-verify-code'>
+                {t('Verification code')}
+              </FieldLabel>
+              <Input
+                id='platform-verify-code'
+                inputMode='numeric'
+                autoComplete='one-time-code'
+                value={code}
+                onChange={(event) => setCode(event.target.value)}
+                disabled={busy}
+              />
+            </Field>
+            {(verify.isError || resend.isError) && (
+              <p role='alert' className='text-destructive text-sm'>
+                {(verify.error ?? resend.error)?.message}
+              </p>
+            )}
+            <Button type='submit' disabled={disabled || code.trim().length < 6}>
+              {t('Verify email')}
+            </Button>
+            <Button
+              type='button'
+              variant='outline'
+              disabled={busy}
+              onClick={() => resend.mutate()}
+            >
+              {t('Resend code')}
+            </Button>
+          </FieldGroup>
+        </form>
+      ) : null}
+      {(!pendingEmail || signUp) && (
+        <>
+          {!signUp && methods}
+          <form
+            onSubmit={form.handleSubmit((values) => {
+              if (!disabled) mutation.mutate(values)
+            })}
+          >
         <FieldGroup className='gap-4'>
           {passwordEnabled && (
             <>
@@ -204,6 +283,8 @@ export function PlatformAuthForm(props: {
         </FieldGroup>
       </form>
       {signUp && props.status.oauth_register_enabled && methods}
+        </>
+      )}
     </div>
   )
 }

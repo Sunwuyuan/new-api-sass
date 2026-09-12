@@ -30,7 +30,13 @@ import {
   getServerErrorMessage,
   safeServerErrorMessage,
 } from '@/lib/server-error-message'
-import { tenantBasePath, tenantPath } from '@/lib/tenant'
+import {
+  applyTenantRequestURL,
+  tenantBasePath,
+  tenantPath,
+  WORKSPACE_HEADER,
+  workspaceSlug,
+} from '@/lib/tenant'
 import { useAuthStore } from '@/stores/auth-store'
 
 declare module 'axios' {
@@ -49,6 +55,9 @@ export type ApiRequestConfig = AxiosRequestConfig
 
 export const api = axios.create({
   baseURL: tenantBasePath,
+  // Axios treats `/api/...` as an absolute path and would otherwise ignore
+  // the workspace baseURL, sending `/api/status` without `/t/{slug}`.
+  allowAbsoluteUrls: false,
   withCredentials: true,
   headers: {
     // no-store forbids storage; no-cache also revalidates any older cached response.
@@ -146,6 +155,11 @@ api.interceptors.response.use(
 )
 
 api.interceptors.request.use(async (config) => {
+  applyTenantRequestURL(config)
+  const slug = workspaceSlug()
+  if (slug) {
+    config.headers.set(WORKSPACE_HEADER, slug)
+  }
   if (config.singleUseAuthorization || config.headers.has('X-Security-Proof')) {
     // Refresh before spending a proof/flow, never by replaying its request.
     config.skipAuthRefresh = true

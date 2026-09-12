@@ -18,7 +18,12 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { beforeEach, describe, expect, test } from 'vitest'
 
-import { getTenantBasePath, scopedStorage } from '@/lib/tenant'
+import {
+  applyTenantRequestURL,
+  getTenantBasePath,
+  scopedStorage,
+  tenantPath,
+} from '@/lib/tenant'
 
 beforeEach(() => localStorage.clear())
 
@@ -52,4 +57,48 @@ test('only a valid workspace segment becomes the router base', () => {
   expect(getTenantBasePath('/t/beta')).toBe('/t/beta')
   expect(getTenantBasePath('/platform')).toBe('')
   expect(getTenantBasePath('/t/alpha%2Fbeta/dashboard')).toBe('')
+})
+
+test('workspace requests use that workspace API address', () => {
+  const previous = `${window.location.pathname}${window.location.search}`
+  window.history.pushState({}, '', '/t/alpha/dashboard')
+  try {
+    expect(tenantPath('/api/status')).toBe('/t/alpha/api/status')
+    expect(applyTenantRequestURL({ url: '/api/status' })).toEqual({
+      url: '/t/alpha/api/status',
+      baseURL: '/',
+    })
+    expect(
+      applyTenantRequestURL({
+        url: '/t/alpha/api/user/self',
+        baseURL: '/t/alpha',
+      })
+    ).toEqual({
+      url: '/t/alpha/api/user/self',
+      baseURL: '/',
+    })
+    expect(
+      applyTenantRequestURL({ url: 'https://example.test/api/status' })
+    ).toEqual({
+      url: 'https://example.test/api/status',
+    })
+  } finally {
+    window.history.pushState({}, '', previous)
+  }
+})
+
+test('platform pages do not invent a workspace API address', () => {
+  const previous = `${window.location.pathname}${window.location.search}`
+  window.history.pushState({}, '', '/platform')
+  try {
+    expect(tenantPath('/api/status')).toBe('/api/status')
+    expect(
+      applyTenantRequestURL({ url: '/api/status', baseURL: '/t/alpha' })
+    ).toEqual({
+      url: '/api/status',
+      baseURL: '/',
+    })
+  } finally {
+    window.history.pushState({}, '', previous)
+  }
 })

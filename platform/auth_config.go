@@ -93,10 +93,14 @@ func loadAuthConfig() (AuthConfig, error) {
 		{Slug: "discord", Name: "Discord", Authorization: "https://discord.com/oauth2/authorize", Token: "https://discord.com/api/v10/oauth2/token", UserInfo: "https://discord.com/api/v10/users/@me", Scopes: []string{"identify"}, SubjectPath: "id", NamePath: "username", AuthMethod: "client_secret_post"},
 		{Slug: "linuxdo", Name: "LinuxDO", Authorization: "https://connect.linux.do/oauth2/authorize", Token: "https://connect.linux.do/oauth2/token", UserInfo: "https://connect.linux.do/api/user", SubjectPath: "id", NamePath: "username", AuthMethod: "client_secret_basic"},
 		{Slug: "oidc", Name: "OIDC", Issuer: strings.TrimRight(os.Getenv("PLATFORM_OIDC_ISSUER"), "/"), Scopes: []string{"openid", "profile"}},
+		{Slug: "logto", Name: "厚浪云", Issuer: strings.TrimRight(os.Getenv("PLATFORM_LOGTO_ISSUER"), "/"), Scopes: []string{"openid", "profile", "email"}},
 		{Slug: "telegram", Name: "Telegram", Issuer: "https://oauth.telegram.org", Scopes: []string{"openid", "profile"}, AuthMethod: "client_secret_basic"},
 	}
 	if name := strings.TrimSpace(os.Getenv("PLATFORM_OIDC_NAME")); name != "" {
 		providers[3].Name = name
+	}
+	if name := strings.TrimSpace(os.Getenv("PLATFORM_LOGTO_NAME")); name != "" {
+		providers[4].Name = name
 	}
 	for _, provider := range providers {
 		prefix := "PLATFORM_" + strings.ToUpper(provider.Slug)
@@ -124,7 +128,7 @@ func loadAuthConfig() (AuthConfig, error) {
 			return cfg, errors.New("invalid PLATFORM_CUSTOM_OAUTH_PROVIDERS")
 		}
 		for _, provider := range custom {
-			if slices.Contains([]string{"github", "discord", "oidc", "linuxdo", "telegram", "wechat", "passkey"}, provider.Slug) {
+			if slices.Contains([]string{"github", "discord", "oidc", "logto", "linuxdo", "telegram", "wechat", "passkey"}, provider.Slug) {
 				return cfg, errors.New("custom platform OAuth provider uses a reserved slug")
 			}
 			if _, exists := cfg.Providers[provider.Slug]; exists {
@@ -187,7 +191,7 @@ func (p OAuthProvider) scope() string {
 }
 
 func (s *Server) status(c *gin.Context) {
-	cfg := s.Auth
+	cfg := s.snapshotAuth()
 	custom := make([]gin.H, 0)
 	slugs := make([]string, 0, len(cfg.Providers))
 	for slug := range cfg.Providers {
@@ -200,7 +204,7 @@ func (s *Server) status(c *gin.Context) {
 		if p.Issuer != "" {
 			verificationProviders = append(verificationProviders, slug)
 		}
-		if slices.Contains([]string{"github", "discord", "oidc", "linuxdo", "telegram"}, slug) {
+		if slices.Contains([]string{"github", "discord", "oidc", "logto", "linuxdo", "telegram"}, slug) {
 			continue
 		}
 		custom = append(custom, gin.H{"slug": slug, "name": p.Name})
@@ -209,17 +213,21 @@ func (s *Server) status(c *gin.Context) {
 	_, discord := cfg.Providers["discord"]
 	_, linuxdo := cfg.Providers["linuxdo"]
 	_, oidc := cfg.Providers["oidc"]
+	_, logto := cfg.Providers["logto"]
 	_, telegram := cfg.Providers["telegram"]
+	mail := s.mailPublicStatus()
 	c.JSON(http.StatusOK, gin.H{
 		"success": true, "system_name": cfg.Name, "logo": cfg.Logo,
 		"register_enabled": cfg.Registration && (cfg.PasswordLogin || cfg.OAuthRegistration && (len(cfg.Providers) > 0 || cfg.WeChat.Enabled)), "password_login_enabled": cfg.PasswordLogin,
 		"password_register_enabled": cfg.Registration && cfg.PasswordLogin, "oauth_register_enabled": cfg.Registration && cfg.OAuthRegistration,
 		"github_oauth": github, "discord_oauth": discord, "linuxdo_oauth": linuxdo,
-		"oidc_enabled": oidc, "oidc_display_name": cfg.Providers["oidc"].Name, "telegram_oauth": telegram,
+		"oidc_enabled": oidc, "oidc_display_name": cfg.Providers["oidc"].Name,
+		"logto_oauth": logto, "logto_display_name": cfg.Providers["logto"].Name, "telegram_oauth": telegram,
 		"custom_oauth_providers": custom, "passkey_login": cfg.Passkey,
 		"reauthentication_providers": verificationProviders,
 		"wechat_login":               cfg.WeChat.Enabled, "wechat_qrcode": cfg.WeChat.QRCode,
 		"user_agreement_enabled": cfg.AgreementURL != "", "privacy_policy_enabled": cfg.PrivacyURL != "",
 		"user_agreement_url": cfg.AgreementURL, "privacy_policy_url": cfg.PrivacyURL,
+		"email_verification": mail["email_verification"], "mail": mail,
 	})
 }

@@ -200,6 +200,19 @@ describe('administrator update entry', () => {
     expect(buttons[0]).toHaveFocus()
   })
 
+  test('hosted deployments skip GitHub and show platform-managed updates', async () => {
+    client.setQueryData(STATUS_QUERY_KEY, {
+      version: 'v1.0.0-rc.35',
+      hosted: true,
+      update_check_disabled: true,
+    })
+    render(<SystemUpdateAction compact={false} />, { wrapper: Wrapper })
+    expect(
+      await screen.findByText('Updates are managed by the platform.')
+    ).toBeVisible()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   test('does not suggest a downgrade and updates every entry after a manual recheck', async () => {
     const user = userEvent.setup()
     client.setQueryData(STATUS_QUERY_KEY, { version: 'v1.0.0-rc.37' })

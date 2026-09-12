@@ -44,6 +44,33 @@ func (RedemptionUse) TableName() string { return "platform_redemption_uses" }
 
 var errRedemption = errors.New("redemption unavailable")
 
+func consumeRedemption(tx *gorm.DB, code string, tenantID, expectedPlanID int64, actor User) (plan.Assignment, error) {
+	var entry Redemption
+	if err := tx.Where("code_hash = ?", digest(strings.ToLower(strings.TrimSpace(code)))).First(&entry).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return plan.Assignment{}, errRedemption
+		}
+		return plan.Assignment{}, err
+	}
+	if expectedPlanID > 0 && entry.PlanID != expectedPlanID {
+		return plan.Assignment{}, errRedemption
+	}
+	// Conditional increment enforces the global use limit even when two
+	// different owners redeem simultaneously. Any later failure rolls back.
+	result := tx.Model(&Redemption{}).Where("id = ? AND status = ? AND used < max_uses AND (expires_at IS NULL OR expires_at > ?)", entry.ID, "active", time.Now().UTC()).UpdateColumn("used", gorm.Expr("used + 1"))
+	if result.Error != nil {
+		return plan.Assignment{}, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return plan.Assignment{}, errRedemption
+	}
+	assignment, err := assignWorkspacePlan(tx, tenantID, entry.PlanID, entry.DurationMonths, actor, "redeem", &entry.ID)
+	if err != nil {
+		return plan.Assignment{}, err
+	}
+	return assignment, tx.Create(&RedemptionUse{RedemptionID: entry.ID, TenantID: tenantID, PlatformUserID: actor.ID, AssignmentID: assignment.ID}).Error
+}
+
 func (s *Server) createRedemptions(c *gin.Context) {
 	var input struct {
 		PlanID         int64      `json:"plan_id"`
@@ -189,25 +216,9 @@ func (s *Server) redeem(c *gin.Context) {
 		if _, err := activeUser(tx, actor); err != nil {
 			return err
 		}
-		var entry Redemption
-		if err := tx.Where("code_hash = ?", digest(strings.ToLower(strings.TrimSpace(input.Code)))).First(&entry).Error; err != nil {
-			return err
-		}
-		// Conditional increment enforces the global use limit even when two
-		// different owners redeem simultaneously. Any later failure rolls back.
-		result := tx.Model(&Redemption{}).Where("id = ? AND status = ? AND used < max_uses AND (expires_at IS NULL OR expires_at > ?)", entry.ID, "active", time.Now().UTC()).UpdateColumn("used", gorm.Expr("used + 1"))
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return errRedemption
-		}
 		var err error
-		assignment, err = assignWorkspacePlan(tx, input.TenantID, entry.PlanID, entry.DurationMonths, actor, "redeem", &entry.ID)
-		if err != nil {
-			return err
-		}
-		return tx.Create(&RedemptionUse{RedemptionID: entry.ID, TenantID: input.TenantID, PlatformUserID: actor.ID, AssignmentID: assignment.ID}).Error
+		assignment, err = consumeRedemption(tx, input.Code, input.TenantID, 0, actor)
+		return err
 	})
 	if err != nil {
 		// Missing, expired, disabled, exhausted, replayed, foreign and suspended

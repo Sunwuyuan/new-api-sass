@@ -38,6 +38,8 @@ export type OAuthProviderStatus = Pick<
   | 'discord_oauth'
   | 'oidc_enabled'
   | 'oidc_display_name'
+  | 'logto_oauth'
+  | 'logto_display_name'
   | 'linuxdo_oauth'
   | 'telegram_oauth'
   | 'wechat_login'
@@ -147,6 +149,17 @@ export function OAuthProviderButtons(props: ProviderButtonsProps) {
     })
   }
 
+  if (status?.logto_oauth) {
+    const logtoDisplayName = status.logto_display_name?.trim() || t('厚浪云')
+    providerButtons.push({
+      key: 'logto',
+      label: t('Continue with {{name}}', {
+        name: logtoDisplayName,
+      }),
+      onClick: () => props.onProviderLogin('logto'),
+    })
+  }
+
   if (status?.linuxdo_oauth) {
     providerButtons.push({
       key: 'linuxdo',
@@ -185,7 +198,7 @@ export function OAuthProviderButtons(props: ProviderButtonsProps) {
         <div className='absolute inset-0 flex items-center'>
           <span className='w-full border-t' />
         </div>
-        <div className='relative flex justify-center text-xs uppercase'>
+        <div className='relative flex justify-center text-xs'>
           <span className='bg-background text-muted-foreground px-2'>
             {t('Or continue with')}
           </span>

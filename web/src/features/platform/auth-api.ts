@@ -42,6 +42,7 @@ export type PlatformAuthStatus = OAuthProviderStatus & {
   privacy_policy_enabled: boolean
   user_agreement_url: string
   privacy_policy_url: string
+  email_verification?: boolean
 }
 
 export type PlatformAuthIntent = 'login' | 'link' | 'verify'
@@ -68,6 +69,10 @@ export function platformVerificationMethods(
       status.oidc_enabled &&
       status.reauthentication_providers.includes('oidc') &&
       methods.providers.includes('oidc'),
+    logto_oauth:
+      Boolean(status.logto_oauth) &&
+      status.reauthentication_providers.includes('logto') &&
+      methods.providers.includes('logto'),
     telegram_oauth:
       status.telegram_oauth &&
       status.reauthentication_providers.includes('telegram') &&

@@ -124,13 +124,17 @@ func GetStatus(c *gin.Context) {
 		"passkey_allow_insecure":      passkeySetting.AllowInsecureOrigin,
 		"passkey_user_verification":   passkeySetting.UserVerification,
 		"passkey_attachment":          passkeySetting.AttachmentPreference,
-		"setup":                       true,
+		"setup":                       model.GetSetup(c.Request.Context()) != nil,
+		"hosted":                      true,
+		"update_check_disabled":       true,
 		"user_agreement_enabled":      legalSetting.UserAgreement != "",
 		"privacy_policy_enabled":      legalSetting.PrivacyPolicy != "",
 		"checkin_enabled":             operation_setting.GetCheckinSetting(c.Request.Context()).Enabled,
 	}
 
 	if view, ok := plan.FromContext(c.Request.Context()); ok {
+		data["hosted_plan"] = view
+		data["platform_mail_available"] = view.Capabilities.PlatformEmail
 		data["platform_footer_locked"] = !view.Capabilities.RemovePlatformFooter
 		data["platform_branding_locked"] = !view.Capabilities.CustomBranding
 		if !view.Capabilities.CustomBranding {

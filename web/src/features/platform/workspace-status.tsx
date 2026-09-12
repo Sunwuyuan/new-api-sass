@@ -52,13 +52,15 @@ export function WorkspaceUsageMeter(props: {
       <p className='text-sm tabular-nums'>
         {props.requests.toLocaleString()}{' '}
         <span className='text-muted-foreground'>
-          / {props.limit.toLocaleString()}
+          / {props.limit === 0 ? t('Unlimited') : props.limit.toLocaleString()}
         </span>
       </p>
-      <Progress
-        value={percent}
-        aria-label={t('Monthly usage for {{name}}', { name: props.name })}
-      />
+      {props.limit > 0 ? (
+        <Progress
+          value={percent}
+          aria-label={t('Monthly usage for {{name}}', { name: props.name })}
+        />
+      ) : null}
     </div>
   )
 }

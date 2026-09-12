@@ -8,3 +8,11 @@ type HTTPError struct {
 }
 
 func (e *HTTPError) Error() string { return e.Message }
+
+func (e *HTTPError) Is(target error) bool {
+	other, ok := target.(*HTTPError)
+	if !ok || e == nil || other == nil {
+		return false
+	}
+	return e.Code == other.Code && e.Message == other.Message
+}

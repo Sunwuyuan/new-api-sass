@@ -76,7 +76,7 @@ func (s *Server) oauthClient(ctx context.Context, p OAuthProvider) (*oauth2.Conf
 }
 
 func (s *Server) beginOAuth(c *gin.Context) {
-	p, exists := s.Auth.Providers[c.Param("provider")]
+	p, exists := s.snapshotAuth().Providers[c.Param("provider")]
 	if !exists {
 		writeError(c, http.StatusNotFound, "login_method_disabled")
 		return
@@ -141,7 +141,7 @@ func (s *Server) beginOAuth(c *gin.Context) {
 }
 
 func (s *Server) finishOAuth(c *gin.Context) {
-	p, exists := s.Auth.Providers[c.Param("provider")]
+	p, exists := s.snapshotAuth().Providers[c.Param("provider")]
 	if !exists {
 		writeError(c, http.StatusNotFound, "login_method_disabled")
 		return
@@ -335,10 +335,12 @@ func (s *Server) externalIdentity(c *gin.Context, flow AuthFlow, scope, subject,
 		} else if found {
 			return tx.First(&user, identity.UserID).Error
 		} else {
-			if !s.Auth.Registration || !s.Auth.OAuthRegistration {
+			auth := s.snapshotAuth()
+			if !auth.Registration || !auth.OAuthRegistration {
 				return errAuthFlow
 			}
-			user = User{DisplayName: name, Role: "user", Status: "active", SessionVersion: 1}
+			verified := time.Now().UTC()
+			user = User{DisplayName: name, Role: "user", Status: "active", SessionVersion: 1, EmailVerifiedAt: &verified}
 			if err := tx.Create(&user).Error; err != nil {
 				return err
 			}

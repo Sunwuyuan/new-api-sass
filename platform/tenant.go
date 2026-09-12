@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -48,7 +49,13 @@ func (s *Server) Resolve(gateway http.Handler) gin.HandlerFunc {
 			writeError(c, http.StatusNotFound, "workspace_not_found")
 			return
 		}
-		view, err := plan.ForWorkspace(s.DB.WithContext(c.Request.Context()), workspace, time.Now())
+		now := time.Now()
+		db := s.DB.WithContext(c.Request.Context())
+		if err := plan.DowngradeExpired(db, &workspace, now); err != nil {
+			writeError(c, http.StatusServiceUnavailable, "workspace_unavailable")
+			return
+		}
+		view, err := plan.ForWorkspace(db, workspace, now)
 		if err != nil {
 			writeError(c, http.StatusForbidden, "workspace_inactive")
 			return
@@ -62,10 +69,7 @@ func (s *Server) Resolve(gateway http.Handler) gin.HandlerFunc {
 		ctx = plan.WithContext(ctx, view)
 		ctx, meter := tenant.WithMeter(ctx)
 		request := c.Request.Clone(ctx)
-		request.URL.Path = c.Param("path")
-		if request.URL.Path == "" {
-			request.URL.Path = "/"
-		}
+		request.URL.Path = tenant.GatewayPath(c.Param("path"))
 		request.URL.RawPath = ""
 		request.RequestURI = request.URL.RequestURI()
 		if strings.HasPrefix(request.URL.Path, "/api/performance/") || strings.HasPrefix(request.URL.Path, "/api/system-info/") {
@@ -116,4 +120,19 @@ func gatewayMutation(request *http.Request) bool {
 	// Native plugin submission routes also count; management APIs and polling
 	// GETs do not. Realtime is metered once when its connection is accepted.
 	return request.Method == http.MethodPost || strings.HasPrefix(path, "/v1/realtime")
+}
+
+func (s *Server) WorkspaceSlugFromRequest(c *gin.Context) string {
+	if slug := tenant.SlugFromHeader(c.GetHeader(tenant.WorkspaceHeader)); slug != "" {
+		return slug
+	}
+	raw := c.Request.Referer()
+	if raw == "" {
+		return ""
+	}
+	ref, err := url.Parse(raw)
+	if err != nil || !tenant.AllowReferer(c.Request, ref, s.Origin) {
+		return ""
+	}
+	return tenant.SlugFromPath(ref.Path)
 }

@@ -36,6 +36,7 @@ type WorkspaceState struct {
 	LinuxDOMinimumTrustLevel       int
 	LinuxDOOAuthEnabled            bool
 	LogConsumeEnabled              bool
+	PlatformMailEnabled            bool
 	Logo                           string
 	PasswordLoginEnabled           bool
 	PasswordRegisterEnabled        bool
@@ -126,6 +127,7 @@ func tenantSettings(ctx context.Context) *tenant.Settings[WorkspaceState] {
 			LinuxDOMinimumTrustLevel:       tenant.Clone(LinuxDOMinimumTrustLevel),
 			LinuxDOOAuthEnabled:            tenant.Clone(LinuxDOOAuthEnabled),
 			LogConsumeEnabled:              tenant.Clone(LogConsumeEnabled),
+			PlatformMailEnabled:            tenant.Clone(PlatformMailEnabled),
 			Logo:                           tenant.Clone(Logo),
 			PasswordLoginEnabled:           tenant.Clone(PasswordLoginEnabled),
 			PasswordRegisterEnabled:        tenant.Clone(PasswordRegisterEnabled),

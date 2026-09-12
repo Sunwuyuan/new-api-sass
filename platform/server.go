@@ -3,12 +3,15 @@ package platform
 import (
 	"context"
 	"errors"
+	"html"
 	"net/http"
+	"net/mail"
 	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
@@ -29,6 +32,8 @@ type Server struct {
 	Auth             AuthConfig
 	HTTPClient       *http.Client
 	Passkey          *webauthn.WebAuthn
+	authMu           sync.Mutex
+	Mail             MailSettings
 	providerMu       sync.Mutex
 	providers        map[string]*oidc.Provider
 	InitializeTenant func(context.Context) error
@@ -57,7 +62,10 @@ func New(db *gorm.DB) (*Server, error) {
 	if err := migrateExternalAccountEmails(db); err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}, &Setting{}, &EmailChallenge{}); err != nil {
+		return nil, err
+	}
+	if err := db.Model(&User{}).Where("email_verified_at IS NULL").Update("email_verified_at", gorm.Expr("created_at")).Error; err != nil {
 		return nil, err
 	}
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&AdminGuard{ID: 1}).Error; err != nil {
@@ -75,8 +83,12 @@ func New(db *gorm.DB) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{DB: db, Origin: origin, Secure: secure, DummyHash: hash, Auth: config,
+		Mail:       bootstrapMailFromEnv(defaultMailSettings()),
 		HTTPClient: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 		providers:  make(map[string]*oidc.Provider),
+	}
+	if err := s.loadStoredSettings(); err != nil {
+		return nil, err
 	}
 	if err := s.configurePasskey(); err != nil {
 		return nil, err
@@ -84,6 +96,7 @@ func New(db *gorm.DB) (*Server, error) {
 	if err := s.bootstrapAdmin(); err != nil {
 		return nil, err
 	}
+	common.SendPlatformMail = s.sendWorkspaceMail
 	return s, nil
 }
 
@@ -139,6 +152,8 @@ func (s *Server) Routes(router *gin.Engine) {
 	api.GET("/status", s.status)
 	api.POST("/register", s.register)
 	api.POST("/login", s.login)
+	api.POST("/verify-email", s.verifyEmail)
+	api.POST("/resend-verification", s.resendVerification)
 	api.POST("/oauth/:provider/start", s.beginOAuth)
 	api.POST("/oauth/:provider/finish", s.finishOAuth)
 	api.POST("/wechat/start", s.beginWeChat)
@@ -167,15 +182,22 @@ func (s *Server) Routes(router *gin.Engine) {
 	auth.GET("/tenants/:id", s.workspaceDetail)
 	auth.GET("/usage", s.usageSummary)
 	auth.POST("/tenants", s.createTenant)
+	auth.POST("/tenants/:id", s.updateWorkspace)
+	auth.POST("/tenants/:id/administrator", s.updateWorkspaceAdministrator)
 	auth.POST("/redeem", s.redeem)
 	admin := auth.Group("/admin", requireAdmin)
 	admin.GET("/users", s.users)
 	admin.POST("/users/:id", s.updateUser)
+	admin.GET("/settings", s.adminSettings)
+	admin.POST("/settings", s.updateAdminSettings)
 	admin.GET("/tenants", s.tenants)
 	admin.GET("/tenants/:id", s.workspaceDetail)
 	admin.GET("/usage", s.usageSummary)
 	admin.POST("/tenants/:id/plan", s.assignPlan)
 	admin.POST("/tenants/:id/status", s.setTenantStatus)
+	admin.POST("/tenants/:id/owner", s.transferOwner)
+	admin.POST("/tenants/:id", s.updateWorkspace)
+	admin.POST("/tenants/:id/administrator", s.updateWorkspaceAdministrator)
 	admin.GET("/plans", s.plans)
 	admin.POST("/plans/:id", s.updatePlan)
 	admin.GET("/redemptions", s.redemptions)
@@ -266,12 +288,12 @@ func (s *Server) tenants(c *gin.Context) {
 	}
 	response := gin.H{"success": true, "tenants": views, "pagination": page}
 	if !strings.Contains(c.FullPath(), "/admin/") {
-		capacity, err := workspaceCapacity(db, user.ID, now)
+		available, err := liteAvailable(db, user.ID)
 		if err != nil {
 			transactionError(c, err)
 			return
 		}
-		response["max_workspaces"] = capacity
+		response["lite_available"] = available
 		response["workspace_count"] = user.TenantCount
 	}
 	c.JSON(http.StatusOK, response)
@@ -281,26 +303,47 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
 
 func (s *Server) createTenant(c *gin.Context) {
 	var input struct {
-		Slug string `json:"slug"`
-		Name string `json:"name"`
+		Slug        string `json:"slug"`
+		Name        string `json:"name"`
+		Username    string `json:"username"`
+		DisplayName string `json:"display_name"`
+		Email       string `json:"email"`
+		Password    string `json:"password"`
+		PlanID      int64  `json:"plan_id"`
+		Code        string `json:"code"`
 	}
 	if c.ShouldBindJSON(&input) != nil || !slugPattern.MatchString(input.Slug) || strings.TrimSpace(input.Name) == "" || len([]rune(input.Name)) > 128 {
 		writeError(c, http.StatusBadRequest, "invalid_workspace")
 		return
 	}
+	username := strings.TrimSpace(input.Username)
+	display := strings.TrimSpace(input.DisplayName)
+	email := strings.TrimSpace(input.Email)
+	if username == "" || utf8.RuneCountInString(username) > model.UserNameMaxLength {
+		writeError(c, http.StatusBadRequest, "invalid_workspace_administrator")
+		return
+	}
+	if display == "" {
+		display = username
+	}
+	if utf8.RuneCountInString(display) > 20 {
+		writeError(c, http.StatusBadRequest, "invalid_workspace_administrator")
+		return
+	}
+	if email != "" {
+		address, err := mail.ParseAddress(email)
+		if err != nil || address.Address != email || utf8.RuneCountInString(email) > 50 {
+			writeError(c, http.StatusBadRequest, "invalid_workspace_administrator")
+			return
+		}
+	}
+	if utf8.RuneCountInString(input.Password) < 15 || utf8.RuneCountInString(input.Password) > 128 || common.ValidateNewAccountPassword(input.Password) != nil {
+		writeError(c, http.StatusBadRequest, "invalid_new_password")
+		return
+	}
 	user := c.MustGet("platform_user").(User)
 	workspace := tenant.Workspace{Slug: input.Slug, Name: strings.TrimSpace(input.Name), OwnerPlatformUserID: user.ID, Status: "active"}
-	activationSecret, err := randomSecret()
-	if err != nil {
-		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
-		return
-	}
-	randomPassword, err := randomSecret()
-	if err != nil {
-		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
-		return
-	}
-	hash, err := common.HashAccountPassword(randomPassword)
+	hash, err := common.HashAccountPassword(input.Password)
 	if err != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
@@ -309,31 +352,51 @@ func (s *Server) createTenant(c *gin.Context) {
 		if _, err := activeUser(tx, user); err != nil {
 			return err
 		}
-		capacity, err := workspaceCapacity(tx, user.ID, time.Now().UTC())
+		selected, err := selectedCreatePlan(tx, input.PlanID)
 		if err != nil {
 			return err
 		}
-		var lite plan.Plan
-		if err := tx.Where("name = ?", "Lite").First(&lite).Error; err != nil {
+		workspace.PlanID = selected.ID
+		if selected.Name == "Lite" {
+			ok, err := liteAvailable(tx, user.ID)
+			if err != nil {
+				return err
+			}
+			if !ok {
+				return errLiteTaken
+			}
+		} else {
+			if len(strings.TrimSpace(input.Code)) != 64 {
+				return errRedemption
+			}
+		}
+		if err := tx.Model(&User{}).Where("id = ?", user.ID).UpdateColumn("tenant_count", gorm.Expr("tenant_count + 1")).Error; err != nil {
 			return err
-		}
-		workspace.PlanID = lite.ID
-		result := tx.Model(&User{}).Where("id = ? AND tenant_count < ?", user.ID, capacity).UpdateColumn("tenant_count", gorm.Expr("tenant_count + 1"))
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected != 1 {
-			return errors.New("workspace creation limit reached")
 		}
 		if err := tx.Create(&workspace).Error; err != nil {
 			return err
 		}
-		ctx := tenant.WithContext(c.Request.Context(), tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})
-		root := model.User{Username: "root", Password: hash, DisplayName: "Root User", Role: common.RoleRootUser, Status: common.UserStatusEnabled, AuthVersion: 1, Quota: 0}
-		if err := tx.WithContext(ctx).Create(&root).Error; err != nil {
-			return err
+		if selected.Name != "Lite" {
+			assignment, err := consumeRedemption(tx, input.Code, workspace.ID, selected.ID, user)
+			if err != nil {
+				return err
+			}
+			expires := assignment.ExpiresAt
+			workspace.PlanID = assignment.PlanID
+			workspace.PlanExpiresAt = &expires
 		}
-		if err := tx.WithContext(ctx).Create(&model.Setup{Version: common.Version, InitializedAt: time.Now().Unix()}).Error; err != nil {
+		ctx := tenant.WithContext(c.Request.Context(), tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})
+		root := model.User{
+			Username:    username,
+			Password:    hash,
+			DisplayName: display,
+			Email:       email,
+			Role:        common.RoleRootUser,
+			Status:      common.UserStatusEnabled,
+			AuthVersion: 1,
+			Quota:       0,
+		}
+		if err := tx.WithContext(ctx).Create(&root).Error; err != nil {
 			return err
 		}
 		for key, value := range map[string]string{"SystemName": workspace.Name, "ServerAddress": s.Origin + "/t/" + workspace.Slug} {
@@ -341,16 +404,26 @@ func (s *Server) createTenant(c *gin.Context) {
 				return err
 			}
 		}
-		if err := tx.Create(&RootActivation{TenantID: workspace.ID, UserID: root.Id, TokenHash: digest(activationSecret), ExpiresAt: time.Now().UTC().Add(30 * time.Minute)}).Error; err != nil {
-			return err
-		}
-		return audit(tx, user.ID, "workspace.create", workspace.ID, gin.H{"slug": workspace.Slug})
+		return audit(tx, user.ID, "workspace.create", workspace.ID, gin.H{"slug": workspace.Slug, "plan_id": workspace.PlanID})
 	})
 	if err != nil {
+		if errors.Is(err, errRedemption) {
+			writeError(c, http.StatusBadRequest, "redemption_unavailable")
+			return
+		}
+		var failure *tenant.HTTPError
+		if errors.As(err, &failure) {
+			transactionError(c, err)
+			return
+		}
 		writeError(c, http.StatusConflict, "workspace_unavailable_or_limit_reached")
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"success": true, "tenant": workspace, "root_username": "root", "root_activation_url": "/t/" + workspace.Slug + "/activate#token=" + activationSecret})
+	if user.Email != nil {
+		s.notify(c.Request.Context(), *user.Email, "Workspace ready",
+			"<p>Your workspace <strong>"+html.EscapeString(workspace.Name)+"</strong> is ready.</p><p>Open <a href=\""+html.EscapeString(s.Origin)+"/t/"+html.EscapeString(workspace.Slug)+"/setup\">setup</a> and sign in with the administrator account you created.</p>")
+	}
+	c.JSON(http.StatusCreated, gin.H{"success": true, "tenant": workspace, "setup_url": "/t/" + workspace.Slug + "/setup"})
 }
 
 func (s *Server) ActivateRoot(c *gin.Context) {
@@ -384,7 +457,11 @@ func (s *Server) ActivateRoot(c *gin.Context) {
 		if result.RowsAffected != 1 {
 			return errors.New("activation already used")
 		}
-		return tx.Model(&model.User{}).Where("id = ?", activation.UserID).Update("password", hash).Error
+		if err := tx.Model(&model.User{}).Where("id = ?", activation.UserID).Update("password", hash).Error; err != nil {
+			return err
+		}
+		_, err := model.IncrementUserAuthVersionWithTx(tx, activation.UserID)
+		return err
 	})
 	if err != nil {
 		writeError(c, http.StatusBadRequest, "invalid_activation")
@@ -443,29 +520,38 @@ func (s *Server) setTenantStatus(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
-// An owner's capacity is the largest entitlement among their active, unexpired
-// workspaces, with Lite as the baseline. Downgrades preserve existing spaces but
-// prevent new creation until the owner is below the effective limit.
-func workspaceCapacity(db *gorm.DB, userID int64, now time.Time) (int, error) {
-	var workspaces []tenant.Workspace
-	if err := db.Where("owner_platform_user_id = ? AND status = ? AND (plan_expires_at IS NULL OR plan_expires_at > ?)", userID, "active", now).Find(&workspaces).Error; err != nil {
-		return 0, err
+// One free Lite workspace per owner. Paid workspaces are created with a
+// redemption code and do not consume this entitlement.
+func liteAvailable(db *gorm.DB, userID int64) (bool, error) {
+	var lite plan.Plan
+	if err := db.Where("name = ?", "Lite").First(&lite).Error; err != nil {
+		return false, err
 	}
-	ids := make([]int64, 0, len(workspaces))
-	for _, workspace := range workspaces {
-		ids = append(ids, workspace.PlanID)
+	var count int64
+	if err := db.Model(&tenant.Workspace{}).Where("owner_platform_user_id = ? AND plan_id = ? AND plan_expires_at IS NULL", userID, lite.ID).Count(&count).Error; err != nil {
+		return false, err
 	}
-	var plans []plan.Plan
-	if err := db.Where("name = ? OR id IN ?", "Lite", ids).Find(&plans).Error; err != nil {
-		return 0, err
-	}
-	capacity := 0
-	for _, p := range plans {
-		view, err := p.View()
-		if err != nil {
-			return 0, err
-		}
-		capacity = max(capacity, view.Capabilities.MaxWorkspaces)
-	}
-	return capacity, nil
+	return count == 0, nil
 }
+
+func selectedCreatePlan(db *gorm.DB, planID int64) (plan.Plan, error) {
+	var selected plan.Plan
+	query := db
+	if planID > 0 {
+		query = query.Where("id = ?", planID)
+	} else {
+		query = query.Where("name = ?", "Lite")
+	}
+	if err := query.First(&selected).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return selected, &tenant.HTTPError{Status: http.StatusBadRequest, Code: "invalid_plan"}
+		}
+		return selected, err
+	}
+	if _, err := selected.View(); err != nil {
+		return selected, err
+	}
+	return selected, nil
+}
+
+var errLiteTaken = &tenant.HTTPError{Status: http.StatusConflict, Code: "lite_workspace_already_exists"}

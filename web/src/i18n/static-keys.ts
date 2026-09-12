@@ -735,6 +735,7 @@ export const STATIC_I18N_KEYS = [
   'Cancelled at',
   'Too many active login sessions. On a device where you are already signed in, open Login sessions and use “Sign out other sessions” to revoke them. If you cannot access a signed-in device, reset your password to sign out all sessions.',
   'Too many login sessions were created recently. Please wait for the rolling window to pass, then try again.',
+  'Open this workspace from the platform console.',
   'Telegram binding is disabled.',
   'The Telegram authorization request is invalid or expired.',
   'This Telegram binding request has expired or has already been used.',

@@ -112,6 +112,11 @@ const workspace = createRoute({
   path: '/platform/workspaces/$workspaceId',
   component: lazyRouteComponent(() => import('./workspace-detail')),
 })
+const workspaceAdministrators = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/workspaces/$workspaceId/administrators',
+  component: lazyRouteComponent(() => import('./workspace-administrators')),
+})
 const usage = createRoute({
   getParentRoute: () => authenticated,
   path: '/platform/usage',
@@ -120,7 +125,9 @@ const usage = createRoute({
 const redeem = createRoute({
   getParentRoute: () => authenticated,
   path: '/platform/redeem',
-  component: lazyRouteComponent(() => import('./redeem-page')),
+  beforeLoad: () => {
+    throw redirect({ href: '/platform/plans', replace: true })
+  },
 })
 const admin = createRoute({
   getParentRoute: () => authenticated,
@@ -155,6 +162,11 @@ const adminWorkspace = createRoute({
   path: 'workspaces/$workspaceId',
   component: lazyRouteComponent(() => import('./workspace-detail')),
 })
+const adminWorkspaceAdministrators = createRoute({
+  getParentRoute: () => admin,
+  path: 'workspaces/$workspaceId/administrators',
+  component: lazyRouteComponent(() => import('./workspace-administrators')),
+})
 const plans = createRoute({
   getParentRoute: () => admin,
   path: 'plans',
@@ -169,6 +181,11 @@ const audits = createRoute({
   getParentRoute: () => admin,
   path: 'audits',
   component: lazyRouteComponent(() => import('./admin/audits')),
+})
+const adminSettings = createRoute({
+  getParentRoute: () => admin,
+  path: 'settings',
+  component: lazyRouteComponent(() => import('./admin/settings')),
 })
 const adminUsage = createRoute({
   getParentRoute: () => admin,
@@ -185,6 +202,7 @@ const routeTree = root.addChildren([
     hostingPlans,
     createWorkspace,
     workspace,
+    workspaceAdministrators,
     usage,
     redeem,
     admin.addChildren([
@@ -192,9 +210,11 @@ const routeTree = root.addChildren([
       users,
       workspaces,
       adminWorkspace,
+      adminWorkspaceAdministrators,
       plans,
       redemptions,
       audits,
+      adminSettings,
       adminUsage,
     ]),
   ]),

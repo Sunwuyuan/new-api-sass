@@ -22,12 +22,16 @@ import { useTranslation } from 'react-i18next'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 
-import { getWorkspaces } from './api'
+import { getHostingPlans, getWorkspaces } from './api'
 import { CreateWorkspace } from './create-workspace'
 import { PlatformLink } from './navigation'
 
 export default function PlatformCreatePage() {
   const { t } = useTranslation()
+  const plans = useQuery({
+    queryKey: ['platform', 'plans'],
+    queryFn: getHostingPlans,
+  })
   const workspaces = useQuery({
     queryKey: ['platform', 'tenants', 'capacity'],
     queryFn: () => getWorkspaces(false, { page: 1, page_size: 1 }),
@@ -46,24 +50,20 @@ export default function PlatformCreatePage() {
           {t('Set up an independent API workspace.')}
         </p>
       </header>
-      {workspaces.isPending && <LoadingState />}
-      {workspaces.isError && (
-        <ErrorState onRetry={() => void workspaces.refetch()} />
+      {(plans.isPending || workspaces.isPending) && <LoadingState />}
+      {(plans.isError || workspaces.isError) && (
+        <ErrorState
+          onRetry={() => {
+            void plans.refetch()
+            void workspaces.refetch()
+          }}
+        />
       )}
-      {workspaces.data && (
-        <>
-          <p className='text-muted-foreground text-sm'>
-            {t('Workspace capacity: {{used}} / {{limit}}', {
-              used: workspaces.data.workspace_count,
-              limit: workspaces.data.max_workspaces,
-            })}
-          </p>
-          <CreateWorkspace
-            disabled={
-              workspaces.data.workspace_count >= workspaces.data.max_workspaces
-            }
-          />
-        </>
+      {plans.data && workspaces.data && (
+        <CreateWorkspace
+          plans={plans.data}
+          liteAvailable={workspaces.data.lite_available !== false}
+        />
       )}
     </section>
   )

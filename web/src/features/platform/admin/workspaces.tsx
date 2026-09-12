@@ -88,8 +88,14 @@ export default function PlatformWorkspaces() {
     {
       id: 'usage',
       header: t('Monthly requests'),
-      cell: ({ row }) =>
-        `${row.original.usage.requests.toLocaleString()} / ${plans.data?.find((plan) => plan.id === row.original.tenant.plan_id)?.limits.requests.toLocaleString() ?? '—'}`,
+      cell: ({ row }) => {
+        const limit =
+          plans.data?.find((plan) => plan.id === row.original.tenant.plan_id)
+            ?.limits.requests
+        return `${row.original.usage.requests.toLocaleString()} / ${
+          limit === 0 ? t('Unlimited') : (limit?.toLocaleString() ?? '—')
+        }`
+      },
     },
     {
       id: 'expiry',
@@ -122,6 +128,13 @@ export default function PlatformWorkspaces() {
             name: row.original.tenant.name,
           })}
         >
+          <DropdownMenuItem
+            onClick={() => {
+              window.location.assign(`/t/${row.original.tenant.slug}/`)
+            }}
+          >
+            {t('Enter workspace')}
+          </DropdownMenuItem>
           <DropdownMenuItem
             disabled={!plans.data}
             onClick={() => setAssign(row.original.tenant)}

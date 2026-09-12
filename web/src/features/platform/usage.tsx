@@ -77,12 +77,13 @@ export default function PlatformUsage() {
     {
       id: 'remaining',
       header: t('Remaining requests'),
-      cell: ({ row }) =>
-        Math.max(
-          0,
-          (plans.data?.find((plan) => plan.id === row.original.tenant.plan_id)
-            ?.limits.requests ?? 0) - row.original.usage.requests
-        ).toLocaleString(),
+      cell: ({ row }) => {
+        const limit =
+          plans.data?.find((plan) => plan.id === row.original.tenant.plan_id)
+            ?.limits.requests ?? 0
+        if (limit === 0) return t('Unlimited')
+        return Math.max(0, limit - row.original.usage.requests).toLocaleString()
+      },
     },
     {
       id: 'status',

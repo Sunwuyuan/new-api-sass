@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,6 +90,12 @@ func saasPassword(t *testing.T) string {
 	return hex.EncodeToString(data[:])
 }
 
+func platformTenantBody(name, slug, password string) map[string]string {
+	return map[string]string{
+		"name": name, "slug": slug, "username": "root", "password": password,
+	}
+}
+
 // Run this contract against each real engine by setting SAAS_TEST_DSN and
 // SAAS_TEST_LOG_DSN to empty, disposable databases. The default is real SQLite.
 func TestSaaSContracts(t *testing.T) {
@@ -149,28 +154,18 @@ func TestSaaSContracts(t *testing.T) {
 
 	var alpha, beta tenant.Workspace
 	roots := make(map[string]*saasBrowser)
-	activations := make(map[string]string)
 	for _, slug := range []string{"alpha", "beta"} {
 		if slug == "beta" {
 			// Capacity comes from a live Standard entitlement. Return Alpha to
 			// Lite afterwards so the original isolation/limit cases stay intact.
 			require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 3, "months": 1}, nil).Code)
 		}
+		password := saasPassword(t)
 		var created struct {
 			Tenant tenant.Workspace
-			URL    string `json:"root_activation_url"`
 		}
-		require.Equal(t, http.StatusCreated, owner.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": slug, "slug": slug}, &created).Code)
-		fragment := strings.SplitN(created.URL, "#", 2)
-		require.Len(t, fragment, 2)
-		values, err := url.ParseQuery(fragment[1])
-		require.NoError(t, err)
-		activations[slug] = values.Get("token")
+		require.Equal(t, http.StatusCreated, owner.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody(slug, slug, password), &created).Code)
 		root := &saasBrowser{handler: server}
-		password := saasPassword(t)
-		activation := map[string]string{"token": activations[slug], "password": password}
-		require.Equal(t, http.StatusOK, root.request(t, http.MethodPost, "/t/"+slug+"/api/saas/activate", activation, nil).Code)
-		require.Equal(t, http.StatusBadRequest, root.request(t, http.MethodPost, "/t/"+slug+"/api/saas/activate", activation, nil).Code)
 		var signed struct {
 			Success bool
 			Data    service.AuthBundle
@@ -204,7 +199,45 @@ func TestSaaSContracts(t *testing.T) {
 		assert.Equal(t, http.StatusForbidden, owner.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/plan", alpha.ID), map[string]int{"plan_id": 2, "months": 1}, nil).Code)
 		assert.Equal(t, http.StatusUnauthorized, roots["alpha"].request(t, http.MethodGet, "/t/beta/api/user/self", nil, nil).Code)
 		assert.Equal(t, http.StatusUnauthorized, owner.request(t, http.MethodGet, "/t/alpha/api/user/self", nil, nil).Code)
-		assert.Equal(t, http.StatusNotFound, owner.request(t, http.MethodGet, "/api/user/self", nil, nil).Code)
+		var unscoped struct {
+			Success bool
+			Code    string `json:"code"`
+		}
+		require.Equal(t, http.StatusNotFound, owner.request(t, http.MethodGet, "/api/user/self", nil, &unscoped).Code)
+		assert.Equal(t, "tenant_context_required", unscoped.Code)
+		reqStatus := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		reqStatus.Host = "localhost:3000"
+		reqStatus.Header.Set("Referer", "http://localhost:3000/t/alpha/dashboard")
+		recStatus := httptest.NewRecorder()
+		server.ServeHTTP(recStatus, reqStatus)
+		require.Equal(t, http.StatusOK, recStatus.Code)
+		reqHeader := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		reqHeader.Host = "localhost:3000"
+		reqHeader.Header.Set(tenant.WorkspaceHeader, "alpha")
+		recHeader := httptest.NewRecorder()
+		server.ServeHTTP(recHeader, reqHeader)
+		require.Equal(t, http.StatusOK, recHeader.Code)
+		reqEvil := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		reqEvil.Host = "localhost:3000"
+		reqEvil.Header.Set("Referer", "https://evil.test/t/alpha/dashboard")
+		recEvil := httptest.NewRecorder()
+		server.ServeHTTP(recEvil, reqEvil)
+		require.Equal(t, http.StatusNotFound, recEvil.Code)
+		assert.Contains(t, recEvil.Body.String(), "tenant_context_required")
+		reqProxy := httptest.NewRequest(http.MethodGet, "/api/status", nil)
+		reqProxy.Host = "localhost:3000"
+		reqProxy.Header.Set("Referer", "http://localhost:5173/t/alpha/dashboard")
+		reqProxy.Header.Set("X-Forwarded-Host", "localhost:5173")
+		recProxy := httptest.NewRecorder()
+		server.ServeHTTP(recProxy, reqProxy)
+		require.Equal(t, http.StatusOK, recProxy.Code)
+		reqPage := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
+		reqPage.Host = "localhost:3000"
+		reqPage.Header.Set("Accept", "text/html")
+		reqPage.Header.Set("Referer", "http://localhost:3000/t/alpha/dashboard")
+		recPage := httptest.NewRecorder()
+		server.ServeHTTP(recPage, reqPage)
+		require.Equal(t, http.StatusNotFound, recPage.Code)
 		forged := *owner
 		forged.csrf = "wrong"
 		assert.Equal(t, http.StatusForbidden, forged.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "csrf", "slug": "csrf"}, nil).Code)
@@ -311,15 +344,15 @@ func TestSaaSContracts(t *testing.T) {
 		assert.Equal(t, "New API", status.Data.SystemName, "downgrades hide previously saved custom branding")
 		assert.Empty(t, status.Data.Logo)
 		assert.NotEmpty(t, status.Data.Footer)
-		view, err := plan.Current(alphaCtx, model.DB)
+		require.NoError(t, model.DB.WithContext(alphaCtx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
+		require.NoError(t, model.DB.WithContext(alphaCtx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
+		hash, err := common.HashAccountPassword(saasPassword(t))
 		require.NoError(t, err)
-		var count int64
-		require.NoError(t, model.DB.WithContext(alphaCtx).Model(&model.Token{}).Count(&count).Error)
-		for range view.Limits.Tokens - count {
-			require.NoError(t, model.DB.WithContext(alphaCtx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
-		}
 		var limitError *tenant.HTTPError
-		require.ErrorAs(t, model.DB.WithContext(alphaCtx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error, &limitError)
+		require.ErrorAs(t, model.DB.WithContext(alphaCtx).Create(&model.User{
+			Username: "second", Password: hash, Role: common.RoleCommonUser,
+			Status: common.UserStatusEnabled, AuthVersion: 1,
+		}).Error, &limitError)
 		assert.Equal(t, "tenant_resource_limit_exceeded", limitError.Code)
 		require.NoError(t, model.DB.WithContext(betaCtx).Create(&model.Token{UserId: 2, Key: saasPassword(t)}).Error)
 	})
@@ -450,18 +483,25 @@ func TestSaaSContracts(t *testing.T) {
 		testSaaSPhase2(t, saas, server, admin, adminPassword)
 	})
 
-	t.Run("activation expiry and platform password changes revoke sessions", func(t *testing.T) {
+	t.Run("workspace creation requires administrator credentials and platform password changes revoke sessions", func(t *testing.T) {
+		assert.Equal(t, http.StatusBadRequest, owner.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Expired", "slug": "expired"}, nil).Code)
+		password := saasPassword(t)
+		batch := createPlatformCodes(t, admin, 3, 1, 1, 1)
 		var created struct {
 			Tenant tenant.Workspace
-			URL    string `json:"root_activation_url"`
 		}
-		require.Equal(t, http.StatusCreated, owner.request(t, http.MethodPost, "/platform/api/tenants", map[string]string{"name": "Expired", "slug": "expired"}, &created).Code)
-		require.NoError(t, model.DB.Model(&platform.RootActivation{}).Where("tenant_id = ?", created.Tenant.ID).Update("expires_at", time.Now().Add(-time.Minute)).Error)
-		parts := strings.SplitN(created.URL, "#", 2)
-		require.Len(t, parts, 2)
-		values, err := url.ParseQuery(parts[1])
-		require.NoError(t, err)
-		assert.Equal(t, http.StatusBadRequest, owner.request(t, http.MethodPost, "/t/expired/api/saas/activate", map[string]string{"token": values.Get("token"), "password": saasPassword(t)}, nil).Code)
+		require.Equal(t, http.StatusCreated, owner.request(t, http.MethodPost, "/platform/api/tenants", map[string]any{
+			"name": "Ready", "slug": "ready", "username": "root", "password": password,
+			"plan_id": 3, "code": batch.Codes[0],
+		}, &created).Code)
+		root := &saasBrowser{handler: server}
+		var signed struct {
+			Success bool
+			Data    service.AuthBundle
+		}
+		login := root.request(t, http.MethodPost, "/t/ready/api/user/login", map[string]string{"username": "root", "password": password}, &signed)
+		require.Equal(t, http.StatusOK, login.Code)
+		require.True(t, signed.Success)
 		otherSession := &saasBrowser{handler: server}
 		otherSession.login(t, "owner@example.test", ownerPassword)
 		changedPassword := saasPassword(t)
@@ -472,7 +512,7 @@ func TestSaaSContracts(t *testing.T) {
 		owner.login(t, "owner@example.test", changedPassword)
 		require.Equal(t, http.StatusOK, owner.request(t, http.MethodPost, "/platform/api/logout", nil, nil).Code)
 		assert.Equal(t, http.StatusUnauthorized, owner.request(t, http.MethodGet, "/platform/api/session", nil, nil).Code)
-		require.NoError(t, model.DB.Model(&platform.Session{}).Where("user_id = ?", 1).Update("last_seen", time.Now().Add(-time.Hour)).Error)
+		require.NoError(t, model.DB.Model(&platform.Session{}).Where("user_id = ?", 1).Update("last_seen", time.Now().UTC().Add(-time.Hour)).Error)
 		assert.Equal(t, http.StatusUnauthorized, admin.request(t, http.MethodGet, "/platform/api/session", nil, nil).Code)
 	})
 }

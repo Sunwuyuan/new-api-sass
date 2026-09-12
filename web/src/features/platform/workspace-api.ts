@@ -19,7 +19,16 @@ For commercial licensing, please contact support@quantumnous.com
 import { platformClient } from './api'
 import type { HostingPlan, PlanAssignment, Workspace } from './types'
 
-export type UsageMonth = { month: string; requests: number }
+export type WorkspaceAdministrator = {
+  id: number
+  username: string
+  display_name?: string
+  email?: string
+  status?: number
+  role?: 'root' | 'admin'
+}
+
+export type UsageMonth = { month: string; requests: number; emails?: number }
 export type WorkspaceDetail = {
   tenant: Workspace
   owner_name: string
@@ -27,6 +36,8 @@ export type WorkspaceDetail = {
   usage: UsageMonth
   history: UsageMonth[]
   assignments: Array<PlanAssignment & { created_at: string }>
+  administrators?: WorkspaceAdministrator[]
+  setup_complete?: boolean
 }
 export type UsageSummary = {
   month: string

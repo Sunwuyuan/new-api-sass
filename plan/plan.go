@@ -14,20 +14,31 @@ import (
 )
 
 var ErrLimit = errors.New("monthly request limit reached; ask the platform administrator to upgrade your plan")
-var ErrInactive = errors.New("workspace is suspended or its monthly plan has expired")
+var ErrEmailLimit = errors.New("monthly platform email limit reached; ask the platform administrator to upgrade your plan")
+var ErrInactive = errors.New("workspace is suspended")
 var ErrCapability = &tenant.HTTPError{Status: 403, Code: "plan_capability_denied", Message: "Your hosting plan requires the platform footer"}
+var ErrExpiredResources = &tenant.HTTPError{Status: 403, Code: "tenant_resource_limit_exceeded", Message: "Renew the hosting plan before creating tokens or channels"}
 
 type Limits struct {
 	Requests int64 `json:"requests"`
 	Users    int64 `json:"users"`
 	Tokens   int64 `json:"tokens"`
 	Channels int64 `json:"channels"`
+	Emails   int64 `json:"emails"`
 }
 
 type Capabilities struct {
 	RemovePlatformFooter bool `json:"remove_platform_footer"`
 	CustomBranding       bool `json:"custom_branding"`
 	MaxWorkspaces        int  `json:"max_workspaces"`
+	PlatformEmail        bool `json:"platform_email"`
+	TaskPlugins          bool `json:"task_plugins"`
+	DataExport           bool `json:"data_export"`
+	WorkspaceOAuth       bool `json:"workspace_oauth"`
+	Topup                bool `json:"topup"`
+	Affiliate            bool `json:"affiliate"`
+	Passkey              bool `json:"passkey"`
+	CustomModels         bool `json:"custom_models"`
 }
 
 type Plan struct {
@@ -54,7 +65,7 @@ func (p Plan) View() (View, error) {
 	if err := common.UnmarshalJsonStr(p.Capabilities, &v.Capabilities); err != nil {
 		return v, err
 	}
-	if v.Limits.Requests <= 0 || v.Limits.Users <= 0 || v.Limits.Tokens <= 0 || v.Limits.Channels <= 0 {
+	if v.Limits.Requests < 0 || v.Limits.Users < 0 || v.Limits.Tokens < 0 || v.Limits.Channels < 0 || v.Limits.Emails < 0 {
 		return v, errors.New("hosting plan contains invalid limits")
 	}
 	if v.Capabilities.MaxWorkspaces < 1 || v.Capabilities.MaxWorkspaces > 1000 {
@@ -67,6 +78,7 @@ type Usage struct {
 	TenantID int64  `json:"tenant_id" gorm:"primaryKey;autoIncrement:false"`
 	Month    string `json:"month" gorm:"size:7;primaryKey"`
 	Requests int64  `json:"requests" gorm:"not null"`
+	Emails   int64  `json:"emails" gorm:"not null;default:0"`
 }
 
 func (Usage) TableName() string { return "tenant_usage" }
@@ -84,6 +96,35 @@ type Assignment struct {
 }
 
 func (Assignment) TableName() string { return "plan_assignments" }
+
+func Defaults() []View {
+	return []View{
+		{
+			Name: "Lite", Price: "Free",
+			Limits: Limits{Requests: 10000, Users: 1},
+			Capabilities: Capabilities{
+				MaxWorkspaces: 1, PlatformEmail: true, TaskPlugins: true, DataExport: true, Passkey: true,
+			},
+		},
+		{
+			Name: "Pro", Price: "Contact administrator",
+			Limits: Limits{Requests: 0, Users: 0},
+			Capabilities: Capabilities{
+				RemovePlatformFooter: true, CustomBranding: true, MaxWorkspaces: 20,
+				PlatformEmail: true, TaskPlugins: true, DataExport: true, WorkspaceOAuth: true,
+				Topup: true, Affiliate: true, Passkey: true, CustomModels: true,
+			},
+		},
+		{
+			Name: "Standard", Price: "Contact administrator",
+			Limits: Limits{Requests: 100000, Users: 1000},
+			Capabilities: Capabilities{
+				CustomBranding: true, MaxWorkspaces: 5, PlatformEmail: true, TaskPlugins: true,
+				DataExport: true, WorkspaceOAuth: true, Topup: true, Passkey: true,
+			},
+		},
+	}
+}
 
 func Migrate(db *gorm.DB) error {
 	if err := db.AutoMigrate(&Plan{}, &tenant.Workspace{}, &Usage{}, &Assignment{}); err != nil {
@@ -106,11 +147,7 @@ func Migrate(db *gorm.DB) error {
 			}
 		}
 	}
-	for _, entry := range []View{
-		{Name: "Lite", Price: "Free", Limits: Limits{Requests: 1000, Users: 5, Tokens: 20, Channels: 3}, Capabilities: Capabilities{MaxWorkspaces: 1}},
-		{Name: "Pro", Price: "Contact administrator", Limits: Limits{Requests: 100000, Users: 1000, Tokens: 10000, Channels: 100}, Capabilities: Capabilities{RemovePlatformFooter: true, CustomBranding: true, MaxWorkspaces: 10}},
-		{Name: "Standard", Price: "Contact administrator", Limits: Limits{Requests: 20000, Users: 50, Tokens: 200, Channels: 20}, Capabilities: Capabilities{CustomBranding: true, MaxWorkspaces: 3}},
-	} {
+	for _, entry := range Defaults() {
 		limits, err := common.Marshal(entry.Limits)
 		if err != nil {
 			return err
@@ -123,42 +160,103 @@ func Migrate(db *gorm.DB) error {
 		if err := db.Where("name = ?", p.Name).FirstOrCreate(&p).Error; err != nil {
 			return err
 		}
-		// Backfill only absent capabilities. Existing Pro IDs, prices, limits,
-		// and explicit administrator capability overrides survive upgrades.
-		var stored, defaults map[string]any
-		if err := common.UnmarshalJsonStr(p.Capabilities, &stored); err != nil {
+		if err := backfillJSON(db, &p, "limits", p.Limits, string(limits)); err != nil {
 			return err
 		}
-		if stored == nil {
-			return errors.New("hosting plan capabilities must be an object")
-		}
-		if err := common.Unmarshal(capabilities, &defaults); err != nil {
+		if err := backfillJSON(db, &p, "capabilities", p.Capabilities, string(capabilities)); err != nil {
 			return err
 		}
-		changed := false
-		for key, value := range defaults {
-			if _, exists := stored[key]; !exists {
-				stored[key] = value
-				changed = true
-			}
-		}
-		if changed {
-			encoded, err := common.Marshal(stored)
-			if err != nil {
-				return err
-			}
-			if err := db.Model(&p).Update("capabilities", string(encoded)).Error; err != nil {
-				return err
-			}
+		if err := syncBuiltinPlanPolicy(db, &p, entry); err != nil {
+			return err
 		}
 	}
 	return db.Model(&Assignment{}).Where("platform_user_id = ?", 0).
 		UpdateColumn("platform_user_id", gorm.Expr("administrator_id")).Error
 }
 
+// Backfill only absent keys. Administrator overrides and existing numeric
+// ceilings survive upgrades.
+func backfillJSON(db *gorm.DB, p *Plan, column, storedJSON, defaultsJSON string) error {
+	var stored, defaults map[string]any
+	if err := common.UnmarshalJsonStr(storedJSON, &stored); err != nil {
+		return err
+	}
+	if stored == nil {
+		return errors.New("hosting plan " + column + " must be an object")
+	}
+	if err := common.UnmarshalJsonStr(defaultsJSON, &defaults); err != nil {
+		return err
+	}
+	changed := false
+	for key, value := range defaults {
+		if _, exists := stored[key]; !exists {
+			stored[key] = value
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	encoded, err := common.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	return db.Model(p).Update(column, string(encoded)).Error
+}
+
+// Builtin request/user ceilings are product policy. Token, channel and email
+// counts are not consumption gates and stay unlimited.
+func syncBuiltinPlanPolicy(db *gorm.DB, p *Plan, entry View) error {
+	if err := db.First(p, p.ID).Error; err != nil {
+		return err
+	}
+	view, err := p.View()
+	if err != nil {
+		return err
+	}
+	if view.Limits.Requests == entry.Limits.Requests &&
+		view.Limits.Users == entry.Limits.Users &&
+		view.Limits.Tokens == 0 && view.Limits.Channels == 0 && view.Limits.Emails == 0 &&
+		view.Capabilities.DataExport {
+		return nil
+	}
+	view.Limits.Requests = entry.Limits.Requests
+	view.Limits.Users = entry.Limits.Users
+	view.Limits.Tokens = 0
+	view.Limits.Channels = 0
+	view.Limits.Emails = 0
+	view.Capabilities.DataExport = true
+	limits, err := common.Marshal(view.Limits)
+	if err != nil {
+		return err
+	}
+	capabilities, err := common.Marshal(view.Capabilities)
+	if err != nil {
+		return err
+	}
+	return db.Model(p).Updates(map[string]any{
+		"limits": string(limits), "capabilities": string(capabilities),
+	}).Error
+}
+
+func Expired(workspace tenant.Workspace, now time.Time) bool {
+	return workspace.PlanExpiresAt != nil && !workspace.PlanExpiresAt.After(now)
+}
+
+func Lite(db *gorm.DB) (View, error) {
+	var p Plan
+	if err := db.Where("name = ?", "Lite").First(&p).Error; err != nil {
+		return View{}, err
+	}
+	return p.View()
+}
+
 func ForWorkspace(db *gorm.DB, workspace tenant.Workspace, now time.Time) (View, error) {
-	if workspace.Status != "active" || workspace.PlanExpiresAt != nil && !workspace.PlanExpiresAt.After(now) {
+	if workspace.Status != "active" {
 		return View{}, ErrInactive
+	}
+	if Expired(workspace, now) {
+		return Lite(db)
 	}
 	var p Plan
 	if err := db.First(&p, workspace.PlanID).Error; err != nil {
@@ -167,9 +265,37 @@ func ForWorkspace(db *gorm.DB, workspace tenant.Workspace, now time.Time) (View,
 	return p.View()
 }
 
+// DowngradeExpired switches a lapsed paid workspace onto Lite without removing
+// users, tokens or channels. PlanExpiresAt stays so the UI can ask for renewal.
+func DowngradeExpired(db *gorm.DB, workspace *tenant.Workspace, now time.Time) error {
+	if workspace == nil || workspace.Status != "active" || !Expired(*workspace, now) {
+		return nil
+	}
+	var lite Plan
+	if err := db.Where("name = ?", "Lite").First(&lite).Error; err != nil {
+		return err
+	}
+	if workspace.PlanID == lite.ID {
+		return nil
+	}
+	if err := db.Model(workspace).Update("plan_id", lite.ID).Error; err != nil {
+		return err
+	}
+	workspace.PlanID = lite.ID
+	return nil
+}
+
 // Reserve uses a conditional update so concurrent replicas cannot overshoot
 // the monthly ceiling. Failed, unbilled requests release their reservation.
 func Reserve(ctx context.Context, db *gorm.DB, limit int64, now time.Time) (func(bool) error, error) {
+	return reserveColumn(ctx, db, "requests", limit, now, ErrLimit)
+}
+
+func ReserveEmail(ctx context.Context, db *gorm.DB, limit int64, now time.Time) (func(bool) error, error) {
+	return reserveColumn(ctx, db, "emails", limit, now, ErrEmailLimit)
+}
+
+func reserveColumn(ctx context.Context, db *gorm.DB, column string, limit int64, now time.Time, exhausted error) (func(bool) error, error) {
 	identity, err := tenant.FromContext(ctx)
 	if err != nil {
 		return nil, err
@@ -180,20 +306,26 @@ func Reserve(ctx context.Context, db *gorm.DB, limit int64, now time.Time) (func
 	if err := query.Clauses(clause.OnConflict{DoNothing: true}).Create(&usage).Error; err != nil {
 		return nil, err
 	}
-	result := query.Model(&Usage{}).Where("tenant_id = ? AND month = ? AND requests < ?", identity.ID, month, limit).
-		UpdateColumn("requests", gorm.Expr("requests + 1"))
+	q := query.Model(&Usage{}).Where("tenant_id = ? AND month = ?", identity.ID, month)
+	if limit > 0 {
+		q = q.Where(column+" < ?", limit)
+	}
+	result := q.UpdateColumn(column, gorm.Expr(column+" + 1"))
 	if result.Error != nil {
 		return nil, result.Error
 	}
 	if result.RowsAffected != 1 {
-		return nil, ErrLimit
+		if limit > 0 {
+			return nil, exhausted
+		}
+		return nil, errors.New("hosting plan usage counter missing")
 	}
 	return func(success bool) error {
 		if success {
 			return nil
 		}
 		return db.WithContext(context.WithoutCancel(ctx)).Model(&Usage{}).
-			Where("tenant_id = ? AND month = ? AND requests > 0", identity.ID, month).
-			UpdateColumn("requests", gorm.Expr("requests - 1")).Error
+			Where("tenant_id = ? AND month = ? AND "+column+" > 0", identity.ID, month).
+			UpdateColumn(column, gorm.Expr(column+" - 1")).Error
 	}, nil
 }

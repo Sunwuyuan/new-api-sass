@@ -355,7 +355,7 @@ func TestPlatformOAuthContracts(t *testing.T) {
 				state, code := provider.begin(t, browser, "contract", "start", "boundary")
 				path := "/oauth/contract/finish"
 				if kind == "expiry" {
-					require.NoError(t, f.server.DB.Model(&AuthFlow{}).Where("token_hash = ?", digest(state)).Update("expires_at", time.Now().Add(-time.Second)).Error)
+					require.NoError(t, f.server.DB.Model(&AuthFlow{}).Where("token_hash = ?", digest(state)).Update("expires_at", time.Now().UTC().Add(-time.Second)).Error)
 				}
 				if kind == "provider" {
 					other := f.server.Auth.Providers["contract"]
@@ -630,7 +630,7 @@ func TestPlatformPasskeyContracts(t *testing.T) {
 				counter = 1
 			}
 			if failure == "expiry" {
-				require.NoError(t, f.server.DB.Model(&AuthFlow{}).Where("token_hash = ?", digest(flow)).Update("expires_at", time.Now().Add(-time.Second)).Error)
+				require.NoError(t, f.server.DB.Model(&AuthFlow{}).Where("token_hash = ?", digest(flow)).Update("expires_at", time.Now().UTC().Add(-time.Second)).Error)
 			}
 			if failure == "browser" {
 				delete(browser.cookies, authFlowCookie)
@@ -726,7 +726,7 @@ func TestPlatformWorkspaceViews(t *testing.T) {
 	require.NoError(t, f.server.DB.Create(&workspaces).Error)
 	month := now.Format("2006-01")
 	previousMonth := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).AddDate(0, -1, 0).Format("2006-01")
-	usages := []plan.Usage{{TenantID: workspaces[0].ID, Month: month, Requests: 1000}, {TenantID: workspaces[0].ID, Month: previousMonth, Requests: 80}, {TenantID: workspaces[1].ID, Month: month, Requests: 200}, {TenantID: workspaces[3].ID, Month: month, Requests: 500}}
+	usages := []plan.Usage{{TenantID: workspaces[0].ID, Month: month, Requests: 10000}, {TenantID: workspaces[0].ID, Month: previousMonth, Requests: 80}, {TenantID: workspaces[1].ID, Month: month, Requests: 200}, {TenantID: workspaces[3].ID, Month: month, Requests: 500}}
 	require.NoError(t, f.server.DB.Create(&usages).Error)
 	assignment := plan.Assignment{TenantID: workspaces[0].ID, PlanID: 1, PlatformUserID: user.ID, AdministratorID: 1, Source: "manual", ExpiresAt: soon}
 	require.NoError(t, f.server.DB.Create(&assignment).Error)
@@ -739,7 +739,7 @@ func TestPlatformWorkspaceViews(t *testing.T) {
 	}
 	require.Equal(t, 200, owner.request(t, http.MethodGet, path, nil, &detail).Code)
 	assert.Equal(t, workspaces[0].ID, detail.Tenant.ID)
-	assert.Equal(t, int64(1000), detail.Usage.Requests)
+	assert.Equal(t, int64(10000), detail.Usage.Requests)
 	assert.Len(t, detail.History, 2)
 	require.Len(t, detail.Assignments, 1)
 	assert.Equal(t, "manual", detail.Assignments[0].Source)
@@ -750,7 +750,7 @@ func TestPlatformWorkspaceViews(t *testing.T) {
 		browser                      *authBrowser
 		path                         string
 		workspaces, requests, active int64
-	}{{owner, "/usage", 3, 1200, 1}, {admin, "/admin/usage", 4, 1700, 2}} {
+	}{{owner, "/usage", 3, 10200, 1}, {admin, "/admin/usage", 4, 10700, 2}} {
 		response := scope.browser.request(t, http.MethodGet, scope.path, nil, nil)
 		require.Equal(t, 200, response.Code, response.Body.String())
 		body := response.Body.Bytes()

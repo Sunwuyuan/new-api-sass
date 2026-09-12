@@ -77,7 +77,17 @@ func newSMTPClient(tenantCtx context.Context, addr string) (*smtp.Client, error)
 	return client, nil
 }
 
+// SendPlatformMail is set by the SaaS host. It must never import this package
+// cycle; workspace SMTP stays the default when the option is off.
+var SendPlatformMail func(tenantCtx context.Context, subject string, receiver string, content string) error
+
 func SendEmail(tenantCtx context.Context, subject string, receiver string, content string) error {
+	if TenantState(tenantCtx).PlatformMailEnabled {
+		if SendPlatformMail == nil {
+			return fmt.Errorf("platform mail is not configured")
+		}
+		return SendPlatformMail(tenantCtx, subject, receiver, content)
+	}
 	if TenantState(tenantCtx).SMTPFrom == "" { // for compatibility
 		UpdateTenantSettings(tenantCtx, func(state *WorkspaceState) {
 			if state.SMTPFrom == "" {

@@ -23,13 +23,14 @@ import {
   Card,
   CardContent,
   CardDescription,
+  CardFooter,
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
 
 import { WorkspaceLink } from './navigation'
 import type { HostingPlan, WorkspaceUsage } from './types'
-import { WorkspaceUsageMeter } from './workspace-status'
+import { WorkspaceStatus, WorkspaceUsageMeter } from './workspace-status'
 
 export function WorkspaceCard(props: {
   item: WorkspaceUsage
@@ -37,50 +38,65 @@ export function WorkspaceCard(props: {
 }) {
   const { t } = useTranslation()
   const workspace = props.item.tenant
-  const currentPlan = props.plans.find((plan) => plan.id === workspace.plan_id)
   const expired =
     workspace.plan_expires_at !== null &&
     new Date(workspace.plan_expires_at).getTime() <= Date.now()
-  let statusText = t('Active')
-  if (expired) statusText = t('Expired')
-  if (workspace.status === 'suspended') statusText = t('Suspended')
+  const currentPlan = expired
+    ? props.plans.find((plan) => plan.name === 'Lite')
+    : props.plans.find((plan) => plan.id === workspace.plan_id)
   return (
     <Card>
       <CardHeader>
-        <CardTitle className='break-words'>{workspace.name}</CardTitle>
+        <div className='flex items-start justify-between gap-3'>
+          <CardTitle className='break-words'>{workspace.name}</CardTitle>
+          <WorkspaceStatus workspace={workspace} />
+        </div>
         <CardDescription className='break-words'>
-          /t/{workspace.slug} · {currentPlan?.name} · {statusText}
+          /t/{workspace.slug}
+          {currentPlan ? ` · ${currentPlan.name}` : ''}
         </CardDescription>
       </CardHeader>
       <CardContent className='space-y-4'>
-        <WorkspaceUsageMeter
-          requests={props.item.usage.requests}
-          limit={currentPlan?.limits.requests ?? 0}
-          name={workspace.name}
-        />
-        <p>
+        <div>
+          <p className='text-muted-foreground mb-2 text-xs'>
+            {t('Monthly requests')}
+          </p>
+          <WorkspaceUsageMeter
+            requests={props.item.usage.requests}
+            limit={currentPlan?.limits.requests ?? 0}
+            name={workspace.name}
+          />
+        </div>
+        <p className='text-sm'>
           {t('Plan expires')}:{' '}
           {workspace.plan_expires_at
             ? new Date(workspace.plan_expires_at).toLocaleString()
             : t('No expiry')}
         </p>
-        <div className='flex flex-wrap gap-2'>
-          <Button
-            render={<a href={`/t/${workspace.slug}/`} />}
-            nativeButton={false}
-            role='link'
-            disabled={expired || workspace.status === 'suspended'}
-          >
-            {t('Enter workspace')}
-          </Button>
-          <WorkspaceLink
-            id={workspace.id}
-            className={buttonVariants({ variant: 'outline' })}
-          >
-            {t('Manage workspace')}
-          </WorkspaceLink>
-        </div>
+        {expired && (
+          <p className='text-muted-foreground text-sm'>
+            {t(
+              'This workspace now uses Lite. Existing users can keep working. Renew the plan to create tokens, channels and more users.'
+            )}
+          </p>
+        )}
       </CardContent>
+      <CardFooter className='gap-2'>
+        <Button
+          render={<a href={`/t/${workspace.slug}/`} />}
+          nativeButton={false}
+          role='link'
+          disabled={workspace.status === 'suspended'}
+        >
+          {t('Enter workspace')}
+        </Button>
+        <WorkspaceLink
+          id={workspace.id}
+          className={buttonVariants({ variant: 'outline' })}
+        >
+          {t('Manage workspace')}
+        </WorkspaceLink>
+      </CardFooter>
     </Card>
   )
 }

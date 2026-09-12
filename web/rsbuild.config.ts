@@ -16,12 +16,36 @@ export default defineConfig(({ envMode }) => {
     'http://localhost:3000'
 
   const isProd = envMode === 'production'
-  const devProxy = Object.fromEntries(
-    (['/api', '/v1', '/mj', '/pg'] as const).map((key) => [
-      key,
-      { target: serverUrl, changeOrigin: true },
-    ])
-  ) as Record<string, { target: string; changeOrigin: boolean }>
+  const gatewayProxy = {
+    target: serverUrl,
+    changeOrigin: true,
+    xfwd: true,
+  }
+  // Workspace and platform pages stay on the Rsbuild SPA; their API/relay
+  // paths are forwarded to the Go gateway so /t/{slug}/api/... is reachable.
+  const gatewayDocumentBypass = (req: {
+    url?: string
+    method?: string
+    headers: { accept?: string | string[] }
+  }) => {
+    const path = (req.url ?? '').split('?')[0] ?? ''
+    if (path.startsWith('/platform/api')) return undefined
+    if (/^\/t\/[^/]+\/(api|v1|mj|pg|suno)(?:\/|$)/.test(path)) return undefined
+    const method = (req.method ?? 'GET').toUpperCase()
+    if (method !== 'GET' && method !== 'HEAD') return undefined
+    const accept = String(req.headers.accept ?? '')
+    if (accept.includes('text/html')) return req.url
+    if (path.startsWith('/t/')) return undefined
+    if (path.startsWith('/platform')) return req.url
+    return undefined
+  }
+  const devProxy = {
+    ...Object.fromEntries(
+      (['/api', '/v1', '/mj', '/pg'] as const).map((key) => [key, gatewayProxy])
+    ),
+    '/t': { ...gatewayProxy, bypass: gatewayDocumentBypass },
+    '/platform': { ...gatewayProxy, bypass: gatewayDocumentBypass },
+  }
 
   return {
     plugins: [pluginReact(), pluginTailwindcss({ optimize: false })],

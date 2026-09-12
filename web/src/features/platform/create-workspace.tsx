@@ -23,8 +23,8 @@ import { useForm } from 'react-hook-form'
 import { useTranslation } from 'react-i18next'
 import { z } from 'zod'
 
-import { CopyButton } from '@/components/copy-button'
 import { LoadingState } from '@/components/loading-state'
+import { PasswordInput } from '@/components/password-input'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -40,36 +40,120 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { cn } from '@/lib/utils'
 
 import { createWorkspace } from './api'
+import { platformPasswordSchema } from './lib/schema'
 import { WorkspaceLink } from './navigation'
+import type { HostingPlan } from './types'
 
-export function CreateWorkspace(props: { disabled?: boolean }) {
+export function CreateWorkspace(props: {
+  plans: HostingPlan[]
+  liteAvailable: boolean
+}) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
-  const [activationURL, setActivationURL] = useState('')
+  const [setupURL, setSetupURL] = useState('')
   const [createdID, setCreatedID] = useState<number>()
-  const schema = z.object({
-    name: z.string().trim().min(1, t('Required')).max(128),
-    slug: z
-      .string()
-      .regex(
-        /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/,
-        t('Use lowercase letters, numbers and hyphens, up to 48 characters.')
-      ),
-  })
+  const [createdSlug, setCreatedSlug] = useState('')
+  const lite = props.plans.find((plan) => plan.name === 'Lite')
+  const initialPlan =
+    lite && props.liteAvailable
+      ? lite
+      : (props.plans.find((plan) => plan.name !== 'Lite') ?? props.plans[0])
+  const schema = z
+    .object({
+      name: z.string().trim().min(1, t('Required')).max(128),
+      slug: z
+        .string()
+        .regex(
+          /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/,
+          t('Use lowercase letters, numbers and hyphens, up to 48 characters.')
+        ),
+      username: z.string().trim().min(1, t('Required')).max(20),
+      display_name: z.string().trim().max(20),
+      email: z
+        .string()
+        .trim()
+        .max(50)
+        .refine(
+          (value) => value === '' || z.email().safeParse(value).success,
+          t('Invalid email address')
+        ),
+      password: platformPasswordSchema(t),
+      plan_id: z.number().int().positive(),
+      code: z.string().trim(),
+    })
+    .superRefine((values, ctx) => {
+      const selected = props.plans.find((plan) => plan.id === values.plan_id)
+      if (!selected) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['plan_id'],
+          message: t('Choose a hosting plan'),
+        })
+        return
+      }
+      if (selected.name === 'Lite') {
+        if (!props.liteAvailable) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['plan_id'],
+            message: t('You already have a free Lite workspace.'),
+          })
+        }
+        return
+      }
+      if (!/^[a-fA-F0-9]{64}$/.test(values.code)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['code'],
+          message: t('Enter a valid platform redemption code.'),
+        })
+      }
+    })
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { name: '', slug: '' },
+    defaultValues: {
+      name: '',
+      slug: '',
+      username: '',
+      display_name: '',
+      email: '',
+      password: '',
+      plan_id: initialPlan?.id ?? 0,
+      code: '',
+    },
   })
+  const selectedPlan = props.plans.find(
+    (plan) => plan.id === form.watch('plan_id')
+  )
+  const paid = selectedPlan !== undefined && selectedPlan.name !== 'Lite'
   const mutation = useMutation({
     meta: { errorToast: false },
-    mutationFn: createWorkspace,
+    mutationFn: (values: z.infer<typeof schema>) => {
+      const selected = props.plans.find((plan) => plan.id === values.plan_id)
+      return createWorkspace({
+        name: values.name,
+        slug: values.slug,
+        username: values.username,
+        display_name: values.display_name,
+        email: values.email,
+        password: values.password,
+        plan_id: values.plan_id,
+        code: selected?.name === 'Lite' ? undefined : values.code,
+      })
+    },
     onSuccess: (data) => {
-      setActivationURL(
-        new URL(data.root_activation_url, window.location.origin).toString()
+      setSetupURL(
+        data.setup_url
+          ? new URL(data.setup_url, window.location.origin).toString()
+          : ''
       )
       setCreatedID(data.tenant.id)
+      setCreatedSlug(data.tenant.slug)
       form.reset()
       void queryClient.invalidateQueries({ queryKey: ['platform'] })
     },
@@ -80,27 +164,94 @@ export function CreateWorkspace(props: { disabled?: boolean }) {
         <CardTitle>{t('Create workspace')}</CardTitle>
         <CardDescription>
           {t(
-            'New workspaces start on Lite. Redeem a code or contact an administrator to activate a hosting plan.'
+            'Each account can create one free Lite workspace. Other plans need a redemption code.'
           )}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        {props.disabled && (
+        {!props.liteAvailable && (
           <p className='text-muted-foreground mb-4'>
             {t(
-              'Your workspace limit has been reached. Upgrade an active workspace to increase your capacity.'
+              'You already have a free Lite workspace. Redeem a code to create another workspace.'
             )}
           </p>
         )}
         <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
-          <FieldGroup className='md:grid md:grid-cols-2'>
+          <FieldGroup>
+            <Field data-invalid={!!form.formState.errors.plan_id}>
+              <FieldLabel>{t('Hosting plan')}</FieldLabel>
+              <RadioGroup
+                className='grid gap-3 sm:grid-cols-3'
+                value={
+                  selectedPlan ? String(selectedPlan.id) : ''
+                }
+                onValueChange={(value) =>
+                  form.setValue('plan_id', Number(value), {
+                    shouldValidate: true,
+                  })
+                }
+                disabled={mutation.isPending}
+              >
+                {props.plans.map((plan) => {
+                  const unavailable =
+                    plan.name === 'Lite' && !props.liteAvailable
+                  return (
+                    <Label
+                      key={plan.id}
+                      htmlFor={`create-plan-${plan.id}`}
+                      className={cn(
+                        'border-muted bg-card hover:border-primary/40 focus-within:border-primary/50 has-data-[checked]:border-primary has-data-[checked]:ring-primary/20 flex cursor-pointer flex-col gap-2 rounded-lg border p-3 font-normal has-data-[checked]:ring-2',
+                        unavailable && 'cursor-not-allowed opacity-60'
+                      )}
+                    >
+                      <div className='flex items-start gap-2'>
+                        <RadioGroupItem
+                          id={`create-plan-${plan.id}`}
+                          value={String(plan.id)}
+                          disabled={unavailable || mutation.isPending}
+                        />
+                        <div>
+                          <p className='font-medium'>{plan.name}</p>
+                          <p className='text-muted-foreground text-xs'>
+                            {t(plan.price)}
+                          </p>
+                        </div>
+                      </div>
+                      <p className='text-muted-foreground text-xs'>
+                        {t('Monthly requests')}:{' '}
+                        {plan.limits.requests === 0
+                          ? t('Unlimited')
+                          : plan.limits.requests.toLocaleString()}
+                      </p>
+                    </Label>
+                  )
+                })}
+              </RadioGroup>
+              <FieldError>{form.formState.errors.plan_id?.message}</FieldError>
+            </Field>
+            {paid && (
+              <Field data-invalid={!!form.formState.errors.code}>
+                <FieldLabel htmlFor='workspace-plan-code'>
+                  {t('Redemption code')}
+                </FieldLabel>
+                <Input
+                  id='workspace-plan-code'
+                  autoComplete='off'
+                  {...form.register('code')}
+                  aria-invalid={!!form.formState.errors.code}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>{form.formState.errors.code?.message}</FieldError>
+              </Field>
+            )}
+            <FieldGroup className='md:grid md:grid-cols-2'>
             <Field data-invalid={!!form.formState.errors.name}>
               <FieldLabel htmlFor='workspace-name'>{t('Name')}</FieldLabel>
               <Input
                 id='workspace-name'
                 {...form.register('name')}
                 aria-invalid={!!form.formState.errors.name}
-                disabled={props.disabled || mutation.isPending}
+                disabled={mutation.isPending}
               />
               <FieldError>{form.formState.errors.name?.message}</FieldError>
             </Field>
@@ -112,50 +263,97 @@ export function CreateWorkspace(props: { disabled?: boolean }) {
                 id='workspace-slug'
                 {...form.register('slug')}
                 aria-invalid={!!form.formState.errors.slug}
-                disabled={props.disabled || mutation.isPending}
+                disabled={mutation.isPending}
                 placeholder='my-workspace'
               />
               <FieldError>{form.formState.errors.slug?.message}</FieldError>
             </Field>
+            <Field data-invalid={!!form.formState.errors.username}>
+              <FieldLabel htmlFor='workspace-admin-username'>
+                {t('Username')}
+              </FieldLabel>
+              <Input
+                id='workspace-admin-username'
+                autoComplete='off'
+                {...form.register('username')}
+                aria-invalid={!!form.formState.errors.username}
+                disabled={mutation.isPending}
+              />
+              <FieldError>{form.formState.errors.username?.message}</FieldError>
+            </Field>
+            <Field data-invalid={!!form.formState.errors.display_name}>
+              <FieldLabel htmlFor='workspace-admin-display'>
+                {t('Display Name')}
+              </FieldLabel>
+              <Input
+                id='workspace-admin-display'
+                autoComplete='off'
+                {...form.register('display_name')}
+                aria-invalid={!!form.formState.errors.display_name}
+                disabled={mutation.isPending}
+              />
+              <FieldError>
+                {form.formState.errors.display_name?.message}
+              </FieldError>
+            </Field>
+            <Field data-invalid={!!form.formState.errors.email}>
+              <FieldLabel htmlFor='workspace-admin-email'>
+                {t('Email')}
+              </FieldLabel>
+              <Input
+                id='workspace-admin-email'
+                type='email'
+                autoComplete='off'
+                {...form.register('email')}
+                aria-invalid={!!form.formState.errors.email}
+                disabled={mutation.isPending}
+              />
+              <FieldError>{form.formState.errors.email?.message}</FieldError>
+            </Field>
+            <Field data-invalid={!!form.formState.errors.password}>
+              <FieldLabel htmlFor='workspace-admin-password'>
+                {t('Password')}
+              </FieldLabel>
+              <PasswordInput
+                id='workspace-admin-password'
+                autoComplete='new-password'
+                {...form.register('password')}
+                aria-invalid={!!form.formState.errors.password}
+                disabled={mutation.isPending}
+              />
+              <FieldError>{form.formState.errors.password?.message}</FieldError>
+            </Field>
             {mutation.isError && <p role='alert'>{mutation.error.message}</p>}
-            <Button
-              type='submit'
-              disabled={props.disabled || mutation.isPending}
-            >
+            <Button type='submit' disabled={mutation.isPending}>
               {mutation.isPending && <LoadingState inline size='sm' />}
               {t('Create workspace')}
             </Button>
+            </FieldGroup>
           </FieldGroup>
         </form>
-        {activationURL && (
+        {createdID && (
           <div className='mt-6 flex flex-wrap items-center gap-3' role='status'>
-            <p className='w-full'>
-              {t(
-                'Save this root activation link. It expires in 30 minutes and can be used once.'
-              )}
-            </p>
+            <p className='w-full'>{t('Workspace created.')}</p>
             <Button
-              render={
-                <a href={activationURL} target='_blank' rel='noreferrer' />
-              }
+              render={<a href={`/t/${createdSlug}/`} />}
               nativeButton={false}
               role='link'
             >
-              {t('Activate workspace root')}
+              {t('Enter workspace')}
             </Button>
-            {createdID && (
-              <WorkspaceLink id={createdID}>
-                {t('Manage workspace')}
-              </WorkspaceLink>
+            {setupURL && (
+              <Button
+                variant='outline'
+                render={<a href={setupURL} />}
+                nativeButton={false}
+                role='link'
+              >
+                {t('Finish setup')}
+              </Button>
             )}
-            <CopyButton
-              value={activationURL}
-              size='default'
-              variant='outline'
-              aria-label={t('Copy activation link')}
-            >
-              {t('Copy activation link')}
-            </CopyButton>
+            <WorkspaceLink id={createdID}>
+              {t('Manage workspace')}
+            </WorkspaceLink>
           </div>
         )}
       </CardContent>

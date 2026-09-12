@@ -40,6 +40,7 @@ export type PlatformPath =
   | '/platform/admin/redemptions'
   | '/platform/admin/audits'
   | '/platform/admin/usage'
+  | '/platform/admin/settings'
 
 export function PlatformLink(props: {
   to: PlatformPath

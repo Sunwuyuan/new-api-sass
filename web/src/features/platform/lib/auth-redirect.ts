@@ -39,7 +39,6 @@ export function safePlatformRedirect(value?: string): string {
         '/platform/plans',
         '/platform/usage',
         '/platform/workspaces/new',
-        '/platform/redeem',
         '/platform/admin',
       ].includes(url.pathname) ||
       url.pathname.startsWith('/platform/admin/') ||

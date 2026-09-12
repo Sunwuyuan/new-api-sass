@@ -111,15 +111,22 @@ const plans: HostingPlan[] = [
   },
 ]
 
-test('workspace creation rejects invalid slugs and shows the one-time activation link after success', async () => {
+test('workspace creation rejects invalid slugs and opens the workspace after success', async () => {
   const user = userEvent.setup()
   vi.mocked(createWorkspace).mockResolvedValue({
     tenant: workspace.tenant,
-    root_activation_url: '/t/alpha/activate#token=test-activation',
+    setup_url: '/t/alpha/setup',
   })
-  await renderWorkspaces(<CreateWorkspace />)
+  await renderWorkspaces(
+    <CreateWorkspace plans={plans} liteAvailable />
+  )
   await user.type(screen.getByLabelText('Name'), 'Alpha')
   await user.type(screen.getByLabelText('Workspace address'), 'Invalid/slug')
+  await user.type(screen.getByLabelText('Username'), 'root')
+  await user.type(
+    screen.getByLabelText('Password'),
+    'a synthetic testing passphrase'
+  )
   await user.click(screen.getByRole('button', { name: 'Create workspace' }))
   await waitFor(() =>
     expect(screen.getByLabelText('Workspace address')).toHaveAttribute(
@@ -132,11 +139,22 @@ test('workspace creation rejects invalid slugs and shows the one-time activation
   await user.type(screen.getByLabelText('Workspace address'), 'alpha')
   await user.click(screen.getByRole('button', { name: 'Create workspace' }))
   expect(
-    await screen.findByRole('link', { name: 'Activate workspace root' })
-  ).toHaveAttribute('href', expect.stringContaining('/t/alpha/activate#token='))
-  expect(
-    screen.getByRole('button', { name: 'Copy activation link' })
-  ).toBeVisible()
+    await screen.findByRole('link', { name: 'Enter workspace' })
+  ).toHaveAttribute('href', '/t/alpha/')
+  expect(screen.getByRole('link', { name: 'Finish setup' })).toHaveAttribute(
+    'href',
+    expect.stringContaining('/t/alpha/setup')
+  )
+  expect(vi.mocked(createWorkspace).mock.calls[0][0]).toEqual({
+    name: 'Alpha',
+    slug: 'alpha',
+    username: 'root',
+    display_name: '',
+    email: '',
+    password: 'a synthetic testing passphrase',
+    plan_id: 1,
+    code: undefined,
+  })
 })
 
 test('owners see usage while plan administration is reserved for administrators', async () => {
@@ -185,13 +203,14 @@ test('an administrator can manually select Pro and a failed activation remains r
   expect(setWorkspaceStatus).not.toHaveBeenCalled()
 })
 
-test('expired workspaces show their state and disable entry', async () => {
+test('expired workspaces show their state and stay enterable', async () => {
   await renderWorkspaces(
     <WorkspaceCard
       item={{
         ...workspace,
         tenant: {
           ...workspace.tenant,
+          plan_id: 2,
           plan_expires_at: '2020-01-01T00:00:00Z',
         },
       }}
@@ -199,10 +218,51 @@ test('expired workspaces show their state and disable entry', async () => {
     />
   )
   expect(screen.getByText(/Expired/)).toBeVisible()
+  expect(screen.getByText('/t/alpha · Lite')).toBeVisible()
+  expect(
+    screen.getByText('1,000', { exact: true }).parentElement
+  ).toHaveTextContent('1,000 / 1,000')
   expect(screen.getByRole('link', { name: 'Enter workspace' })).toHaveAttribute(
+    'href',
+    '/t/alpha/'
+  )
+  expect(screen.getByRole('link', { name: 'Enter workspace' })).not.toHaveAttribute(
     'aria-disabled',
     'true'
   )
+})
+
+test('a second free Lite workspace is blocked until a paid plan is chosen', async () => {
+  const user = userEvent.setup()
+  await renderWorkspaces(
+    <CreateWorkspace plans={plans} liteAvailable={false} />
+  )
+  expect(
+    screen.getByText(
+      'You already have a free Lite workspace. Redeem a code to create another workspace.'
+    )
+  ).toBeVisible()
+  expect(screen.getByRole('radio', { name: /Lite/ })).toHaveAttribute(
+    'aria-disabled',
+    'true'
+  )
+  expect(screen.getByRole('radio', { name: /Pro/ })).toBeChecked()
+  expect(screen.getByLabelText('Redemption code')).toBeVisible()
+  await user.type(screen.getByLabelText('Name'), 'Beta')
+  await user.type(screen.getByLabelText('Workspace address'), 'beta')
+  await user.type(screen.getByLabelText('Username'), 'root')
+  await user.type(
+    screen.getByLabelText('Password'),
+    'a synthetic testing passphrase'
+  )
+  await user.click(screen.getByRole('button', { name: 'Create workspace' }))
+  await waitFor(() =>
+    expect(screen.getByLabelText('Redemption code')).toHaveAttribute(
+      'aria-invalid',
+      'true'
+    )
+  )
+  expect(createWorkspace).not.toHaveBeenCalled()
 })
 
 test('root activation removes the secret from browser history and rejects a missing link', async () => {

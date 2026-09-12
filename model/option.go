@@ -55,6 +55,7 @@ func InitOptionMap(tenantCtx context.Context) {
 	common.TenantState(tenantCtx).OptionMap["AutomaticDisableChannelEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).AutomaticDisableChannelEnabled)
 	common.TenantState(tenantCtx).OptionMap["AutomaticEnableChannelEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).AutomaticEnableChannelEnabled)
 	common.TenantState(tenantCtx).OptionMap["LogConsumeEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).LogConsumeEnabled)
+	common.TenantState(tenantCtx).OptionMap["PlatformMailEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).PlatformMailEnabled)
 	common.TenantState(tenantCtx).OptionMap["DisplayInCurrencyEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DisplayInCurrencyEnabled)
 	common.TenantState(tenantCtx).OptionMap["DisplayTokenStatEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DisplayTokenStatEnabled)
 	common.TenantState(tenantCtx).OptionMap["DrawingEnabled"] = strconv.FormatBool(common.TenantState(tenantCtx).DrawingEnabled)
@@ -375,6 +376,8 @@ func updateOptionMap(tenantCtx context.Context, key string, value string) (err e
 			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.AutomaticEnableChannelEnabled = boolValue })
 		case "LogConsumeEnabled":
 			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.LogConsumeEnabled = boolValue })
+		case "PlatformMailEnabled":
+			common.UpdateTenantSettings(tenantCtx, func(state *common.WorkspaceState) { state.PlatformMailEnabled = boolValue })
 		case "DisplayInCurrencyEnabled":
 			// 兼容旧字段：同步到新配置 general_setting.quota_display_type（运行时生效）
 			// true -> USD, false -> TOKENS

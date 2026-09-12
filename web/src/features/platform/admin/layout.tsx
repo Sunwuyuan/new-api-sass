@@ -17,34 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { Outlet } from '@tanstack/react-router'
-import { useState } from 'react'
-import { useTranslation } from 'react-i18next'
-
-import { Button } from '@/components/ui/button'
-
-import { ReauthenticateDialog } from '../reauthenticate-dialog'
 
 export default function PlatformAdminLayout() {
-  const { t } = useTranslation()
-  const [verify, setVerify] = useState(false)
-  return (
-    <section className='space-y-5' aria-label={t('Administration')}>
-      <div className='flex flex-wrap items-center justify-between gap-3'>
-        <div>
-          <h2 className='text-xl font-semibold'>{t('Administration')}</h2>
-          <p className='text-muted-foreground'>
-            {t(
-              'Manage platform accounts, workspaces and hosting entitlements.'
-            )}
-          </p>
-        </div>
-        <Button variant='outline' onClick={() => setVerify(true)}>
-          {t('Verify administrator access')}
-        </Button>
-      </div>
-
-      <Outlet />
-      {verify && <ReauthenticateDialog onClose={() => setVerify(false)} />}
-    </section>
-  )
+  return <Outlet />
 }

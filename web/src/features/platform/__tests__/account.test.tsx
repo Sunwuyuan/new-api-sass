@@ -19,10 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import axios from 'axios'
 import type { ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
 
-import { changePlatformPassword, platformLogin, platformRegister } from '../api'
+import {
+  changePlatformPassword,
+  platformLogin,
+  platformRegister,
+  resendPlatformVerification,
+  verifyPlatformEmail,
+} from '../api'
 import { PlatformAuthForm } from '../auth-form'
 import { PlatformPasswordDialog } from '../password-dialog'
 import { authStatus } from './fixtures'
@@ -31,6 +38,8 @@ vi.mock('../api', () => ({
   changePlatformPassword: vi.fn(),
   platformLogin: vi.fn(),
   platformRegister: vi.fn(),
+  resendPlatformVerification: vi.fn(),
+  verifyPlatformEmail: vi.fn(),
 }))
 
 const clients: QueryClient[] = []
@@ -155,4 +164,60 @@ test('password change disables resubmission while pending and clears the platfor
   )
   expect(client.getQueryData(['platform', 'tenants', 1])).toBeUndefined()
   expect(onOpenChange).toHaveBeenCalledWith(false)
+})
+
+test('unverified sign in asks for an email code and then creates a session', async () => {
+  const user = userEvent.setup()
+  const axiosError = new axios.AxiosError('Unauthorized')
+  axiosError.response = {
+    data: { code: 'email_not_verified' },
+    status: 401,
+    statusText: 'Unauthorized',
+    headers: {},
+    config: { headers: new axios.AxiosHeaders() },
+  }
+  vi.mocked(platformLogin)
+    .mockRejectedValueOnce(
+      new Error('Verify your email before signing in.', { cause: axiosError })
+    )
+    .mockResolvedValueOnce({
+      user: {
+        id: 1,
+        email: 'owner@example.test',
+        role: 'user',
+        status: 'active',
+        must_change_password: false,
+        tenant_count: 0,
+      },
+      csrf_token: 'csrf',
+      authenticated_at: '2026-09-12T00:00:00Z',
+    })
+  vi.mocked(verifyPlatformEmail).mockResolvedValue()
+  const onSignedIn = vi.fn()
+  renderAccount(
+    <PlatformAuthForm
+      mode='sign-in'
+      status={authStatus}
+      redirectTo='/platform'
+      onSignedIn={onSignedIn}
+    />
+  )
+  await user.type(screen.getByLabelText('Email'), 'owner@example.test')
+  await user.type(
+    screen.getByLabelText('Password', { exact: true }),
+    'a long phrase for this test'
+  )
+  await user.click(screen.getByRole('button', { name: 'Sign in' }))
+  expect(await screen.findByLabelText('Verification code')).toBeVisible()
+  expect(
+    screen.getByText('Enter the verification code sent to owner@example.test.')
+  ).toBeVisible()
+  await user.type(screen.getByLabelText('Verification code'), '123456')
+  await user.click(screen.getByRole('button', { name: 'Verify email' }))
+  await waitFor(() => expect(onSignedIn).toHaveBeenCalledOnce())
+  expect(verifyPlatformEmail).toHaveBeenCalledWith({
+    email: 'owner@example.test',
+    code: '123456',
+  })
+  expect(resendPlatformVerification).not.toHaveBeenCalled()
 })

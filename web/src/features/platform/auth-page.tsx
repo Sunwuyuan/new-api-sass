@@ -84,7 +84,11 @@ function PlatformAuthPage(props: { mode: 'sign-in' | 'sign-up' }) {
           </div>
           {search.registered && !signUp && (
             <p role='status' className='text-muted-foreground text-sm'>
-              {t('Registration submitted. Sign in with your credentials.')}
+              {status.data.email_verification
+                ? t(
+                    'Check your email for a verification code, then sign in.'
+                  )
+                : t('Registration submitted. Sign in with your credentials.')}
             </p>
           )}
           {signUp && !status.data.register_enabled ? (

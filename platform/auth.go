@@ -26,17 +26,18 @@ import (
 )
 
 type User struct {
-	ID                 int64     `json:"id" gorm:"primaryKey"`
-	Email              *string   `json:"email" gorm:"size:254;uniqueIndex"`
-	DisplayName        string    `json:"display_name" gorm:"size:128"`
-	HasPassword        bool      `json:"has_password" gorm:"-"`
-	PasswordHash       string    `json:"-" gorm:"type:text;not null"`
-	Role               string    `json:"role" gorm:"size:16;not null"`
-	Status             string    `json:"status" gorm:"size:16;not null;default:active"`
-	MustChangePassword bool      `json:"must_change_password"`
-	SessionVersion     int64     `json:"-" gorm:"not null;default:1"`
-	TenantCount        int       `json:"tenant_count" gorm:"not null"`
-	CreatedAt          time.Time `json:"created_at"`
+	ID                 int64      `json:"id" gorm:"primaryKey"`
+	Email              *string    `json:"email" gorm:"size:254;uniqueIndex"`
+	DisplayName        string     `json:"display_name" gorm:"size:128"`
+	HasPassword        bool       `json:"has_password" gorm:"-"`
+	PasswordHash       string     `json:"-" gorm:"type:text;not null"`
+	Role               string     `json:"role" gorm:"size:16;not null"`
+	Status             string     `json:"status" gorm:"size:16;not null;default:active"`
+	MustChangePassword bool       `json:"must_change_password"`
+	EmailVerifiedAt    *time.Time `json:"email_verified_at"`
+	SessionVersion     int64      `json:"-" gorm:"not null;default:1"`
+	TenantCount        int        `json:"tenant_count" gorm:"not null"`
+	CreatedAt          time.Time  `json:"created_at"`
 }
 
 func (User) TableName() string { return "platform_users" }
@@ -209,13 +210,6 @@ func requireAdmin(c *gin.Context) {
 		writeError(c, http.StatusForbidden, "platform_admin_required")
 		return
 	}
-	if c.Request.Method != http.MethodGet {
-		session := c.MustGet("platform_session").(Session)
-		if time.Since(session.CreatedAt) > 5*time.Minute {
-			writeError(c, http.StatusUnauthorized, "recent_login_required")
-			return
-		}
-	}
 	c.Next()
 }
 
@@ -243,7 +237,8 @@ func validateCredentials(input *credentials, newPassword bool) error {
 }
 
 func (s *Server) register(c *gin.Context) {
-	if !s.Auth.Registration || !s.Auth.PasswordLogin {
+	auth := s.snapshotAuth()
+	if !auth.Registration || !auth.PasswordLogin {
 		writeError(c, http.StatusForbidden, "registration_disabled")
 		return
 	}
@@ -260,17 +255,29 @@ func (s *Server) register(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
 	}
-	user := User{Email: &input.Email, PasswordHash: hash, Role: "user"}
+	user := User{Email: &input.Email, PasswordHash: hash, Role: "user", Status: "active", SessionVersion: 1}
+	s.authMu.Lock()
+	verify := s.Mail.Enabled && s.Mail.EmailVerification
+	s.authMu.Unlock()
+	if !verify {
+		now := time.Now().UTC()
+		user.EmailVerifiedAt = &now
+	}
 	if err := s.DB.WithContext(c.Request.Context()).Clauses(clause.OnConflict{DoNothing: true}).Create(&user).Error; err != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
+	}
+	if verify && user.ID > 0 {
+		if err := s.issueEmailChallenge(c, input.Email); err != nil {
+			common.SysError("platform verification email failed: " + err.Error())
+		}
 	}
 	// The same result for existing addresses avoids a registration oracle.
 	c.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 func (s *Server) login(c *gin.Context) {
-	if !s.Auth.PasswordLogin {
+	if !s.snapshotAuth().PasswordLogin {
 		writeError(c, http.StatusForbidden, "password_login_disabled")
 		return
 	}
@@ -292,6 +299,13 @@ func (s *Server) login(c *gin.Context) {
 	if err != nil || !valid || user.PasswordHash == "" || user.Status != "active" {
 		common.SysLog("platform authentication failed: account_ref=" + digest(input.Email))
 		writeError(c, http.StatusUnauthorized, "invalid_credentials")
+		return
+	}
+	s.authMu.Lock()
+	verify := s.Mail.Enabled && s.Mail.EmailVerification
+	s.authMu.Unlock()
+	if verify && user.EmailVerifiedAt == nil {
+		writeError(c, http.StatusUnauthorized, "email_not_verified")
 		return
 	}
 	s.issueSession(c, user, "auth.login")

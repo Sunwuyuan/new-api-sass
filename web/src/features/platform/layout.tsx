@@ -19,8 +19,8 @@ For commercial licensing, please contact support@quantumnous.com
 import { Logout01Icon } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Outlet, useRouter, useRouterState } from '@tanstack/react-router'
-import { useEffect } from 'react'
+import { Outlet, useRouter } from '@tanstack/react-router'
+import { useEffect, type CSSProperties } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
@@ -32,8 +32,10 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
+import { cn } from '@/lib/utils'
 
 import { platformLogout, platformSessionQuery } from './api'
 import { updatePlatformSession } from './auth-api'
@@ -49,12 +51,20 @@ export function PlatformRoot() {
   )
 }
 
+function PlatformSidebarTrigger() {
+  const sidebar = useSidebar()
+  return (
+    <SidebarTrigger
+      className={cn('mr-auto', sidebar.state !== 'collapsed' && 'md:hidden')}
+    />
+  )
+}
+
 export function PlatformLayout() {
   const { t } = useTranslation()
   const router = useRouter()
   const queryClient = useQueryClient()
   const session = useQuery(platformSessionQuery)
-  const path = useRouterState({ select: (state) => state.location.pathname })
   useEffect(() => {
     if (session.data === null) void router.invalidate()
   }, [session.data, router])
@@ -71,19 +81,14 @@ export function PlatformLayout() {
   }
   if (!session.data) return <LoadingState />
   return (
-    <SidebarProvider>
+    <SidebarProvider
+      style={{ '--sidebar-width': '15rem' } as CSSProperties}
+    >
       <SkipToMain />
       <PlatformSidebar user={session.data.user} />
       <SidebarInset className='min-w-0'>
-        <header className='bg-background/95 sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b px-4 sm:px-6'>
-          <div className='flex min-w-0 items-center gap-3'>
-            <SidebarTrigger />
-            <span className='text-muted-foreground truncate text-sm'>
-              {path.startsWith('/platform/admin')
-                ? t('Administration')
-                : t('Workspace')}
-            </span>
-          </div>
+        <header className='bg-background sticky top-0 z-20 flex h-14 items-center justify-end gap-3 border-b px-4 sm:px-6'>
+          <PlatformSidebarTrigger />
           <div className='flex shrink-0 items-center gap-2'>
             <LanguageSwitcher />
             <Button

@@ -21,9 +21,10 @@ import {
   CreditCardIcon,
   CubeIcon,
   File01Icon,
-  GiftIcon,
   Shield01Icon,
+  Ticket01Icon,
   UserGroupIcon,
+  Wrench01Icon,
 } from '@hugeicons/core-free-icons'
 import { HugeiconsIcon } from '@hugeicons/react'
 import { Link, useRouterState } from '@tanstack/react-router'
@@ -39,7 +40,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarSeparator,
   useSidebar,
 } from '@/components/ui/sidebar'
 
@@ -61,11 +61,10 @@ export function PlatformSidebar(props: { user: PlatformUser }) {
       label: t('Usage analytics'),
       icon: ChartHistogramIcon,
     },
-    { to: '/platform/plans', label: t('Hosting plans'), icon: CreditCardIcon },
-    { to: '/platform/redeem', label: t('Redeem hosting plan'), icon: GiftIcon },
+    { to: '/platform/plans', label: t('Plans'), icon: CreditCardIcon },
     {
       to: '/platform/security',
-      label: t('Account security'),
+      label: t('Account'),
       icon: Shield01Icon,
     },
   ]
@@ -93,12 +92,17 @@ export function PlatformSidebar(props: { user: PlatformUser }) {
     {
       to: '/platform/admin/redemptions',
       label: t('Platform redemption codes'),
-      icon: GiftIcon,
+      icon: Ticket01Icon,
     },
     {
       to: '/platform/admin/audits',
       label: t('Platform audit'),
       icon: File01Icon,
+    },
+    {
+      to: '/platform/admin/settings',
+      label: t('Platform settings'),
+      icon: Wrench01Icon,
     },
   ]
   const groups = [{ title: t('Workspace'), items: workspaceItems }]
@@ -110,13 +114,9 @@ export function PlatformSidebar(props: { user: PlatformUser }) {
   }
   return (
     <Sidebar collapsible='offcanvas'>
-      <SidebarHeader className='px-4 py-5'>
+      <SidebarHeader className='px-3 py-4'>
         <PlatformBrand />
-        <p className='text-muted-foreground pl-10 text-xs'>
-          {t('Platform console')}
-        </p>
       </SidebarHeader>
-      <SidebarSeparator />
       <SidebarContent>
         {groups.map((group) => (
           <SidebarGroup key={group.title}>

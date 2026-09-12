@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+const ABSOLUTE_URL = /^([a-z][a-z\d+\-.]*:)?\/\//i
+
 export function getTenantBasePath(pathname: string): string {
   const match = /^\/t\/([a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?)(?:\/|$)/.exec(
     pathname
@@ -27,15 +29,38 @@ export const tenantBasePath = getTenantBasePath(
   typeof window === 'undefined' ? '' : window.location.pathname
 )
 
+export function currentTenantBasePath(): string {
+  if (typeof window === 'undefined') return tenantBasePath
+  return getTenantBasePath(window.location.pathname)
+}
+
 export function tenantPath(path: string): string {
   if (!path.startsWith('/') || path.startsWith('//')) return path
-  if (
-    tenantBasePath &&
-    (path === tenantBasePath || path.startsWith(`${tenantBasePath}/`))
-  ) {
+  const base = currentTenantBasePath()
+  if (base && (path === base || path.startsWith(`${base}/`))) {
     return path
   }
-  return `${tenantBasePath}${path}`
+  return `${base}${path}`
+}
+
+export const WORKSPACE_HEADER = 'X-New-API-Workspace'
+
+export function workspaceSlug(): string {
+  const base = currentTenantBasePath()
+  return base.startsWith('/t/') ? base.slice(3) : ''
+}
+
+export function applyTenantRequestURL<
+  T extends { url?: string; baseURL?: string },
+>(config: T): T {
+  const url = config.url ?? ''
+  if (!url || ABSOLUTE_URL.test(url)) return config
+  if (config.baseURL && ABSOLUTE_URL.test(config.baseURL)) return config
+  const path = url.startsWith('/') ? url : `/${url}`
+  config.url = tenantPath(path)
+  // Keep a root base so Axios cannot re-apply a stale instance baseURL.
+  config.baseURL = '/'
+  return config
 }
 
 export function tenantKey(key: string): string {
