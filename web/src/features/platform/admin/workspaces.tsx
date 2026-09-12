@@ -27,6 +27,7 @@ import { DataTableRowActionMenu } from '@/components/data-table'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 
 import { getHostingPlans, getWorkspaces, setWorkspaceStatus } from '../api'
+import { WorkspaceLink } from '../navigation'
 import type { Workspace, WorkspaceUsage } from '../types'
 import { AssignPlanDialog } from './assign-plan-dialog'
 import { PlatformTable } from './table'
@@ -60,7 +61,9 @@ export default function PlatformWorkspaces() {
       header: t('Workspace'),
       cell: ({ row }) => (
         <div className='break-words'>
-          <p>{row.original.tenant.name}</p>
+          <WorkspaceLink id={row.original.tenant.id} admin>
+            {row.original.tenant.name}
+          </WorkspaceLink>
           <p className='text-muted-foreground'>/t/{row.original.tenant.slug}</p>
         </div>
       ),

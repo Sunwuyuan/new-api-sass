@@ -19,11 +19,15 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
+import {
+  StaticDataTable,
+  type StaticDataTableColumn,
+} from '@/components/data-table'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 import { getHostingPlans } from './api'
+import type { HostingPlan } from './types'
 
 export function HostingPlans() {
   const { t } = useTranslation()
@@ -33,46 +37,71 @@ export function HostingPlans() {
   })
   if (plans.isPending) return <LoadingState />
   if (plans.isError) return <ErrorState onRetry={() => void plans.refetch()} />
+  const rows = [
+    {
+      label: t('Monthly requests'),
+      value: (plan: HostingPlan) => plan.limits.requests.toLocaleString(),
+    },
+    {
+      label: t('Users'),
+      value: (plan: HostingPlan) => plan.limits.users.toLocaleString(),
+    },
+    {
+      label: t('Tokens'),
+      value: (plan: HostingPlan) => plan.limits.tokens.toLocaleString(),
+    },
+    {
+      label: t('Channels'),
+      value: (plan: HostingPlan) => plan.limits.channels.toLocaleString(),
+    },
+    {
+      label: t('Workspaces per account'),
+      value: (plan: HostingPlan) =>
+        plan.capabilities.max_workspaces.toLocaleString(),
+    },
+    {
+      label: t('Branding'),
+      value: (plan: HostingPlan) =>
+        plan.capabilities.custom_branding
+          ? t('Custom branding')
+          : t('Basic branding'),
+    },
+    {
+      label: t('Platform footer'),
+      value: (plan: HostingPlan) =>
+        plan.capabilities.remove_platform_footer
+          ? t('Custom platform footer')
+          : t('Platform footer required'),
+    },
+  ]
+  const columns: StaticDataTableColumn<(typeof rows)[number]>[] = [
+    {
+      id: 'capability',
+      header: t('Included capabilities'),
+      cell: (row) => row.label,
+    },
+    ...[...plans.data]
+      .sort((a, b) => a.limits.requests - b.limits.requests)
+      .map((plan) => ({
+        id: String(plan.id),
+        header: (
+          <div className='py-3'>
+            <p className='text-foreground font-semibold'>{plan.name}</p>
+            <p className='text-muted-foreground mt-1 text-xs font-normal'>
+              {t(plan.price)}
+            </p>
+          </div>
+        ),
+        cell: (row: (typeof rows)[number]) => row.value(plan),
+      })),
+  ]
   return (
-    <section
-      aria-label={t('Hosting plans')}
-      className='grid gap-4 md:grid-cols-3'
-    >
-      {[...plans.data]
-        .sort((a, b) => a.limits.requests - b.limits.requests)
-        .map((plan) => (
-          <Card key={plan.id}>
-            <CardHeader>
-              <CardTitle>
-                {plan.name} · {t(plan.price)}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className='space-y-2 text-sm'>
-              <p>
-                {t('Monthly requests')}: {plan.limits.requests.toLocaleString()}
-              </p>
-              <p>
-                {t('Users')}: {plan.limits.users.toLocaleString()} ·{' '}
-                {t('Tokens')}: {plan.limits.tokens.toLocaleString()} ·{' '}
-                {t('Channels')}: {plan.limits.channels.toLocaleString()}
-              </p>
-              <p>
-                {t('Workspaces per account')}:{' '}
-                {plan.capabilities.max_workspaces}
-              </p>
-              <p>
-                {plan.capabilities.custom_branding
-                  ? t('Custom branding')
-                  : t('Basic branding')}
-              </p>
-              <p>
-                {plan.capabilities.remove_platform_footer
-                  ? t('Custom platform footer')
-                  : t('Platform footer required')}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
+    <section aria-label={t('Hosting plans')}>
+      <StaticDataTable
+        data={rows}
+        columns={columns}
+        getRowKey={(row) => row.label}
+      />
     </section>
   )
 }

@@ -16,10 +16,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -28,15 +27,15 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 
-import { RedeemPlanDialog } from './redeem-plan-dialog'
+import { WorkspaceLink } from './navigation'
 import type { HostingPlan, WorkspaceUsage } from './types'
+import { WorkspaceUsageMeter } from './workspace-status'
 
 export function WorkspaceCard(props: {
   item: WorkspaceUsage
   plans: HostingPlan[]
 }) {
   const { t } = useTranslation()
-  const [redeem, setRedeem] = useState(false)
   const workspace = props.item.tenant
   const currentPlan = props.plans.find((plan) => plan.id === workspace.plan_id)
   const expired =
@@ -54,10 +53,11 @@ export function WorkspaceCard(props: {
         </CardDescription>
       </CardHeader>
       <CardContent className='space-y-4'>
-        <p>
-          {t('Monthly requests')}: {props.item.usage.requests.toLocaleString()}{' '}
-          / {currentPlan?.limits.requests.toLocaleString()}
-        </p>
+        <WorkspaceUsageMeter
+          requests={props.item.usage.requests}
+          limit={currentPlan?.limits.requests ?? 0}
+          name={workspace.name}
+        />
         <p>
           {t('Plan expires')}:{' '}
           {workspace.plan_expires_at
@@ -73,20 +73,13 @@ export function WorkspaceCard(props: {
           >
             {t('Enter workspace')}
           </Button>
-          <Button
-            variant='outline'
-            onClick={() => setRedeem(true)}
-            disabled={workspace.status === 'suspended'}
+          <WorkspaceLink
+            id={workspace.id}
+            className={buttonVariants({ variant: 'outline' })}
           >
-            {t('Redeem hosting plan')}
-          </Button>
+            {t('Manage workspace')}
+          </WorkspaceLink>
         </div>
-        {redeem && (
-          <RedeemPlanDialog
-            workspace={workspace}
-            onClose={() => setRedeem(false)}
-          />
-        )}
       </CardContent>
     </Card>
   )

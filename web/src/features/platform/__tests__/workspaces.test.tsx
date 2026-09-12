@@ -17,7 +17,13 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import {
+  createRootRoute,
+  createRouter,
+  createMemoryHistory,
+  RouterProvider,
+} from '@tanstack/react-router'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { afterEach, expect, test, vi } from 'vitest'
@@ -47,12 +53,24 @@ afterEach(() => {
   window.history.replaceState(null, '', '/')
 })
 
-function renderWorkspaces(content: ReactNode) {
+async function renderWorkspaces(content: ReactNode) {
   const client = new QueryClient({
     defaultOptions: { mutations: { retry: false } },
   })
   clients.push(client)
-  render(<QueryClientProvider client={client}>{content}</QueryClientProvider>)
+  const root = createRootRoute({ component: () => content })
+  const router = createRouter({
+    routeTree: root,
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  await act(async () => {
+    await router.load()
+  })
+  render(
+    <QueryClientProvider client={client}>
+      <RouterProvider router={router} />
+    </QueryClientProvider>
+  )
 }
 
 const workspace: WorkspaceUsage = {
@@ -99,7 +117,7 @@ test('workspace creation rejects invalid slugs and shows the one-time activation
     tenant: workspace.tenant,
     root_activation_url: '/t/alpha/activate#token=test-activation',
   })
-  renderWorkspaces(<CreateWorkspace />)
+  await renderWorkspaces(<CreateWorkspace />)
   await user.type(screen.getByLabelText('Name'), 'Alpha')
   await user.type(screen.getByLabelText('Workspace address'), 'Invalid/slug')
   await user.click(screen.getByRole('button', { name: 'Create workspace' }))
@@ -121,11 +139,17 @@ test('workspace creation rejects invalid slugs and shows the one-time activation
   ).toBeVisible()
 })
 
-test('owners see usage while plan administration is reserved for administrators', () => {
-  renderWorkspaces(<WorkspaceCard item={workspace} plans={plans} />)
-  expect(screen.getByText(/Monthly requests/)).toHaveTextContent(
-    '1,000 / 1,000'
-  )
+test('owners see usage while plan administration is reserved for administrators', async () => {
+  await renderWorkspaces(<WorkspaceCard item={workspace} plans={plans} />)
+  expect(
+    screen.getByRole('progressbar', { name: 'Monthly usage for Alpha' })
+  ).toHaveAttribute('aria-valuenow', '100')
+  expect(
+    screen.getByText('1,000', { exact: true }).parentElement
+  ).toHaveTextContent('1,000 / 1,000')
+  expect(
+    screen.getByRole('link', { name: 'Manage workspace' })
+  ).toHaveAttribute('href', '/platform/workspaces/1')
   expect(screen.getByRole('link', { name: 'Enter workspace' })).toHaveAttribute(
     'href',
     '/t/alpha/'
@@ -140,7 +164,7 @@ test('an administrator can manually select Pro and a failed activation remains r
   vi.mocked(assignHostingPlan).mockRejectedValue(
     new Error('Please sign in again.')
   )
-  renderWorkspaces(
+  await renderWorkspaces(
     <AssignPlanDialog
       workspace={workspace.tenant}
       plans={plans}
@@ -161,8 +185,8 @@ test('an administrator can manually select Pro and a failed activation remains r
   expect(setWorkspaceStatus).not.toHaveBeenCalled()
 })
 
-test('expired workspaces show their state and disable entry', () => {
-  renderWorkspaces(
+test('expired workspaces show their state and disable entry', async () => {
+  await renderWorkspaces(
     <WorkspaceCard
       item={{
         ...workspace,
@@ -182,7 +206,7 @@ test('expired workspaces show their state and disable entry', () => {
 })
 
 test('root activation removes the secret from browser history and rejects a missing link', async () => {
-  renderWorkspaces(<ActivateWorkspace />)
+  await renderWorkspaces(<ActivateWorkspace />)
   expect(
     screen.getByRole('button', { name: 'Activate workspace root' })
   ).toBeDisabled()

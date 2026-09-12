@@ -120,7 +120,7 @@ func (s *Server) users(c *gin.Context) {
 	}
 	query := s.DB.WithContext(c.Request.Context()).Model(&User{})
 	if search := strings.TrimSpace(c.Query("search")); search != "" {
-		query = query.Where("email LIKE ?", "%"+search+"%")
+		query = query.Where("email LIKE ? OR display_name LIKE ?", "%"+search+"%", "%"+search+"%")
 	}
 	if status := c.Query("status"); status != "" {
 		if status != "active" && status != "disabled" {
@@ -177,6 +177,9 @@ func (s *Server) updateUser(c *gin.Context) {
 		case "demote":
 			updates["role"] = "user"
 		case "require_password_change":
+			if target.PasswordHash == "" {
+				return &tenant.HTTPError{Status: http.StatusBadRequest, Code: "password_login_unavailable"}
+			}
 			updates["must_change_password"] = true
 		case "revoke_sessions":
 		default:

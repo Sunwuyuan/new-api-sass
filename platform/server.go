@@ -7,13 +7,16 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/plan"
 	"github.com/QuantumNous/new-api/tenant"
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/gin-gonic/gin"
+	"github.com/go-webauthn/webauthn/webauthn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -23,6 +26,11 @@ type Server struct {
 	Origin           string
 	Secure           bool
 	DummyHash        string
+	Auth             AuthConfig
+	HTTPClient       *http.Client
+	Passkey          *webauthn.WebAuthn
+	providerMu       sync.Mutex
+	providers        map[string]*oidc.Provider
 	InitializeTenant func(context.Context) error
 }
 
@@ -42,7 +50,14 @@ func New(db *gorm.DB) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}); err != nil {
+	config, err := loadAuthConfig()
+	if err != nil {
+		return nil, err
+	}
+	if err := migrateExternalAccountEmails(db); err != nil {
+		return nil, err
+	}
+	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}); err != nil {
 		return nil, err
 	}
 	if err := db.Clauses(clause.OnConflict{DoNothing: true}).Create(&AdminGuard{ID: 1}).Error; err != nil {
@@ -59,17 +74,77 @@ func New(db *gorm.DB) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{DB: db, Origin: origin, Secure: secure, DummyHash: hash}
+	s := &Server{DB: db, Origin: origin, Secure: secure, DummyHash: hash, Auth: config,
+		HTTPClient: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
+		providers:  make(map[string]*oidc.Provider),
+	}
+	if err := s.configurePasskey(); err != nil {
+		return nil, err
+	}
 	if err := s.bootstrapAdmin(); err != nil {
 		return nil, err
 	}
 	return s, nil
 }
 
+// Older platform accounts required an email. External identities have no
+// verified platform email, so retain email uniqueness while allowing NULL.
+// GORM AutoMigrate does not relax the old NOT NULL constraint by itself.
+func migrateExternalAccountEmails(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&User{}) {
+		return nil
+	}
+	columns, err := db.Migrator().ColumnTypes(&User{})
+	if err != nil {
+		return err
+	}
+	for _, column := range columns {
+		if column.Name() != "email" {
+			continue
+		}
+		nullable, known := column.Nullable()
+		if !known {
+			return errors.New("cannot determine platform email nullability")
+		}
+		if nullable {
+			return nil
+		}
+		if !common.UsingMainDatabase(common.DatabaseTypeSQLite) {
+			return db.Migrator().AlterColumn(&User{}, "Email")
+		}
+		// The SQLite driver rebuilds the table with supported SQLite syntax.
+		// Its rebuild omits secondary indexes and triggers; restore their exact
+		// definitions in the same transaction, including administrator additions.
+		return db.Transaction(func(tx *gorm.DB) error {
+			var objects []struct{ SQL string }
+			if err := tx.Raw("SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ? AND sql IS NOT NULL ORDER BY name", "platform_users", []string{"index", "trigger"}).Scan(&objects).Error; err != nil {
+				return err
+			}
+			if err := tx.Migrator().AlterColumn(&User{}, "Email"); err != nil {
+				return err
+			}
+			for _, object := range objects {
+				if err := tx.Exec(object.SQL).Error; err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	return errors.New("platform account email column is missing")
+}
+
 func (s *Server) Routes(router *gin.Engine) {
 	api := router.Group("/platform/api", s.BrowserSecurity)
+	api.GET("/status", s.status)
 	api.POST("/register", s.register)
 	api.POST("/login", s.login)
+	api.POST("/oauth/:provider/start", s.beginOAuth)
+	api.POST("/oauth/:provider/finish", s.finishOAuth)
+	api.POST("/wechat/start", s.beginWeChat)
+	api.POST("/wechat/finish", s.finishWeChat)
+	api.POST("/passkey/login/begin", s.beginPasskeyLogin)
+	api.POST("/passkey/login/finish", s.finishPasskeyLogin)
 	api.GET("/plans", s.plans)
 	auth := api.Group("", s.authenticate)
 	auth.GET("/session", func(c *gin.Context) {
@@ -78,13 +153,27 @@ func (s *Server) Routes(router *gin.Engine) {
 	auth.POST("/logout", s.logout)
 	auth.POST("/password", s.changePassword)
 	auth.POST("/reauthenticate", s.reauthenticate)
+	auth.GET("/auth-methods", s.authMethods)
+	auth.POST("/oauth/:provider/link", s.beginOAuth)
+	auth.POST("/oauth/:provider/verify", s.beginOAuth)
+	auth.POST("/wechat/link", s.beginWeChat)
+	auth.POST("/wechat/verify", s.beginWeChat)
+	auth.POST("/passkey/verify/begin", s.beginPasskeyLogin)
+	auth.POST("/passkey/verify/finish", s.finishPasskeyLogin)
+	auth.POST("/passkey/register/begin", s.beginPasskeyRegistration)
+	auth.POST("/passkey/register/finish", s.finishPasskeyRegistration)
+	auth.POST("/passkey/:id/delete", s.deletePasskey)
 	auth.GET("/tenants", s.tenants)
+	auth.GET("/tenants/:id", s.workspaceDetail)
+	auth.GET("/usage", s.usageSummary)
 	auth.POST("/tenants", s.createTenant)
 	auth.POST("/redeem", s.redeem)
 	admin := auth.Group("/admin", requireAdmin)
 	admin.GET("/users", s.users)
 	admin.POST("/users/:id", s.updateUser)
 	admin.GET("/tenants", s.tenants)
+	admin.GET("/tenants/:id", s.workspaceDetail)
+	admin.GET("/usage", s.usageSummary)
 	admin.POST("/tenants/:id/plan", s.assignPlan)
 	admin.POST("/tenants/:id/status", s.setTenantStatus)
 	admin.GET("/plans", s.plans)
@@ -165,7 +254,7 @@ func (s *Server) tenants(c *gin.Context) {
 		usageByID[usage.TenantID] = usage
 	}
 	for _, owner := range owners {
-		ownerByID[owner.ID] = owner.Email
+		ownerByID[owner.ID] = owner.AccountName()
 	}
 	views := make([]gin.H, 0, len(tenants))
 	for _, workspace := range tenants {

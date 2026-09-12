@@ -32,13 +32,65 @@ import { cn } from '@/lib/utils'
 import { useOAuthLogin } from '../hooks/use-oauth-login'
 import type { SystemStatus } from '../types'
 
-type OAuthProvidersProps = {
-  status: SystemStatus | null
+export type OAuthProviderStatus = Pick<
+  SystemStatus,
+  | 'github_oauth'
+  | 'discord_oauth'
+  | 'oidc_enabled'
+  | 'oidc_display_name'
+  | 'linuxdo_oauth'
+  | 'telegram_oauth'
+  | 'wechat_login'
+> & { custom_oauth_providers?: Array<{ slug: string; name: string }> }
+
+type ProviderButtonsProps = {
+  status: OAuthProviderStatus | null
   disabled?: boolean
   className?: string
   onWeChatLogin?: () => void
   isWeChatLoading?: boolean
-  redirectTo?: string
+  onProviderLogin: (provider: string) => void
+  isLoading?: boolean
+  githubButtonText?: string
+  githubButtonDisabled?: boolean
+}
+
+type OAuthProvidersProps = Omit<
+  ProviderButtonsProps,
+  | 'status'
+  | 'onProviderLogin'
+  | 'isLoading'
+  | 'githubButtonText'
+  | 'githubButtonDisabled'
+> & { status: SystemStatus | null; redirectTo?: string }
+
+export function OAuthProviders(props: OAuthProvidersProps) {
+  const oauth = useOAuthLogin(props.status, props.redirectTo)
+  const handlers: Record<string, () => void> = {
+    github: oauth.handleGitHubLogin,
+    discord: oauth.handleDiscordLogin,
+    oidc: oauth.handleOIDCLogin,
+    linuxdo: oauth.handleLinuxDOLogin,
+    telegram: oauth.handleTelegramLogin,
+  }
+  return (
+    <OAuthProviderButtons
+      {...props}
+      isLoading={oauth.isLoading}
+      githubButtonText={oauth.githubButtonText}
+      githubButtonDisabled={oauth.githubButtonDisabled}
+      onProviderLogin={(slug) => {
+        if (handlers[slug]) {
+          handlers[slug]()
+          return
+        }
+        const custom = props.status?.custom_oauth_providers?.find(
+          (p) => p.slug === slug
+        )
+        if (custom) void oauth.handleCustomOAuthLogin(custom)
+      }}
+    />
+  )
 }
 
 type ProviderButton = {
@@ -49,46 +101,29 @@ type ProviderButton = {
   disabled?: boolean
 }
 
-export function OAuthProviders({
-  status,
-  disabled = false,
-  className,
-  onWeChatLogin,
-  isWeChatLoading = false,
-  redirectTo,
-}: OAuthProvidersProps) {
+// The button presentation is shared; the caller owns its account scope.
+export function OAuthProviderButtons(props: ProviderButtonsProps) {
   const { t } = useTranslation()
-  const {
-    isLoading,
-    githubButtonText,
-    githubButtonDisabled,
-    handleGitHubLogin,
-    handleDiscordLogin,
-    handleOIDCLogin,
-    handleLinuxDOLogin,
-    handleTelegramLogin,
-    handleCustomOAuthLogin,
-  } = useOAuthLogin(status, redirectTo)
-
+  const status = props.status
   const providerButtons: ProviderButton[] = []
 
-  if (status?.wechat_login && onWeChatLogin) {
+  if (status?.wechat_login && props.onWeChatLogin) {
     providerButtons.push({
       key: 'wechat',
       label: t('Continue with WeChat'),
-      onClick: onWeChatLogin,
-      icon: <IconWeChat className='h-4 w-4' />,
-      disabled: isWeChatLoading,
+      onClick: props.onWeChatLogin,
+      icon: <IconWeChat className='h-4 w-4' aria-hidden='true' />,
+      disabled: props.isWeChatLoading,
     })
   }
 
   if (status?.github_oauth) {
     providerButtons.push({
       key: 'github',
-      label: githubButtonText || t('Continue with GitHub'),
-      onClick: handleGitHubLogin,
-      icon: <IconGithub className='h-4 w-4' />,
-      disabled: githubButtonDisabled,
+      label: props.githubButtonText || t('Continue with GitHub'),
+      onClick: () => props.onProviderLogin('github'),
+      icon: <IconGithub className='h-4 w-4' aria-hidden='true' />,
+      disabled: props.githubButtonDisabled,
     })
   }
 
@@ -96,8 +131,8 @@ export function OAuthProviders({
     providerButtons.push({
       key: 'discord',
       label: t('Continue with Discord'),
-      onClick: handleDiscordLogin,
-      icon: <IconDiscord className='h-4 w-4' />,
+      onClick: () => props.onProviderLogin('discord'),
+      icon: <IconDiscord className='h-4 w-4' aria-hidden='true' />,
     })
   }
 
@@ -108,7 +143,7 @@ export function OAuthProviders({
       label: t('Continue with {{name}}', {
         name: oidcDisplayName,
       }),
-      onClick: handleOIDCLogin,
+      onClick: () => props.onProviderLogin('oidc'),
     })
   }
 
@@ -116,8 +151,8 @@ export function OAuthProviders({
     providerButtons.push({
       key: 'linuxdo',
       label: t('Continue with LinuxDO'),
-      onClick: handleLinuxDOLogin,
-      icon: <IconLinuxDo className='h-4 w-4' />,
+      onClick: () => props.onProviderLogin('linuxdo'),
+      icon: <IconLinuxDo className='h-4 w-4' aria-hidden='true' />,
     })
   }
 
@@ -125,8 +160,8 @@ export function OAuthProviders({
     providerButtons.push({
       key: 'telegram',
       label: t('Continue with Telegram'),
-      onClick: handleTelegramLogin,
-      icon: <IconTelegram data-icon='inline-start' />,
+      onClick: () => props.onProviderLogin('telegram'),
+      icon: <IconTelegram data-icon='inline-start' aria-hidden='true' />,
     })
   }
 
@@ -137,7 +172,7 @@ export function OAuthProviders({
       providerButtons.push({
         key: `custom-${provider.slug}`,
         label: t('Continue with {{name}}', { name: provider.name }),
-        onClick: () => handleCustomOAuthLogin(provider),
+        onClick: () => props.onProviderLogin(provider.slug),
       })
     }
   }
@@ -145,7 +180,7 @@ export function OAuthProviders({
   if (providerButtons.length === 0) return null
 
   return (
-    <div className={cn('space-y-3', className)}>
+    <div className={cn('space-y-3', props.className)}>
       <div className='relative'>
         <div className='absolute inset-0 flex items-center'>
           <span className='w-full border-t' />
@@ -164,7 +199,7 @@ export function OAuthProviders({
               key={key}
               variant='outline'
               type='button'
-              disabled={disabled || isLoading || extraDisabled}
+              disabled={props.disabled || props.isLoading || extraDisabled}
               onClick={onClick}
               className='h-11 w-full justify-center gap-2 rounded-lg'
             >

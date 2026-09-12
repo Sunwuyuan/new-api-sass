@@ -18,7 +18,9 @@ For commercial licensing, please contact support@quantumnous.com
 */
 export type PlatformUser = {
   id: number
-  email: string
+  email: string | null
+  display_name?: string
+  has_password?: boolean
   role: 'admin' | 'root' | 'user'
   status: 'active' | 'disabled'
   must_change_password: boolean
@@ -29,6 +31,7 @@ export type PlatformSession = {
   user: PlatformUser
   csrf_token: string
   authenticated_at: string
+  redirect?: string
 }
 
 export type HostingPlan = {

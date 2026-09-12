@@ -16,122 +16,111 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Logout01Icon } from '@hugeicons/core-free-icons'
+import { HugeiconsIcon } from '@hugeicons/react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Outlet, useRouter, useRouterState } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { ErrorState } from '@/components/error-state'
 import { LanguageSwitcher } from '@/components/language-switcher'
 import { LoadingState } from '@/components/loading-state'
+import { SkipToMain } from '@/components/skip-to-main'
 import { Button } from '@/components/ui/button'
+import {
+  SidebarInset,
+  SidebarProvider,
+  SidebarTrigger,
+} from '@/components/ui/sidebar'
 import { Toaster } from '@/components/ui/sonner'
 
 import { platformLogout, platformSessionQuery } from './api'
-import { PlatformAuthForm } from './auth-form'
-import { HostingPlans } from './hosting-plans'
-import { PlatformAccessDenied, PlatformLink } from './navigation'
+import { updatePlatformSession } from './auth-api'
 import { PlatformPasswordDialog } from './password-dialog'
+import { PlatformSidebar } from './sidebar'
+
+export function PlatformRoot() {
+  return (
+    <>
+      <Outlet />
+      <Toaster />
+    </>
+  )
+}
 
 export function PlatformLayout() {
   const { t } = useTranslation()
   const router = useRouter()
-  const [passwordOpen, setPasswordOpen] = useState(false)
   const queryClient = useQueryClient()
   const session = useQuery(platformSessionQuery)
   const path = useRouterState({ select: (state) => state.location.pathname })
-  const admin =
-    !!session.data && ['admin', 'root'].includes(session.data.user.role)
-  const passwordRequired = session.data?.user.must_change_password
+  useEffect(() => {
+    if (session.data === null) void router.invalidate()
+  }, [session.data, router])
   const logout = useMutation({
     mutationFn: platformLogout,
     onSuccess: async () => {
-      await queryClient.cancelQueries({ queryKey: ['platform'] })
-      queryClient.removeQueries({
-        queryKey: ['platform'],
-        predicate: (query) => query.queryKey[1] !== 'session',
-      })
-      queryClient.setQueryData(['platform', 'session'], null)
+      await updatePlatformSession(queryClient, null)
+      await router.navigate({ href: '/platform/sign-in', replace: true })
+      await router.invalidate()
     },
   })
+  if (session.isError) {
+    return <ErrorState onRetry={() => void session.refetch()} />
+  }
+  if (!session.data) return <LoadingState />
   return (
-    <main className='mx-auto flex min-h-svh max-w-7xl flex-col gap-6 px-4 py-6 sm:px-8'>
-      <header className='flex flex-wrap items-center justify-between gap-4 border-b pb-5'>
-        <div>
-          <h1 className='text-2xl font-semibold'>New API SaaS</h1>
-          <p className='text-muted-foreground'>
-            {t('Your independent API workspaces')}
-          </p>
-        </div>
-        <div className='flex flex-wrap items-center gap-2'>
-          <LanguageSwitcher />
-          {session.data && (
-            <Button variant='outline' onClick={() => setPasswordOpen(true)}>
-              {t('Change platform password')}
-            </Button>
-          )}
-          {session.data && (
+    <SidebarProvider>
+      <SkipToMain />
+      <PlatformSidebar user={session.data.user} />
+      <SidebarInset className='min-w-0'>
+        <header className='bg-background/95 sticky top-0 z-20 flex h-14 items-center justify-between gap-3 border-b px-4 sm:px-6'>
+          <div className='flex min-w-0 items-center gap-3'>
+            <SidebarTrigger />
+            <span className='text-muted-foreground truncate text-sm'>
+              {path.startsWith('/platform/admin')
+                ? t('Administration')
+                : t('Workspace')}
+            </span>
+          </div>
+          <div className='flex shrink-0 items-center gap-2'>
+            <LanguageSwitcher />
             <Button
-              variant='outline'
+              variant='ghost'
+              size='sm'
               onClick={() => logout.mutate()}
               disabled={logout.isPending}
             >
+              <HugeiconsIcon icon={Logout01Icon} data-icon='inline-start' />
               {t('Sign out')}
             </Button>
-          )}
-        </div>
-      </header>
-      {session.isPending && <LoadingState />}
-      {session.isError && (
-        <ErrorState
-          title={t('Unable to complete the request')}
-          onRetry={() => void session.refetch()}
-        />
-      )}
-      {session.data === null && (
-        <>
-          <PlatformAuthForm onSignedIn={() => void router.invalidate()} />
-          <HostingPlans />
-        </>
-      )}
-      {session.data && (
-        <>
-          <nav
-            aria-label={t('Platform navigation')}
-            className='flex flex-wrap gap-2'
-          >
-            <PlatformLink to='/platform'>{t('My workspaces')}</PlatformLink>
-            {admin && !passwordRequired && (
-              <PlatformLink to='/platform/admin/users'>
-                {t('Administration')}
-              </PlatformLink>
-            )}
-          </nav>
-          {(passwordOpen || passwordRequired) && (
+          </div>
+        </header>
+        <div
+          id='content'
+          className='mx-auto flex w-full max-w-7xl flex-1 flex-col gap-6 p-4 sm:p-6 lg:p-8'
+        >
+          {session.data.user.must_change_password ? (
             <PlatformPasswordDialog
               open
-              required={passwordRequired}
-              onOpenChange={setPasswordOpen}
+              required
+              onOpenChange={() => undefined}
             />
+          ) : (
+            <Outlet />
           )}
-          {!passwordRequired &&
-            (path.startsWith('/platform/admin') && !admin ? (
-              <PlatformAccessDenied />
-            ) : (
-              <Outlet />
-            ))}
-        </>
-      )}
-      <footer className='text-muted-foreground mt-auto pt-6 text-center text-sm'>
-        <a
-          href='https://github.com/QuantumNous/new-api'
-          target='_blank'
-          rel='noreferrer'
-        >
-          New API · QuantumNous
-        </a>
-      </footer>
-      <Toaster />
-    </main>
+        </div>
+        <footer className='text-muted-foreground px-6 py-4 text-xs'>
+          <a
+            href='https://github.com/QuantumNous/new-api'
+            target='_blank'
+            rel='noreferrer'
+          >
+            New API · QuantumNous
+          </a>
+        </footer>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

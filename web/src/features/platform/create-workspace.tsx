@@ -42,11 +42,13 @@ import {
 import { Input } from '@/components/ui/input'
 
 import { createWorkspace } from './api'
+import { WorkspaceLink } from './navigation'
 
 export function CreateWorkspace(props: { disabled?: boolean }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [activationURL, setActivationURL] = useState('')
+  const [createdID, setCreatedID] = useState<number>()
   const schema = z.object({
     name: z.string().trim().min(1, t('Required')).max(128),
     slug: z
@@ -67,8 +69,9 @@ export function CreateWorkspace(props: { disabled?: boolean }) {
       setActivationURL(
         new URL(data.root_activation_url, window.location.origin).toString()
       )
+      setCreatedID(data.tenant.id)
       form.reset()
-      void queryClient.invalidateQueries({ queryKey: ['platform', 'tenants'] })
+      void queryClient.invalidateQueries({ queryKey: ['platform'] })
     },
   })
   return (
@@ -140,6 +143,11 @@ export function CreateWorkspace(props: { disabled?: boolean }) {
             >
               {t('Activate workspace root')}
             </Button>
+            {createdID && (
+              <WorkspaceLink id={createdID}>
+                {t('Manage workspace')}
+              </WorkspaceLink>
+            )}
             <CopyButton
               value={activationURL}
               size='default'

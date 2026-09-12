@@ -22,37 +22,113 @@ import {
   createRoute,
   createRouter,
   lazyRouteComponent,
+  redirect,
   type RouterHistory,
 } from '@tanstack/react-router'
 
 import { LoadingState } from '@/components/loading-state'
 
 import { platformSessionQuery } from './api'
-import { PlatformLayout } from './layout'
-import { PlatformAccessDenied } from './navigation'
+import { PlatformLayout, PlatformRoot } from './layout'
+import { platformAuthSearch, safePlatformRedirect } from './lib/auth-redirect'
+import { PlatformAccessDenied, PlatformNotFound } from './navigation'
 
 const root = createRootRouteWithContext<{ queryClient: QueryClient }>()({
-  component: PlatformLayout,
+  component: PlatformRoot,
+  notFoundComponent: PlatformNotFound,
 })
 const home = createRoute({
   getParentRoute: () => root,
   path: '/',
-  component: lazyRouteComponent(() => import('./dashboard')),
+  beforeLoad: () => {
+    throw redirect({ href: '/platform', replace: true })
+  },
+})
+const auth = createRoute({
+  getParentRoute: () => root,
+  id: 'auth',
+  beforeLoad: async ({ context }) => {
+    const session = await context.queryClient.fetchQuery(platformSessionQuery)
+    if (session) throw redirect({ href: '/platform', replace: true })
+  },
+})
+const signIn = createRoute({
+  getParentRoute: () => auth,
+  path: '/platform/sign-in',
+  validateSearch: platformAuthSearch,
+  component: lazyRouteComponent(() => import('./auth-page'), 'PlatformSignIn'),
+})
+const signUp = createRoute({
+  getParentRoute: () => auth,
+  path: '/platform/sign-up',
+  validateSearch: platformAuthSearch,
+  component: lazyRouteComponent(() => import('./auth-page'), 'PlatformSignUp'),
+})
+const oauth = createRoute({
+  getParentRoute: () => root,
+  path: '/platform/oauth/$provider',
+  component: lazyRouteComponent(() => import('./oauth-callback')),
+})
+const authenticated = createRoute({
+  getParentRoute: () => root,
+  id: 'authenticated',
+  component: PlatformLayout,
+  beforeLoad: async ({ context, location }) => {
+    const session = await context.queryClient.fetchQuery({
+      ...platformSessionQuery,
+      staleTime: 0,
+    })
+    if (!session) {
+      throw redirect({
+        href: `/platform/sign-in?redirect=${encodeURIComponent(safePlatformRedirect(location.href))}`,
+        replace: true,
+      })
+    }
+    return { platformSession: session }
+  },
 })
 const platform = createRoute({
-  getParentRoute: () => root,
+  getParentRoute: () => authenticated,
   path: '/platform',
   component: lazyRouteComponent(() => import('./dashboard')),
 })
+const security = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/security',
+  component: lazyRouteComponent(() => import('./security')),
+})
+const hostingPlans = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/plans',
+  component: lazyRouteComponent(() => import('./plans-page')),
+})
+const createWorkspace = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/workspaces/new',
+  component: lazyRouteComponent(() => import('./create-page')),
+})
+const workspace = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/workspaces/$workspaceId',
+  component: lazyRouteComponent(() => import('./workspace-detail')),
+})
+const usage = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/usage',
+  component: lazyRouteComponent(() => import('./usage')),
+})
+const redeem = createRoute({
+  getParentRoute: () => authenticated,
+  path: '/platform/redeem',
+  component: lazyRouteComponent(() => import('./redeem-page')),
+})
 const admin = createRoute({
-  getParentRoute: () => root,
+  getParentRoute: () => authenticated,
   path: '/platform/admin',
-  beforeLoad: async ({ context }) => {
-    // Resolve platform authentication before the page can mount. The root
-    // layout renders sign-in, required password changes or access denied and
-    // withholds Outlet until the account is authorized. Keeping those states
-    // out of router errors also lets sign-in resume a protected deep link.
-    await context.queryClient.ensureQueryData(platformSessionQuery)
+  beforeLoad: ({ context }) => {
+    if (!['admin', 'root'].includes(context.platformSession.user.role)) {
+      throw new Error('platform_admin_required')
+    }
   },
   errorComponent: PlatformAccessDenied,
   component: lazyRouteComponent(() => import('./admin/layout')),
@@ -60,7 +136,9 @@ const admin = createRoute({
 const adminHome = createRoute({
   getParentRoute: () => admin,
   path: '/',
-  component: lazyRouteComponent(() => import('./admin/users')),
+  beforeLoad: () => {
+    throw redirect({ href: '/platform/admin/usage', replace: true })
+  },
 })
 const users = createRoute({
   getParentRoute: () => admin,
@@ -71,6 +149,11 @@ const workspaces = createRoute({
   getParentRoute: () => admin,
   path: 'workspaces',
   component: lazyRouteComponent(() => import('./admin/workspaces')),
+})
+const adminWorkspace = createRoute({
+  getParentRoute: () => admin,
+  path: 'workspaces/$workspaceId',
+  component: lazyRouteComponent(() => import('./workspace-detail')),
 })
 const plans = createRoute({
   getParentRoute: () => admin,
@@ -87,10 +170,34 @@ const audits = createRoute({
   path: 'audits',
   component: lazyRouteComponent(() => import('./admin/audits')),
 })
+const adminUsage = createRoute({
+  getParentRoute: () => admin,
+  path: 'usage',
+  component: lazyRouteComponent(() => import('./usage')),
+})
 const routeTree = root.addChildren([
   home,
-  platform,
-  admin.addChildren([adminHome, users, workspaces, plans, redemptions, audits]),
+  auth.addChildren([signIn, signUp]),
+  oauth,
+  authenticated.addChildren([
+    platform,
+    security,
+    hostingPlans,
+    createWorkspace,
+    workspace,
+    usage,
+    redeem,
+    admin.addChildren([
+      adminHome,
+      users,
+      workspaces,
+      adminWorkspace,
+      plans,
+      redemptions,
+      audits,
+      adminUsage,
+    ]),
+  ]),
 ])
 
 export function createPlatformRouter(

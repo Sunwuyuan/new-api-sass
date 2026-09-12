@@ -241,6 +241,7 @@ func EnforceTenantScopes() error {
 		"plan_assignments": true, "tenant_root_activations": true,
 		"platform_admin_guard": true, "platform_audits": true,
 		"platform_redemptions": true, "platform_redemption_uses": true,
+		"platform_auth_flows": true, "platform_oauth_identities": true, "platform_passkeys": true,
 		"system_instances": true,
 	}
 	if err := DB.Use(tenant.Scope{GlobalTables: globals, BeforeCreate: plan.EnforceResourceCapacity}); err != nil {

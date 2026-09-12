@@ -119,6 +119,23 @@ func TestSaaSContracts(t *testing.T) {
 	server.ContextWithFallback = true
 	server.Use(gin.Recovery())
 	router.SetSaaSRouter(server, saas, router.WebAssets{BuildFS: buildFS, IndexPage: indexPage})
+	t.Run("platform callback document security", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		callbackQuery := "code=synthetic%2Fauthorization%2Bcode&state=browser-state"
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/platform/oauth/github?"+callbackQuery, nil))
+		require.Equal(t, http.StatusSeeOther, response.Code)
+		assert.Equal(t, "/platform/oauth/github#"+callbackQuery, response.Header().Get("Location"))
+		assert.Equal(t, "no-store", response.Header().Get("Cache-Control"))
+		// The redirected document URL has no query; even resources injected by
+		// a proxy cannot receive the authorization code in their Referer.
+		response = httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/platform/oauth/github", nil))
+		require.Equal(t, http.StatusOK, response.Code)
+		assert.Equal(t, "no-referrer", response.Header().Get("Referrer-Policy"))
+		assert.Equal(t, "frame-ancestors 'none'", response.Header().Get("Content-Security-Policy"))
+		assert.Contains(t, response.Body.String(), `<meta name="referrer" content="no-referrer" />`)
+		assert.NotContains(t, response.Body.String(), "synthetic")
+	})
 	admin := &saasBrowser{handler: server}
 	admin.login(t, "administrator@example.test", adminPassword)
 	owner := &saasBrowser{handler: server}

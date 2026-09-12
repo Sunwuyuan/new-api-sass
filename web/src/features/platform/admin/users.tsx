@@ -52,9 +52,11 @@ export default function PlatformUsers() {
     { accessorKey: 'id', header: t('ID') },
     {
       accessorKey: 'email',
-      header: t('Email'),
+      header: t('Account'),
       cell: ({ row }) => (
-        <span className='break-all'>{row.original.email}</span>
+        <span className='break-all'>
+          {row.original.email ?? row.original.display_name}
+        </span>
       ),
     },
     {
@@ -104,11 +106,17 @@ export default function PlatformUsers() {
         ]
         return (
           <DataTableRowActionMenu
-            ariaLabel={t('Actions for {{name}}', { name: user.email })}
+            ariaLabel={t('Actions for {{name}}', {
+              name: user.email ?? user.display_name,
+            })}
           >
             {actions.map((action) => (
               <DropdownMenuItem
                 key={action.action}
+                disabled={
+                  action.action === 'require_password_change' &&
+                  !user.has_password
+                }
                 onClick={() => {
                   mutation.reset()
                   setSelected({ user, ...action })
@@ -131,7 +139,7 @@ export default function PlatformUsers() {
           const data = await getPlatformUsers(params)
           return { ...data, items: data.users }
         }}
-        searchPlaceholder={t('Search by email')}
+        searchPlaceholder={t('Search by email or account name')}
         statuses={[
           { value: 'active', label: t('Active') },
           { value: 'disabled', label: t('Disabled') },
@@ -151,7 +159,9 @@ export default function PlatformUsers() {
           title={selected.label}
           desc={
             <>
-              <p className='font-medium break-all'>{selected.user.email}</p>
+              <p className='font-medium break-all'>
+                {selected.user.email ?? selected.user.display_name}
+              </p>
               <p>
                 {t(
                   'This change revokes all platform sessions for this account. At least one enabled administrator must remain.'

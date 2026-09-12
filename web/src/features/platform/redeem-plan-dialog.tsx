@@ -57,7 +57,7 @@ export function RedeemPlanDialog(props: {
       redeemHostingPlan(props.workspace.id, values.code),
     onSuccess: (assignment) => {
       form.reset()
-      void queryClient.invalidateQueries({ queryKey: ['platform', 'tenants'] })
+      void queryClient.invalidateQueries({ queryKey: ['platform'] })
       toast.success(
         t('Hosting plan activated until {{date}}.', {
           date: new Date(assignment.expires_at).toLocaleString(),

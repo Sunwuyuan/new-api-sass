@@ -40,13 +40,19 @@ import type {
 
 let csrfToken = ''
 
+export function setPlatformSessionCredentials(session: PlatformSession | null) {
+  csrfToken = session?.csrf_token ?? ''
+}
+
 // Platform sessions have their own cookie and CSRF contract. Gateway JWTs are
 // never attached to platform requests.
-const client = axios.create({
+export const platformClient = axios.create({
   baseURL: '/platform/api',
   withCredentials: true,
   headers: { 'X-Requested-With': 'NewAPIPlatform' },
 })
+
+const client = platformClient
 
 client.interceptors.request.use((config) => {
   config.headers.set('X-CSRF-Token', csrfToken)
@@ -59,6 +65,27 @@ client.interceptors.response.use(undefined, (error: unknown) => {
     : undefined
   let message = t('Unable to complete the request')
   if (code === 'invalid_credentials') message = t('Invalid email or password')
+  if (code === 'authentication_failed') {
+    message = t(
+      'Authentication failed. Start again or use another sign-in method.'
+    )
+  }
+  if (code === 'login_method_disabled' || code === 'password_login_disabled') {
+    message = t('This sign-in method is not available.')
+  }
+  if (code === 'registration_disabled') message = t('Registration is disabled')
+  if (code === 'password_login_unavailable') {
+    message = t('This account uses an external sign-in method.')
+  }
+  if (code === 'reauthentication_method_unavailable') {
+    message = t('Use a Passkey or another verification method.')
+  }
+  if (code === 'passkey_limit_reached') {
+    message = t('You can register up to 10 Passkeys.')
+  }
+  if (code === 'last_login_method') {
+    message = t('Keep at least one available sign-in method.')
+  }
   if (code === 'authentication_rate_limited') {
     message = t('Too many attempts. Please try again later.')
   }

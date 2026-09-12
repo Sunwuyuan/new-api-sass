@@ -151,6 +151,14 @@ func TestSetUpLoggerNeverWritesTaskArtifactAccess(t *testing.T) {
 	router.ServeHTTP(httptest.NewRecorder(), request)
 
 	assert.False(t, strings.Contains(output.String(), "never-log-this"))
+	router.GET("/platform/oauth/:provider", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request = testtenant.NewRequest(http.MethodGet, "/platform/oauth/github?code=never-log-oauth-code&state=never-log-oauth-state", nil)
+	router.ServeHTTP(httptest.NewRecorder(), request)
+	assert.NotContains(t, output.String(), "never-log-oauth-code")
+	assert.NotContains(t, output.String(), "never-log-oauth-state")
+	assert.Contains(t, output.String(), "/platform/oauth/github")
 }
 
 func urlQueryEscape(value string) string {

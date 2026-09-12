@@ -29,10 +29,10 @@ import { DataTablePagination } from '@/components/data-table'
 import { EmptyState } from '@/components/empty-state'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
+import { buttonVariants } from '@/components/ui/button'
 
 import { getHostingPlans, getWorkspaces, platformSessionQuery } from './api'
-import { CreateWorkspace } from './create-workspace'
-import { HostingPlans } from './hosting-plans'
+import { PlatformLink } from './navigation'
 import { WorkspaceCard } from './workspace-card'
 
 export default function PlatformDashboard() {
@@ -64,45 +64,49 @@ export default function PlatformDashboard() {
     state: { pagination },
     onPaginationChange: setPagination,
   })
+  if (plans.isPending) return <LoadingState />
+  if (plans.isError) return <ErrorState onRetry={() => void plans.refetch()} />
   return (
-    <>
-      <HostingPlans />
-      <section className='space-y-4' aria-label={t('My workspaces')}>
-        <h2 className='text-xl font-semibold'>{t('My workspaces')}</h2>
-        {workspaces.data && (
-          <p className='text-muted-foreground'>
-            {t('Workspace capacity: {{used}} / {{limit}}', {
-              used: workspaces.data.workspace_count,
-              limit: workspaces.data.max_workspaces,
-            })}
+    <section className='space-y-4' aria-label={t('My workspaces')}>
+      <header className='flex flex-wrap items-center justify-between gap-4'>
+        <div>
+          <h1 className='text-2xl font-semibold'>{t('My workspaces')}</h1>
+          <p className='text-muted-foreground mt-1 text-sm'>
+            {t('Your independent API workspaces')}
           </p>
-        )}
-        {workspaces.data && (
-          <CreateWorkspace
-            key={session.data?.user.id}
-            disabled={
-              workspaces.data.workspace_count >= workspaces.data.max_workspaces
-            }
-          />
-        )}
-        {workspaces.isPending && <LoadingState />}
-        {workspaces.isError && (
-          <ErrorState onRetry={() => void workspaces.refetch()} />
-        )}
-        {workspaces.data?.tenants.length === 0 && (
-          <EmptyState title={t('No workspaces yet')} />
-        )}
-        <div className='grid gap-4 md:grid-cols-2'>
-          {workspaces.data?.tenants.map((item) => (
-            <WorkspaceCard
-              key={item.tenant.id}
-              item={item}
-              plans={plans.data ?? []}
-            />
-          ))}
         </div>
-        {workspaces.data && <DataTablePagination table={table} compact />}
-      </section>
-    </>
+        <PlatformLink
+          to='/platform/workspaces/new'
+          className={buttonVariants()}
+        >
+          {t('Create workspace')}
+        </PlatformLink>
+      </header>
+      {workspaces.data && (
+        <p className='text-muted-foreground'>
+          {t('Workspace capacity: {{used}} / {{limit}}', {
+            used: workspaces.data.workspace_count,
+            limit: workspaces.data.max_workspaces,
+          })}
+        </p>
+      )}
+      {workspaces.isPending && <LoadingState />}
+      {workspaces.isError && (
+        <ErrorState onRetry={() => void workspaces.refetch()} />
+      )}
+      {workspaces.data?.tenants.length === 0 && (
+        <EmptyState title={t('No workspaces yet')} />
+      )}
+      <div className='grid gap-4 xl:grid-cols-2'>
+        {workspaces.data?.tenants.map((item) => (
+          <WorkspaceCard
+            key={item.tenant.id}
+            item={item}
+            plans={plans.data ?? []}
+          />
+        ))}
+      </div>
+      {workspaces.data && <DataTablePagination table={table} compact />}
+    </section>
   )
 }

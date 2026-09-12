@@ -13,6 +13,7 @@ import (
 	"net/mail"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -26,7 +27,9 @@ import (
 
 type User struct {
 	ID                 int64     `json:"id" gorm:"primaryKey"`
-	Email              string    `json:"email" gorm:"size:254;not null;uniqueIndex"`
+	Email              *string   `json:"email" gorm:"size:254;uniqueIndex"`
+	DisplayName        string    `json:"display_name" gorm:"size:128"`
+	HasPassword        bool      `json:"has_password" gorm:"-"`
 	PasswordHash       string    `json:"-" gorm:"type:text;not null"`
 	Role               string    `json:"role" gorm:"size:16;not null"`
 	Status             string    `json:"status" gorm:"size:16;not null;default:active"`
@@ -37,6 +40,18 @@ type User struct {
 }
 
 func (User) TableName() string { return "platform_users" }
+
+func (u *User) AfterFind(*gorm.DB) error {
+	u.HasPassword = u.PasswordHash != ""
+	return nil
+}
+
+func (u User) AccountName() string {
+	if u.Email != nil {
+		return *u.Email
+	}
+	return u.DisplayName
+}
 
 type Session struct {
 	TokenHash         string    `gorm:"size:64;primaryKey"`
@@ -104,6 +119,7 @@ func (s *Server) authRateLimit(c *gin.Context, email string) bool {
 func (s *Server) BrowserSecurity(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	c.Header("X-Content-Type-Options", "nosniff")
+	c.Header("Referrer-Policy", "no-referrer")
 	if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
 		c.Next()
 		return
@@ -227,6 +243,10 @@ func validateCredentials(input *credentials, newPassword bool) error {
 }
 
 func (s *Server) register(c *gin.Context) {
+	if !s.Auth.Registration || !s.Auth.PasswordLogin {
+		writeError(c, http.StatusForbidden, "registration_disabled")
+		return
+	}
 	var input credentials
 	if c.ShouldBindJSON(&input) != nil || validateCredentials(&input, true) != nil {
 		writeError(c, http.StatusBadRequest, "invalid_email_or_password_length")
@@ -240,7 +260,7 @@ func (s *Server) register(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
 	}
-	user := User{Email: input.Email, PasswordHash: hash, Role: "user"}
+	user := User{Email: &input.Email, PasswordHash: hash, Role: "user"}
 	if err := s.DB.WithContext(c.Request.Context()).Clauses(clause.OnConflict{DoNothing: true}).Create(&user).Error; err != nil {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
@@ -250,6 +270,10 @@ func (s *Server) register(c *gin.Context) {
 }
 
 func (s *Server) login(c *gin.Context) {
+	if !s.Auth.PasswordLogin {
+		writeError(c, http.StatusForbidden, "password_login_disabled")
+		return
+	}
 	var input credentials
 	if c.ShouldBindJSON(&input) != nil || validateCredentials(&input, false) != nil {
 		writeError(c, http.StatusUnauthorized, "invalid_credentials")
@@ -261,11 +285,11 @@ func (s *Server) login(c *gin.Context) {
 	var user User
 	err := s.DB.WithContext(c.Request.Context()).Where("email = ?", input.Email).First(&user).Error
 	hash := s.DummyHash
-	if err == nil {
+	if err == nil && user.PasswordHash != "" {
 		hash = user.PasswordHash
 	}
 	valid := common.ValidatePasswordAndHash(input.Password, hash)
-	if err != nil || !valid || user.Status != "active" {
+	if err != nil || !valid || user.PasswordHash == "" || user.Status != "active" {
 		common.SysLog("platform authentication failed: account_ref=" + digest(input.Email))
 		writeError(c, http.StatusUnauthorized, "invalid_credentials")
 		return
@@ -278,10 +302,10 @@ func (s *Server) reauthenticate(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	user := c.MustGet("platform_user").(User)
-	if !s.authRateLimit(c, user.Email) {
+	if !s.authRateLimit(c, "user:"+strconv.FormatInt(user.ID, 10)) {
 		return
 	}
-	if c.ShouldBindJSON(&input) != nil || len(input.Password) > 512 || !common.ValidatePasswordAndHash(input.Password, user.PasswordHash) {
+	if c.ShouldBindJSON(&input) != nil || user.PasswordHash == "" || len(input.Password) > 512 || !common.ValidatePasswordAndHash(input.Password, user.PasswordHash) {
 		common.SysLog(fmt.Sprintf("platform reauthentication failed: user_id=%d", user.ID))
 		writeError(c, http.StatusUnauthorized, "invalid_credentials")
 		return
@@ -322,7 +346,11 @@ func (s *Server) issueSession(c *gin.Context, user User, action string) {
 		return
 	}
 	http.SetCookie(c.Writer, &http.Cookie{Name: sessionCookie, Value: raw, Path: "/platform/api", HttpOnly: true, Secure: s.Secure, SameSite: http.SameSiteStrictMode, MaxAge: 8 * 3600, Expires: session.ExpiresAt})
-	c.JSON(http.StatusOK, gin.H{"success": true, "user": user, "csrf_token": csrfToken(raw), "authenticated_at": session.CreatedAt})
+	response := gin.H{"success": true, "user": user, "csrf_token": csrfToken(raw), "authenticated_at": session.CreatedAt}
+	if target, exists := c.Get("platform_auth_redirect"); exists {
+		response["redirect"] = target
+	}
+	c.JSON(http.StatusOK, response)
 }
 
 func (s *Server) logout(c *gin.Context) {
@@ -341,11 +369,15 @@ func (s *Server) changePassword(c *gin.Context) {
 		NewPassword     string `json:"new_password"`
 	}
 	user := c.MustGet("platform_user").(User)
-	if c.ShouldBindJSON(&input) != nil || validateCredentials(&credentials{Email: user.Email, Password: input.NewPassword}, true) != nil {
+	if user.Email == nil || user.PasswordHash == "" {
+		writeError(c, http.StatusBadRequest, "password_login_unavailable")
+		return
+	}
+	if c.ShouldBindJSON(&input) != nil || len(input.CurrentPassword) > 512 || validateCredentials(&credentials{Email: *user.Email, Password: input.NewPassword}, true) != nil {
 		writeError(c, http.StatusBadRequest, "invalid_new_password")
 		return
 	}
-	if !s.authRateLimit(c, user.Email) {
+	if !s.authRateLimit(c, "user:"+strconv.FormatInt(user.ID, 10)) {
 		return
 	}
 	if !common.ValidatePasswordAndHash(input.CurrentPassword, user.PasswordHash) {
@@ -423,7 +455,7 @@ func (s *Server) bootstrapAdmin() error {
 	if err != nil {
 		return err
 	}
-	return s.DB.Create(&User{Email: input.Email, PasswordHash: hash, Role: "admin"}).Error
+	return s.DB.Create(&User{Email: &input.Email, PasswordHash: hash, Role: "admin"}).Error
 }
 func logCSRFReject(c *gin.Context, reason, wantOrigin string) {
 	common.SysLog(fmt.Sprintf("platform csrf rejected: reason=%s method=%s route=%q configured_origin=%s", reason, c.Request.Method, c.FullPath(), wantOrigin))

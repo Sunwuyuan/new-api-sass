@@ -25,6 +25,7 @@ import { afterEach, expect, test, vi } from 'vitest'
 import { changePlatformPassword, platformLogin, platformRegister } from '../api'
 import { PlatformAuthForm } from '../auth-form'
 import { PlatformPasswordDialog } from '../password-dialog'
+import { authStatus } from './fixtures'
 
 vi.mock('../api', () => ({
   changePlatformPassword: vi.fn(),
@@ -49,16 +50,22 @@ function renderAccount(content: ReactNode) {
 test('registration validates password length and directs the user to sign in', async () => {
   const user = userEvent.setup()
   vi.mocked(platformRegister).mockResolvedValue()
-  renderAccount(<PlatformAuthForm />)
-  await user.click(
-    screen.getByRole('button', { name: 'Create platform account' })
+  const onRegistered = vi.fn()
+  renderAccount(
+    <PlatformAuthForm
+      mode='sign-up'
+      status={authStatus}
+      redirectTo='/platform'
+      onSignedIn={vi.fn()}
+      onRegistered={onRegistered}
+    />
   )
   await user.type(screen.getByLabelText('Email'), 'owner@example.test')
   await user.type(
     screen.getByLabelText('Password', { exact: true }),
     'too-short'
   )
-  await user.click(screen.getByRole('button', { name: 'Register' }))
+  await user.click(screen.getByRole('button', { name: 'Create account' }))
   expect(
     await screen.findByText('Use 15 to 128 characters for a new password.', {
       selector: '[data-slot="field-error"]',
@@ -70,12 +77,15 @@ test('registration validates password length and directs the user to sign in', a
     screen.getByLabelText('Password', { exact: true }),
     'a long phrase for this test'
   )
-  await user.click(screen.getByRole('button', { name: 'Register' }))
-  expect(await screen.findByRole('status')).toHaveTextContent(
-    'Registration submitted. Sign in with your credentials.'
+  await user.click(screen.getByRole('button', { name: 'Create account' }))
+  await user.type(
+    screen.getByLabelText('Confirm password'),
+    'a long phrase for this test'
   )
+  await user.click(screen.getByRole('button', { name: 'Create account' }))
+  await waitFor(() => expect(onRegistered).toHaveBeenCalledOnce())
   expect(screen.getByLabelText('Password', { exact: true })).toHaveValue('')
-  expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: 'Create account' })).toBeEnabled()
 })
 
 test('failed sign in displays a safe error and permits retry without creating a session', async () => {
@@ -83,7 +93,14 @@ test('failed sign in displays a safe error and permits retry without creating a 
   vi.mocked(platformLogin).mockRejectedValue(
     new Error('Invalid email or password')
   )
-  const client = renderAccount(<PlatformAuthForm />)
+  const client = renderAccount(
+    <PlatformAuthForm
+      mode='sign-in'
+      status={authStatus}
+      redirectTo='/platform'
+      onSignedIn={vi.fn()}
+    />
+  )
   await user.type(screen.getByLabelText('Email'), 'owner@example.test')
   await user.type(
     screen.getByLabelText('Password', { exact: true }),

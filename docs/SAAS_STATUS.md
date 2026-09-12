@@ -10,7 +10,7 @@
 
 ## 当前状态
 
-第一、二阶段实现及本机验收已完成，交付分支为 `feat/saas-multitenant`，集中更新 [PR #1](https://github.com/Sunwuyuan/new-api-sass/pull/1)。第二阶段三数据库迁移、Go/前端全量测试、生产构建及公开演示回归均通过。演示入口为 [平台控制台](https://newapi-sass.moonrend.com/platform)。没有单租户模式开关。
+第一至第三阶段实现与验收已完成，交付分支为 `feat/saas-multitenant`，集中更新 [PR #1](https://github.com/Sunwuyuan/new-api-sass/pull/1)。三数据库迁移、Go/前端测试、生产构建及公开演示回归均通过；平台独立认证、分实例管理、用量分析与侧栏工作台已上线。演示入口为 [平台控制台](https://newapi-sass.moonrend.com/platform)。没有单租户模式开关。
 
 ## 已交付
 
@@ -201,3 +201,105 @@ go test . -run TestSaaSContracts -count=1
 - 延续上文 OWASP Authentication、Session Management、Password Storage、CSRF Prevention 与 ASVS 5.0.0 依据。新增回归覆盖最后站长保护、普通用户越权、错误 Origin/Referer、敏感操作重新认证与会话轮换、账号版本失效、强制改密、兑换限流/过期/重放/全局次数、跨用户兑换拒绝及审计失败事务回滚。
 - 代码、文档与截图检查未发现实际凭据；既有项目版权头保持一致。平台审计仅记录账号/空间/套餐 ID、来源、状态变化及时间，不写密码或可用码。
 - 规格允许后续实现的平台在线支付、平台 MFA、会话列表尚未加入；当前提供密码重新认证与按账号撤销全部平台会话。三档套餐均可人工或兑换码开通。
+
+
+## 第三阶段（实现与验收完成）
+
+见 [SAAS_PHASE3_UI_SPEC.md](SAAS_PHASE3_UI_SPEC.md)。
+
+**用户补充（必做）**：① 各功能独立完整页面；② 每个空间实例独立管理/详情页；③ 用量分析 `/platform/usage` 与 `/platform/admin/usage`。优先级：认证独立页+复用 New API auth/OAuth → 分实例管理 → 用量分析 → 壳子专业化。
+
+### 已验收：平台认证基础
+
+- `platform/` 独立读取平台品牌、注册开关、GitHub / Discord / LinuxDO / OIDC / Telegram、自定义 OAuth、微信及 Passkey 环境配置；`/platform/api/status` 只返回公开开关与品牌信息。
+- 新增平台身份、一次性认证流程和 Passkey 表；回调仅签发平台会话。OAuth 使用 S256 PKCE、浏览器绑定 state、独立回调地址；OIDC 验证签名、issuer、audience、nonce。禁止按外部邮箱自动合并账号，关联已有账号需要有效会话与重新认证。
+- Passkey 使用平台 Origin、必需用户验证、独立用户句柄和一次性 challenge；增加登记、删除和重新认证接口。微信复用既有验证码服务契约，并在平台增加浏览器绑定和短期重放保护。
+- 平台 OAuth/OIDC、Passkey、微信、实例用量契约及三数据库迁移通过，实际浏览器完成平台密码和 Passkey 登录；验证范围见下文。
+- 已抽出 New API 共享认证框架、OAuth 按钮和微信验证码弹窗；平台与空间分别传入自己的配置和操作，不共享登录状态。
+
+### 已验收：独立页面与实例用量
+
+- `/platform/sign-in`、`/platform/sign-up` 使用抽出的 New API `AuthLayoutFrame`、OAuth 按钮、密码框、条款与微信弹窗；路由加载前验证平台会话，保留安全的站内返回地址。
+- 登录后使用共享 Sidebar 壳子，工作台优先展示本人空间；创建、兑换、套餐、账号安全均为独立页面。原五个站长模块继续提供分页与治理操作。
+- 新增 `/platform/workspaces/:id` 和站长实例详情，展示套餐、到期、状态、月用量、最近六个月实际记录及最近二十次套餐变更；复用兑换弹窗、人工套餐和确认操作。
+- `/platform/usage`、`/platform/admin/usage` 提供按空间进度表、真实月计数、套餐分布、到期/停用/额度耗尽汇总，后端先限定空间所有权。沿用 `tenant_usage`，未改 relay 或引入新 worker。
+- 新增集中认证契约测试，实际执行 OAuth PKCE 令牌交换、OIDC 签名及 `auth_time` 校验、Passkey CBOR 注册与 P-256 签名登录；覆盖浏览器绑定、过期/重放、跨账号关联与删除、强制改密、停用、实例越权和用量聚合。
+- 全量 Go/前端测试、真实数据库矩阵、生产构建及公开演示验收通过。最终可访问性修正消除嵌套主内容区，空间入口保留链接语义和停用状态。
+
+### 已验收：第三阶段数据库与迁移修复
+
+- 初轮启动检查通过后，追加旧库实际插入外部账号的探针，复现 GORM 不会自动放宽旧 `platform_users.email NOT NULL` 的问题。已在 `New` 中增加显式邮箱迁移；SQLite 使用驱动事务内重建表并恢复原索引/触发器，MySQL/PostgreSQL 使用各自 GORM 列迁移。
+- 新增旧模型回归，验证两次启动后既有账号内容、邮箱唯一性、自定义索引和 SQLite 触发器均保留，并可创建多个没有平台邮箱的第三方账号。
+- SQLite 3.50.4、MySQL 8.4.11、PostgreSQL 17.11 的平台认证/实例用量/迁移契约均通过；MySQL/PostgreSQL 的完整 `TestSaaSContracts` 与独立关系型日志库也通过。
+- 修复后完整重跑新库、第二阶段 `caf4f14bf` 旧库、最新发布版 `v1.0.0-rc.37` 旧库矩阵，各启动两次，共 18 次。每次启动均实际验证多个 NULL 邮箱账号、原邮箱唯一性、旧业务摘要、平台会话、方案能力、兑换历史、主/日志库表与索引幂等性。最新发布标签已通过 GitHub API 再次核对。
+- 命令：`python3 /tmp/saas-phase3-matrix.py`；临时库前缀 `saas_phase3_accept_0912b`；结果 `/tmp/saas-phase3-matrix-results-2.log`。专项测试使用 `PLATFORM_TEST_DSN` 指向 `saas_phase3_auth_0912a`；完整契约使用 `SAAS_TEST_DSN` / `SAAS_TEST_LOG_DSN` 指向 `saas_phase3_contract_0912a` / `_log`，连接端口与前阶段相同。
+
+### 已验收：第三阶段界面交互与翻译
+
+- 54 个新增文案通过规定脚本写入七种语言，共 378 项；`i18n:sync` 与全前端键扫描通过。
+- 平台前端专项 4 个文件 / 29 项通过：独立登录/注册、深链接恢复、匿名及普通用户后台保护、status 驱动的全部登录方式显隐、OAuth query/fragment 编码保真与单次回调、安全返回地址、微信键盘提交、Passkey 浏览器请求、实例详情/用量和既有治理操作。
+- OAuth 按钮装饰图标不再重复读出提供方名称；实例详情与工作台补齐套餐加载错误状态。前端全量 138 个文件 / 1,500 项通过；最后回调 fragment 与可访问性修正后，平台专项 4 个文件 / 29 项、类型检查、42 个 TS/TSX 文件 lint/格式检查和生产构建再次通过。
+
+### 已验收：第三阶段公开演示
+
+演示地址：[平台登录](https://newapi-sass.moonrend.com/platform/sign-in)。使用 Chromium 153.0.8010.12，真实运行服务及数据库，不替换平台 API 响应。
+
+1. 独立登录/注册页、注册后的登录提示、受保护深链接恢复、未配置提供方隐藏、普通用户后台路由拒绝；用户/空间/套餐/兑换码/审计/用量六类管理接口均返回 403。
+2. 创建 Alpha、Lite 空间容量限制、独立实例详情和工作台优先展示空间；实际激活空间 root 并通过原 New API 登录页登录，平台和空间会话保持独立。
+3. 使用 Chromium 虚拟认证器完成真实 WebAuthn 注册、刷新持久化、平台退出、Passkey 登录、重新验证和删除；平台退出后原空间登录仍有效。
+4. 独立兑换页为 Alpha 开通 Standard；站长从实例管理页人工开通 Pro，容量即时更新并可创建 Beta，实例详情保留两次套餐记录。
+5. 停用 Alpha 后其状态接口返回 403，Beta 保持 200；恢复成功，非本人空间详情返回 404。本人/站长用量、五个既有管理模块及用户搜索均通过。
+6. 中文 390px 手机页面覆盖登录、注册、工作台、创建、兑换、套餐、安全、实例详情、用量及所有后台模块；没有页面横向溢出，宽表在自身容器内滚动。手机侧栏可打开、导航并关闭；1440px 桌面验收通过，没有浏览器运行时错误。
+7. 最终构建重启后，验证 OAuth query 先 303 移入 fragment；包含 Cloudflare 预取在内的 18 个同源资源/API 请求 Referer 均不再包含授权参数。回调页面清除 URL 参数，CSP 保留，实例页只有一个主内容地标且入口为正确链接。
+
+用量展示来自 `tenant_usage`；此演示账号尚未发起网关调用，页面如实显示 0 和历史空态，非零汇总由精确数据库契约覆盖。脚本为 `/tmp/saas-browser/phase3-browser.mjs`（`auth` / `management`）、`phase3-visual.mjs`、`phase3-callback-check.mjs`；结果为 `/tmp/saas-phase3-browser-{auth,management}.log`、`/tmp/saas-phase3-visual-final.log`、`/tmp/saas-phase3-callback-browser.log`。最终演示二进制为 `/tmp/new-api-saas-phase3-accepted`，一致性备份留在权限 0600 的仓库外文件中。
+
+可审查截图：[独立登录](../.github/assets/saas-phase3-sign-in.png)、[工作台](../.github/assets/saas-phase3-workspaces.png)、[实例详情](../.github/assets/saas-phase3-workspace.png)、[站长用量](../.github/assets/saas-phase3-administration.png)、[手机登录](../.github/assets/saas-phase3-sign-in-mobile.png)、[手机实例管理](../.github/assets/saas-phase3-workspace-mobile.png)。截图不包含密码、可用会话、激活链接或完整兑换码。
+
+### 第三阶段验证命令
+
+```bash
+go test ./...
+go vet ./...
+go test -race ./platform . -run 'TestPlatform|TestSaaSContracts' -count=1
+# 最后补齐 OIDC iat、回调 fragment 与页面策略后
+go test ./platform . ./router -count=1
+go vet ./platform ./router .
+
+# SQLite 3.50.4（Go 驱动）
+go test ./platform -count=1
+
+# MySQL 8.4.11 / 33306
+PLATFORM_TEST_DSN='root@tcp(127.0.0.1:33306)/saas_phase3_auth_0912a?charset=utf8mb4&parseTime=true' \
+go test ./platform -count=1
+SAAS_TEST_DSN='root@tcp(127.0.0.1:33306)/saas_phase3_contract_0912a?charset=utf8mb4&parseTime=true' \
+SAAS_TEST_LOG_DSN='root@tcp(127.0.0.1:33306)/saas_phase3_contract_0912a_log?charset=utf8mb4&parseTime=true' \
+go test . -run TestSaaSContracts -count=1
+
+# PostgreSQL 17.11 / 35432
+PLATFORM_TEST_DSN='postgres://box@127.0.0.1:35432/saas_phase3_auth_0912a?sslmode=disable' \
+go test ./platform -count=1
+SAAS_TEST_DSN='postgres://box@127.0.0.1:35432/saas_phase3_contract_0912a?sslmode=disable' \
+SAAS_TEST_LOG_DSN='postgres://box@127.0.0.1:35432/saas_phase3_contract_0912a_log?sslmode=disable' \
+go test . -run TestSaaSContracts -count=1
+
+cd web
+bun run test --maxWorkers=2 --testTimeout=15000
+bun run test src/features/platform/__tests__ --maxWorkers=2 --testTimeout=15000
+bun run typecheck
+bun run build:check
+cd ..
+go build -o /tmp/new-api-saas-phase3-accepted .
+```
+
+上述数据库是可重建的本机临时测试库。全量日志为 `/tmp/saas-phase3-go-full.log`、`/tmp/saas-phase3-go-vet.log`、`/tmp/saas-phase3-auth-race.log`、`/tmp/saas-phase3-web-full.log`；最终生产构建 `/tmp/saas-phase3-web-build-final.log`，产物合计 59.2 MB（gzip 17.2 MB，含按需加载资源）。
+
+### 第三阶段安全依据与运行边界
+
+- 实施前阅读 OWASP [Authentication](https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html)、[Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)、[OAuth2](https://cheatsheetseries.owasp.org/cheatsheets/OAuth2_Cheat_Sheet.html)、[MFA](https://cheatsheetseries.owasp.org/cheatsheets/Multifactor_Authentication_Cheat_Sheet.html)、[CSRF](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html)、[Password Storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) 指南及 **ASVS 5.0.0**。重点验证 V6.8.1/V6.8.2/V6.8.4（外部身份命名空间、签名与认证新鲜度）、V10.2.1/V10.2.2/V10.2.3（OAuth CSRF、混淆攻击防护和最小 scope）和 V7.2.4（重新认证后的会话轮换）；沿用前阶段密码、会话与权限控制，不代表整个项目已通过全面 ASVS 认证。
+- OAuth/OIDC 使用固定平台回调、S256 PKCE、五分钟浏览器绑定单次 state，身份按提供方/客户端/issuer 命名空间隔离；ID Token 校验签名、issuer、audience、azp、nonce、expiry、必需 `iat` 及未来签发时间。失败、过期、重放、错浏览器、错身份、停用及改密绕过均有回归。
+- Passkey 使用平台 RP Origin、强制用户验证和平台专属 user handle；凭据修改要求近期认证，删除保护最后登录方式并撤销旧会话。已有空间 Passkey 配置和会话不参与平台认证。
+- 公开代理覆盖 `Referrer-Policy` 与 `X-Frame-Options`，且 Cloudflare `Speculation-Rules` 在 HTML meta 生效前发起请求。真实 Referer 探针复现泄漏后，回调改为先 303 将 query 移入 fragment，再提供 HTML，客户端单次提交并清除参数；重新验证边缘预取和全部资源/API 请求不携带授权参数。保留 `no-referrer` meta、`Content-Security-Policy: frame-ancestors 'none'` 和应用访问日志 query 脱敏。
+- 演示已启用 Passkey；未提供真实 OAuth/微信凭据，相关按钮按 status 隐藏。OAuth/OIDC/微信完成后端契约及前端显隐/回调测试，未声称完成真实外部提供方授权。微信桥接服务须保证验证码五分钟内过期且单次消费，平台另外提供数据库重放保护。
+- OIDC 重新认证要求提供方返回新鲜且签名可信的 `auth_time`；普通 OAuth userinfo 不作为强制重新认证方式。账号安全页按已关联能力提供密码、Passkey、微信或支持验证的 OIDC 入口。邮箱找回、OTP/MFA、在线支付不在本阶段范围。
+- 认证配置仅来自平台环境变量，状态 API 不返回密钥；具体配置与回调见 [中文 README](../README.zh_CN.md)。复用 New API AuthLayoutFrame、OAuthProviderButtons、密码输入、条款和微信弹窗；原表单绑定空间 store/API，平台组合共享组件并调用独立平台接口，以保留双层账号。

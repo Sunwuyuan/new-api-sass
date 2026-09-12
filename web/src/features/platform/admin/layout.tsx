@@ -22,7 +22,6 @@ import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 
-import { PlatformLink } from '../navigation'
 import { ReauthenticateDialog } from '../reauthenticate-dialog'
 
 export default function PlatformAdminLayout() {
@@ -43,26 +42,7 @@ export default function PlatformAdminLayout() {
           {t('Verify administrator access')}
         </Button>
       </div>
-      <nav
-        aria-label={t('Administration navigation')}
-        className='flex flex-wrap gap-1 rounded-lg border p-2'
-      >
-        <PlatformLink to='/platform/admin/users'>
-          {t('Platform users')}
-        </PlatformLink>
-        <PlatformLink to='/platform/admin/workspaces'>
-          {t('All workspaces')}
-        </PlatformLink>
-        <PlatformLink to='/platform/admin/plans'>
-          {t('Hosting plans')}
-        </PlatformLink>
-        <PlatformLink to='/platform/admin/redemptions'>
-          {t('Platform redemption codes')}
-        </PlatformLink>
-        <PlatformLink to='/platform/admin/audits'>
-          {t('Platform audit')}
-        </PlatformLink>
-      </nav>
+
       <Outlet />
       {verify && <ReauthenticateDialog onClose={() => setVerify(false)} />}
     </section>

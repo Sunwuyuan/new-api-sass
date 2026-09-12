@@ -24,6 +24,9 @@ func SetSaaSRouter(outer *gin.Engine, saas *platform.Server, assets WebAssets) {
 	saas.Routes(outer)
 	outer.Any("/t/:slug/*path", saas.Resolve(workspace))
 	frontendFS := common.EmbedFolder(assets.BuildFS, "web/dist")
+	// Keep callback codes out of resource referrers even when an edge proxy
+	// replaces the response header with its own default policy.
+	platformPage := []byte(strings.Replace(string(assets.IndexPage), "<head>", `<head><meta name="referrer" content="no-referrer" />`, 1))
 	outer.NoRoute(static.Serve("/", frontendFS), func(c *gin.Context) {
 		path := c.Request.URL.Path
 		if path != "/" && !strings.HasPrefix(path, "/platform") {
@@ -31,6 +34,16 @@ func SetSaaSRouter(outer *gin.Engine, saas *platform.Server, assets WebAssets) {
 			return
 		}
 		c.Header("Cache-Control", "no-store")
-		c.Data(http.StatusOK, "text/html; charset=utf-8", assets.IndexPage)
+		c.Header("Referrer-Policy", "no-referrer")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Content-Security-Policy", "frame-ancestors 'none'")
+		if strings.HasPrefix(path, "/platform/oauth/") && c.Request.URL.RawQuery != "" {
+			// Edge-injected Speculation-Rules can fetch before HTML meta policies
+			// take effect. Move callback parameters to a fragment before serving
+			// any document: browsers never send fragments in resource referrers.
+			c.Redirect(http.StatusSeeOther, c.Request.URL.EscapedPath()+"#"+c.Request.URL.RawQuery)
+			return
+		}
+		c.Data(http.StatusOK, "text/html; charset=utf-8", platformPage)
 	})
 }

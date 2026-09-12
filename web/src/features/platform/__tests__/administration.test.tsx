@@ -28,6 +28,7 @@ import { afterEach, beforeEach, expect, test, vi } from 'vitest'
 
 import { createPlatformRouter } from '../router'
 import type { PlatformSession } from '../types'
+import { authStatus } from './fixtures'
 
 const network = vi.hoisted(() => ({ adapter: vi.fn<AxiosAdapter>() }))
 vi.mock('axios', async (importOriginal) => {
@@ -51,6 +52,7 @@ const member = {
   status: 'active' as const,
   must_change_password: false,
   tenant_count: 1,
+  has_password: true,
 }
 
 function reply(config: InternalAxiosRequestConfig, data: unknown) {
@@ -64,6 +66,10 @@ const administratorSession: PlatformSession = {
 }
 
 const defaultAdapter: AxiosAdapter = async (config) => {
+  if (config.url === '/status') return reply(config, authStatus)
+  if (config.url === '/auth-methods') {
+    return reply(config, { providers: [], passkeys: [], has_password: true })
+  }
   if (config.url === '/session') {
     if (!session) {
       throw new axios.AxiosError('Unauthorized', undefined, config, undefined, {
@@ -100,6 +106,8 @@ afterEach(() => {
   clients.forEach((client) => client.clear())
   clients = []
   network.adapter.mockReset()
+  vi.unstubAllGlobals()
+  window.history.replaceState(null, '', '/')
 })
 
 async function renderPlatform(path: string) {
@@ -128,9 +136,11 @@ async function renderPlatform(path: string) {
 test('ordinary users opening an admin URL see access denied without fetching admin data', async () => {
   session = { ...administratorSession, user: member }
   await renderPlatform('/platform/admin/users')
-  expect(
-    await screen.findByText('Platform administrator access required')
-  ).toBeVisible()
+  await waitFor(() =>
+    expect(
+      screen.getByText('Platform administrator access required')
+    ).toBeVisible()
+  )
   expect(
     screen.queryByRole('link', { name: 'Administration' })
   ).not.toBeInTheDocument()
@@ -162,7 +172,9 @@ test('signing in as an administrator on a protected URL loads that page', async 
   expect(
     await screen.findByRole('link', { name: 'Platform users' })
   ).toBeVisible()
-  expect(await screen.findByText(member.email)).toBeVisible()
+  expect(
+    await within(await screen.findByRole('table')).findByText(member.email)
+  ).toBeVisible()
 })
 
 test('administrator user filters reach the API and dangerous actions require confirmation', async () => {
@@ -172,7 +184,7 @@ test('administrator user filters reach the API and dangerous actions require con
     return defaultAdapter(config)
   })
   await renderPlatform('/platform/admin/users')
-  await screen.findByText(member.email)
+  await within(await screen.findByRole('table')).findByText(member.email)
   await user.selectOptions(
     screen.getByRole('combobox', { name: 'Role' }),
     'user'
@@ -275,7 +287,7 @@ test('reauthentication rotates CSRF without replaying a rejected administrative 
     return defaultAdapter(config)
   })
   await renderPlatform('/platform/admin/users')
-  await screen.findByText(member.email)
+  await within(await screen.findByRole('table')).findByText(member.email)
   await user.click(
     screen.getByRole('button', { name: `Actions for ${member.email}` })
   )
@@ -338,4 +350,424 @@ test('reauthentication rotates CSRF without replaying a rejected administrative 
   )
   expect(changes).toHaveLength(2)
   expect(changes[1][0].headers.get('X-CSRF-Token')).toBe('rotated-test-csrf')
+})
+
+test.each(['/platform', '/platform/workspaces/42', '/platform/admin/usage'])(
+  'anonymous access to %s goes to the independent sign-in route',
+  async (path) => {
+    session = null
+    const { router } = await renderPlatform(path)
+    await screen.findByRole('heading', { name: 'Sign in' })
+    expect(router.state.location.pathname).toBe('/platform/sign-in')
+    expect(router.state.location.search).toEqual(
+      expect.objectContaining({ redirect: path })
+    )
+    expect(
+      network.adapter.mock.calls.some(
+        ([config]) =>
+          config.url === '/tenants' || config.url?.startsWith('/admin/')
+      )
+    ).toBe(false)
+  }
+)
+
+test('sign-up is a separate page with confirmation and returns to sign-in without creating a session', async () => {
+  session = null
+  const user = userEvent.setup()
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/register') return reply(config, { success: true })
+    return defaultAdapter(config)
+  })
+  const { router } = await renderPlatform(
+    '/platform/sign-up?redirect=%2Fplatform%2Fusage'
+  )
+  expect(
+    await screen.findByRole('heading', { name: 'Create an account' })
+  ).toBeVisible()
+  await user.type(screen.getByLabelText('Email'), 'new@example.test')
+  await user.type(
+    screen.getByLabelText('Password', { exact: true }),
+    'a synthetic registration phrase'
+  )
+  await user.type(
+    screen.getByLabelText('Confirm password'),
+    'a synthetic registration phrase'
+  )
+  await user.click(screen.getByRole('button', { name: 'Create account' }))
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    'Registration submitted. Sign in with your credentials.'
+  )
+  expect(router.state.location.pathname).toBe('/platform/sign-in')
+  expect(router.state.location.search).toEqual(
+    expect.objectContaining({ redirect: '/platform/usage' })
+  )
+  expect(session).toBeNull()
+  expect(
+    network.adapter.mock.calls.some(([config]) => config.url === '/login')
+  ).toBe(false)
+})
+
+test('authenticated users leave sign-in and the workspace page contains no embedded auth or pricing wall', async () => {
+  session = { ...administratorSession, user: member }
+  const { router } = await renderPlatform('/platform/sign-in')
+  await screen.findByRole('heading', { name: 'My workspaces' })
+  expect(router.state.location.pathname).toBe('/platform')
+  expect(
+    screen.queryByLabelText('Password', { exact: true })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('heading', { name: 'Hosting plans' })
+  ).not.toBeInTheDocument()
+})
+
+test('platform status controls provider visibility and OAuth starts only through the platform API', async () => {
+  session = null
+  const user = userEvent.setup()
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/status') {
+      return reply(config, {
+        ...authStatus,
+        github_oauth: true,
+        discord_oauth: true,
+        linuxdo_oauth: true,
+        oidc_enabled: true,
+        oidc_display_name: 'Company SSO',
+        telegram_oauth: true,
+        wechat_login: true,
+        passkey_login: true,
+        custom_oauth_providers: [{ slug: 'custom', name: 'Custom SSO' }],
+      })
+    }
+    if (config.url === '/oauth/github/start') {
+      throw new axios.AxiosError('Unavailable', undefined, config, undefined, {
+        ...reply(config, { code: 'authentication_failed' }),
+        status: 401,
+      })
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/sign-in?redirect=%2Fplatform%2Fusage')
+  for (const provider of [
+    'GitHub',
+    'Discord',
+    'LinuxDO',
+    'Company SSO',
+    'Telegram',
+    'WeChat',
+    'Custom SSO',
+  ]) {
+    expect(
+      await screen.findByRole('button', { name: `Continue with ${provider}` })
+    ).toBeVisible()
+  }
+  expect(
+    screen.getByRole('button', { name: 'Sign in with Passkey' })
+  ).toBeVisible()
+  await user.click(screen.getByRole('button', { name: 'Continue with GitHub' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent(
+    'Authentication failed. Start again or use another sign-in method.'
+  )
+  expect(network.adapter).toHaveBeenCalledWith(
+    expect.objectContaining({
+      baseURL: '/platform/api',
+      url: '/oauth/github/start',
+      data: JSON.stringify({ redirect: '/platform/usage' }),
+    })
+  )
+})
+
+test('disabled registration and sign-in providers are not offered', async () => {
+  session = null
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/status') {
+      return reply(config, {
+        ...authStatus,
+        register_enabled: false,
+        password_register_enabled: false,
+      })
+    }
+    return defaultAdapter(config)
+  })
+  const { router } = await renderPlatform('/platform/sign-in')
+  await screen.findByLabelText('Email')
+  expect(
+    screen.queryByRole('button', { name: /Continue with/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('button', { name: 'Sign in with Passkey' })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole('link', { name: 'Sign up' })
+  ).not.toBeInTheDocument()
+  await act(async () => {
+    await router.navigate({ href: '/platform/sign-up' })
+  })
+  expect(await screen.findByText('Registration is disabled')).toBeVisible()
+  expect(
+    screen.queryByRole('button', { name: 'Create account' })
+  ).not.toBeInTheDocument()
+})
+
+test.each(['?', '#'])(
+  'OAuth %s callback sends one completion, clears the code, and accepts only a platform redirect',
+  async (separator) => {
+    session = null
+    const code = 'test-authorization/code+with=symbols &space'
+    const query = new URLSearchParams({ state: 'test-state', code }).toString()
+    const callback = `/platform/oauth/custom${separator}${query}`
+    window.history.replaceState(null, '', callback)
+    network.adapter.mockImplementation(async (config) => {
+      if (config.url === '/oauth/custom/finish') {
+        session = { ...administratorSession, user: member }
+        return reply(config, {
+          ...session,
+          redirect: 'https://attacker.example.test',
+        })
+      }
+      return defaultAdapter(config)
+    })
+    const { router } = await renderPlatform(callback)
+    await screen.findByRole('heading', { name: 'My workspaces' })
+    expect(router.state.location.pathname).toBe('/platform')
+    expect(window.location.search).toBe('')
+    expect(window.location.hash).toBe('')
+    const completions = network.adapter.mock.calls.filter(
+      ([config]) => config.url === '/oauth/custom/finish'
+    )
+    expect(completions).toHaveLength(1)
+    expect(JSON.parse(completions[0][0].data)).toEqual({
+      state: 'test-state',
+      code,
+      error: '',
+    })
+  }
+)
+
+test('WeChat uses the shared dialog and a platform browser flow, then enters the workspace page', async () => {
+  session = null
+  const user = userEvent.setup()
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/status') {
+      return reply(config, {
+        ...authStatus,
+        wechat_login: true,
+        wechat_qrcode: '/test-qr.png',
+      })
+    }
+    if (config.url === '/wechat/start') {
+      return reply(config, { flow_token: 'wechat-test-flow' })
+    }
+    if (config.url === '/wechat/finish') {
+      session = { ...administratorSession, user: member }
+      return reply(config, session)
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/sign-in')
+  await user.click(
+    await screen.findByRole('button', { name: 'Continue with WeChat' })
+  )
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).getByRole('img')).toHaveAttribute('src', '/test-qr.png')
+  expect(within(dialog).getByRole('button', { name: 'Confirm' })).toBeDisabled()
+  await user.type(
+    within(dialog).getByLabelText('Verification code'),
+    'test-code{Enter}'
+  )
+  await screen.findByRole('heading', { name: 'My workspaces' })
+  expect(network.adapter).toHaveBeenCalledWith(
+    expect.objectContaining({
+      url: '/wechat/finish',
+      data: JSON.stringify({
+        code: 'test-code',
+        flow_token: 'wechat-test-flow',
+      }),
+    })
+  )
+})
+
+test('Passkey assertion uses platform endpoints and preserves required user verification', async () => {
+  session = null
+  const user = userEvent.setup()
+  const getCredential = vi.fn().mockResolvedValue({
+    id: 'test-credential',
+    rawId: new Uint8Array([1, 2]).buffer,
+    type: 'public-key',
+    response: {
+      clientDataJSON: new Uint8Array([3]).buffer,
+      authenticatorData: new Uint8Array([4]).buffer,
+      signature: new Uint8Array([5]).buffer,
+      userHandle: new Uint8Array([6]).buffer,
+    },
+    getClientExtensionResults: () => ({}),
+  })
+  vi.stubGlobal('PublicKeyCredential', class {})
+  Object.defineProperty(navigator, 'credentials', {
+    configurable: true,
+    value: { get: getCredential },
+  })
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/status') {
+      return reply(config, { ...authStatus, passkey_login: true })
+    }
+    if (config.url === '/passkey/login/begin') {
+      return reply(config, {
+        flow_token: 'passkey-test-flow',
+        options: {
+          publicKey: {
+            rpId: 'localhost',
+            challenge: 'AQID',
+            userVerification: 'required',
+          },
+        },
+      })
+    }
+    if (config.url === '/passkey/login/finish') {
+      session = { ...administratorSession, user: member }
+      return reply(config, session)
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/sign-in')
+  await waitFor(() =>
+    expect(
+      screen.getByRole('button', { name: 'Sign in with Passkey' })
+    ).toBeEnabled()
+  )
+  await user.click(screen.getByRole('button', { name: 'Sign in with Passkey' }))
+  await screen.findByRole('heading', { name: 'My workspaces' })
+  expect(getCredential).toHaveBeenCalledOnce()
+  expect(getCredential.mock.calls[0][0].publicKey).toEqual(
+    expect.objectContaining({ rpId: 'localhost', userVerification: 'required' })
+  )
+  const finish = network.adapter.mock.calls.find(
+    ([config]) => config.url === '/passkey/login/finish'
+  )
+  expect(JSON.parse(finish?.[0].data ?? 'null')).toEqual(
+    expect.objectContaining({
+      flow_token: 'passkey-test-flow',
+      credential: expect.objectContaining({ id: 'test-credential' }),
+    })
+  )
+})
+
+const hostingPlan = {
+  id: 1,
+  name: 'Lite',
+  price: 'Free',
+  limits: { requests: 1000, users: 5, tokens: 20, channels: 3 },
+  capabilities: {
+    max_workspaces: 1,
+    custom_branding: false,
+    remove_platform_footer: false,
+  },
+}
+const tenant = {
+  id: 42,
+  name: 'Alpha instance',
+  slug: 'alpha',
+  owner_platform_user_id: member.id,
+  plan_id: 1,
+  status: 'active',
+  plan_expires_at: null,
+}
+const usage = { month: '2026-09', requests: 750 }
+
+test.each([false, true])(
+  'workspace details show their own usage and scoped management actions (admin=%s)',
+  async (admin) => {
+    session = {
+      ...administratorSession,
+      user: admin ? administratorSession.user : member,
+    }
+    network.adapter.mockImplementation(async (config) => {
+      if (config.url === '/plans') {
+        return reply(config, { plans: [hostingPlan] })
+      }
+      if (config.url === `${admin ? '/admin' : ''}/tenants/42`) {
+        return reply(config, {
+          tenant,
+          owner_name: member.email,
+          plan: hostingPlan,
+          usage,
+          history: [usage],
+          assignments: [],
+        })
+      }
+      return defaultAdapter(config)
+    })
+    await renderPlatform(`/platform${admin ? '/admin' : ''}/workspaces/42`)
+    expect(
+      await screen.findByRole('heading', { name: tenant.name })
+    ).toBeVisible()
+    expect(
+      screen.getByRole('progressbar', {
+        name: `Monthly usage for ${tenant.name}`,
+      })
+    ).toHaveAttribute('aria-valuenow', '75')
+    expect(screen.getByText('250')).toBeVisible()
+    expect(
+      screen.getByRole('button', { name: 'Redeem hosting plan' })
+    ).toBeEnabled()
+    if (admin) {
+      expect(
+        screen.getByRole('button', { name: 'Activate plan manually' })
+      ).toBeEnabled()
+      expect(
+        screen.getByRole('button', { name: 'Suspend workspace' })
+      ).toBeEnabled()
+    } else {
+      expect(
+        screen.queryByRole('button', { name: 'Suspend workspace' })
+      ).not.toBeInTheDocument()
+    }
+  }
+)
+
+test('usage analytics renders real totals, scoped workspace links, and an empty recorded history', async () => {
+  session = { ...administratorSession, user: member }
+  network.adapter.mockImplementation(async (config) => {
+    if (config.url === '/plans') return reply(config, { plans: [hostingPlan] })
+    if (config.url === '/usage') {
+      return reply(config, {
+        month: '2026-09',
+        summary: {
+          workspaces: 1,
+          active: 1,
+          suspended: 0,
+          expired: 0,
+          expiring_soon: 0,
+          exhausted: 0,
+          requests: 750,
+        },
+        plans: [{ plan_id: 1, name: 'Lite', workspaces: 1, requests: 750 }],
+        history: [],
+      })
+    }
+    if (config.url === '/tenants') {
+      return reply(config, {
+        tenants: [{ tenant, usage }],
+        pagination: { page: 1, page_size: 20, total: 1 },
+      })
+    }
+    return defaultAdapter(config)
+  })
+  await renderPlatform('/platform/usage')
+  expect(
+    await screen.findByRole('heading', { name: 'Usage analytics' })
+  ).toBeVisible()
+  expect(
+    await screen.findByRole('link', { name: tenant.name })
+  ).toHaveAttribute('href', '/platform/workspaces/42')
+  expect(
+    screen.getByRole('progressbar', {
+      name: `Monthly usage for ${tenant.name}`,
+    })
+  ).toHaveAttribute('aria-valuenow', '75')
+  expect(screen.getByText('No recorded usage yet')).toBeVisible()
+  expect(
+    network.adapter.mock.calls.some(([config]) =>
+      config.url?.startsWith('/admin/')
+    )
+  ).toBe(false)
 })

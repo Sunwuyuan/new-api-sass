@@ -35,6 +35,7 @@ import type { PageParams, PageResult } from '../types'
 
 export function PlatformTable<T>(props: {
   resource: string
+  scope?: 'user' | 'admin'
   columns: ColumnDef<T>[]
   load: (params: PageParams) => Promise<PageResult & { items: T[] }>
   statuses?: { value: string; label: string }[]
@@ -62,7 +63,7 @@ export function PlatformTable<T>(props: {
   const query = useQuery({
     queryKey: [
       'platform',
-      'admin',
+      props.scope ?? 'admin',
       props.resource,
       session.data?.user.id,
       params,
@@ -71,7 +72,8 @@ export function PlatformTable<T>(props: {
     enabled:
       !!session.data &&
       !session.data.user.must_change_password &&
-      ['admin', 'root'].includes(session.data.user.role),
+      (props.scope === 'user' ||
+        ['admin', 'root'].includes(session.data.user.role)),
   })
   const table = useReactTable({
     data: query.data?.items ?? [],
