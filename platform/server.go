@@ -167,6 +167,8 @@ func (s *Server) Routes(router *gin.Engine) {
 	})
 	auth.POST("/logout", s.logout)
 	auth.POST("/password", s.changePassword)
+	auth.POST("/email/change/start", s.startEmailChange)
+	auth.POST("/email/change/finish", s.finishEmailChange)
 	auth.POST("/reauthenticate", s.reauthenticate)
 	auth.GET("/auth-methods", s.authMethods)
 	auth.POST("/oauth/:provider/link", s.beginOAuth)
@@ -337,7 +339,7 @@ func (s *Server) createTenant(c *gin.Context) {
 			return
 		}
 	}
-	if utf8.RuneCountInString(input.Password) < 15 || utf8.RuneCountInString(input.Password) > 128 || common.ValidateNewAccountPassword(input.Password) != nil {
+	if utf8.RuneCountInString(input.Password) < 10 || utf8.RuneCountInString(input.Password) > 128 || common.ValidateNewAccountPassword(input.Password) != nil {
 		writeError(c, http.StatusBadRequest, "invalid_new_password")
 		return
 	}
@@ -432,7 +434,7 @@ func (s *Server) ActivateRoot(c *gin.Context) {
 		Password string `json:"password"`
 	}
 	identity, err := tenant.FromContext(c.Request.Context())
-	if err != nil || c.ShouldBindJSON(&input) != nil || len(input.Token) != 64 || len([]rune(input.Password)) < 15 || common.ValidateNewAccountPassword(input.Password) != nil {
+	if err != nil || c.ShouldBindJSON(&input) != nil || len(input.Token) != 64 || len([]rune(input.Password)) < 10 || common.ValidateNewAccountPassword(input.Password) != nil {
 		writeError(c, http.StatusBadRequest, "invalid_activation")
 		return
 	}

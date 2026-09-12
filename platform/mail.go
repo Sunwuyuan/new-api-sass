@@ -7,15 +7,18 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/mail"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/plan"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -159,13 +162,13 @@ func sixDigitCode() (string, error) {
 	return fmt.Sprintf("%06d", binary.BigEndian.Uint32(raw[:])%1000000), nil
 }
 
-func (s *Server) issueEmailChallenge(c *gin.Context, email string) error {
+func (s *Server) issueEmailChallenge(c *gin.Context, purpose, email string) error {
 	code, err := sixDigitCode()
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
-	challenge := EmailChallenge{KeyHash: digest("email:" + email), CodeHash: digest(code), ExpiresAt: now.Add(15 * time.Minute)}
+	challenge := EmailChallenge{KeyHash: digest(purpose + ":" + email), CodeHash: digest(code), ExpiresAt: now.Add(15 * time.Minute)}
 	if err := s.DB.WithContext(c.Request.Context()).Save(&challenge).Error; err != nil {
 		return err
 	}
@@ -174,17 +177,21 @@ func (s *Server) issueEmailChallenge(c *gin.Context, email string) error {
 	s.authMu.Unlock()
 	subject := name + " email verification"
 	content := fmt.Sprintf("<p>Your verification code is <strong>%s</strong>.</p><p>It expires in 15 minutes. If you did not request this, ignore the message.</p>", code)
+	if purpose == "email-change" {
+		subject = name + " email change confirmation"
+		content = fmt.Sprintf("<p>Your verification code is <strong>%s</strong>.</p><p>It expires in 15 minutes. Someone is changing the email address of your account to this address. If you did not request this, ignore the message.</p>", code)
+	}
 	return s.sendPlatformMail(c.Request.Context(), email, subject, content)
 }
 
-func (s *Server) consumeEmailChallenge(c *gin.Context, email, code string) error {
+func (s *Server) consumeEmailChallenge(c *gin.Context, purpose, email, code string) error {
 	if utf8.RuneCountInString(code) != 6 {
 		return errAuthFlow
 	}
 	now := time.Now().UTC()
 	return s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		var challenge EmailChallenge
-		if err := lockForUpdate(tx).First(&challenge, "key_hash = ?", digest("email:"+email)).Error; err != nil {
+		if err := lockForUpdate(tx).First(&challenge, "key_hash = ?", digest(purpose+":"+email)).Error; err != nil {
 			return errAuthFlow
 		}
 		if !challenge.ExpiresAt.After(now) || challenge.Attempts >= 5 {
@@ -219,7 +226,7 @@ func (s *Server) verifyEmail(c *gin.Context) {
 	if !s.authRateLimit(c, "email-verify:"+email) {
 		return
 	}
-	if s.consumeEmailChallenge(c, email, strings.TrimSpace(input.Code)) != nil {
+	if s.consumeEmailChallenge(c, "email", email, strings.TrimSpace(input.Code)) != nil {
 		s.authFlowFailure(c, "email")
 		return
 	}
@@ -256,7 +263,7 @@ func (s *Server) resendVerification(c *gin.Context) {
 	s.authMu.Unlock()
 	var user User
 	if enabled && s.DB.WithContext(c.Request.Context()).Where("email = ?", email).First(&user).Error == nil && user.EmailVerifiedAt == nil {
-		if err := s.issueEmailChallenge(c, email); err != nil {
+		if err := s.issueEmailChallenge(c, "email", email); err != nil {
 			common.SysError("platform verification email failed: " + err.Error())
 		}
 	}
@@ -271,4 +278,119 @@ func (s *Server) mailPublicStatus() gin.H {
 		"email_verification": s.Mail.Enabled && s.Mail.EmailVerification,
 		"notifications":      s.Mail.Enabled && s.Mail.Notifications,
 	}
+}
+
+func parseEmailInput(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	address, err := mail.ParseAddress(trimmed)
+	if err != nil || address.Address != trimmed || len(trimmed) > 254 {
+		return "", false
+	}
+	return strings.ToLower(address.Address), true
+}
+
+// Changing the account email requires a recent session and proof of ownership
+// of the new address; the old address is notified after the change.
+func (s *Server) startEmailChange(c *gin.Context) {
+	if !requireRecentSession(c) {
+		return
+	}
+	user := c.MustGet("platform_user").(User)
+	s.authMu.Lock()
+	enabled := s.Mail.Enabled
+	s.authMu.Unlock()
+	if !enabled {
+		writeError(c, http.StatusBadRequest, "platform_mail_unavailable")
+		return
+	}
+	var input struct {
+		Email string `json:"email"`
+	}
+	email, ok := "", false
+	if c.ShouldBindJSON(&input) == nil {
+		email, ok = parseEmailInput(input.Email)
+	}
+	if !ok {
+		writeError(c, http.StatusBadRequest, "invalid_email")
+		return
+	}
+	if user.Email != nil && *user.Email == email {
+		writeError(c, http.StatusBadRequest, "email_unchanged")
+		return
+	}
+	if !s.authRateLimit(c, "email-change:"+strconv.FormatInt(user.ID, 10)) {
+		return
+	}
+	var taken int64
+	if s.DB.WithContext(c.Request.Context()).Model(&User{}).Where("email = ?", email).Count(&taken).Error != nil {
+		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		return
+	}
+	if taken > 0 {
+		writeError(c, http.StatusConflict, "email_taken")
+		return
+	}
+	if err := s.issueEmailChallenge(c, "email-change", email); err != nil {
+		common.SysError("platform email change mail failed: " + err.Error())
+		writeError(c, http.StatusServiceUnavailable, "platform_mail_unavailable")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
+}
+
+func (s *Server) finishEmailChange(c *gin.Context) {
+	if !requireRecentSession(c) {
+		return
+	}
+	user := c.MustGet("platform_user").(User)
+	var input struct {
+		Email string `json:"email"`
+		Code  string `json:"code"`
+	}
+	email, ok := "", false
+	if c.ShouldBindJSON(&input) == nil {
+		email, ok = parseEmailInput(input.Email)
+	}
+	if !ok {
+		writeError(c, http.StatusBadRequest, "invalid_email")
+		return
+	}
+	if !s.authRateLimit(c, "email-change:"+strconv.FormatInt(user.ID, 10)) {
+		return
+	}
+	if s.consumeEmailChallenge(c, "email-change", email, strings.TrimSpace(input.Code)) != nil {
+		writeError(c, http.StatusUnauthorized, "invalid_verification_code")
+		return
+	}
+	now := time.Now().UTC()
+	err := s.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
+		if _, err := activeUser(tx, user); err != nil {
+			return err
+		}
+		var taken int64
+		if err := tx.Model(&User{}).Where("email = ? AND id <> ?", email, user.ID).Count(&taken).Error; err != nil {
+			return err
+		}
+		if taken > 0 {
+			return &tenant.HTTPError{Status: http.StatusConflict, Code: "email_taken"}
+		}
+		result := tx.Model(&User{}).Where("id = ? AND session_version = ?", user.ID, user.SessionVersion).
+			Updates(map[string]any{"email": email, "email_verified_at": now})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return audit(tx, user.ID, "auth.email_changed", user.ID, gin.H{"email": email})
+	})
+	if err != nil {
+		transactionError(c, err)
+		return
+	}
+	if user.Email != nil {
+		s.notify(c.Request.Context(), *user.Email, "Email address changed",
+			"<p>Your account email was changed to <strong>"+html.EscapeString(email)+"</strong>.</p><p>If you did not make this change, contact the platform administrator immediately.</p>")
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true})
 }

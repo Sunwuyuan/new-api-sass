@@ -22,8 +22,8 @@ import { z } from 'zod'
 export function platformPasswordSchema(t: TFunction) {
   return z.string().refine((password) => {
     const length = [...password].length
-    return length >= 15 && length <= 128
-  }, t('Use 15 to 128 characters for a new password.'))
+    return length >= 10 && length <= 128
+  }, t('Use 10 to 128 characters for a new password.'))
 }
 
 export function platformCountSchema(t: TFunction, maximum: number) {

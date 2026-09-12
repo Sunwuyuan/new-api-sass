@@ -59,7 +59,7 @@ function payload(plan: HostingPlan): HostingPlan {
       users: plan.limits.users,
       tokens: 0,
       channels: 0,
-      emails: 0,
+      emails: plan.limits.emails ?? 0,
     },
     capabilities: { ...plan.capabilities, data_export: true },
   }
@@ -199,6 +199,32 @@ export default function PlatformPlans() {
                       limits: {
                         ...item.limits,
                         users: parseCount(event.target.value),
+                      },
+                    }))
+                  }
+                  disabled={mutation.isPending}
+                />
+              </TableCell>
+            ))}
+          </TableRow>
+          <TableRow>
+            <TableCell className='whitespace-normal'>
+              {t('Monthly platform emails')}
+            </TableCell>
+            {drafts.map((plan) => (
+              <TableCell key={plan.id}>
+                <Input
+                  type='number'
+                  min={0}
+                  max={1000000000}
+                  aria-label={`${plan.name}: ${t('Monthly platform emails')}`}
+                  value={plan.limits.emails ?? 0}
+                  onChange={(event) =>
+                    update(plan.id, (item) => ({
+                      ...item,
+                      limits: {
+                        ...item.limits,
+                        emails: parseCount(event.target.value),
                       },
                     }))
                   }

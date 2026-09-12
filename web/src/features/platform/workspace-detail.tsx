@@ -438,7 +438,7 @@ export default function PlatformWorkspaceDetail() {
       )}
       {redeemOpen && (
         <RedeemPlanDialog
-          workspace={workspace}
+          workspaces={[workspace]}
           onClose={() => setRedeemOpen(false)}
         />
       )}

@@ -91,10 +91,11 @@ test('redeeming validates the code and preserves the selected workspace when ret
     })
   })
   const { client } = renderDialog(
-    <RedeemPlanDialog workspace={workspace} onClose={onClose} />
+    <RedeemPlanDialog workspaces={[workspace]} onClose={onClose} />
   )
   client.setQueryData(['platform', 'tenants', 7], { workspace_count: 1 })
   const dialog = await screen.findByRole('alertdialog')
+  expect(within(dialog).getByLabelText('Workspace')).toHaveValue('42')
   await user.type(within(dialog).getByLabelText('Redemption code'), 'invalid')
   await user.click(within(dialog).getByRole('button', { name: 'Redeem' }))
   expect(

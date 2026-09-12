@@ -112,10 +112,22 @@ client.interceptors.response.use(undefined, (error: unknown) => {
     )
   }
   if (code === 'invalid_email_or_password_length') {
-    message = t('Enter a valid email and a password of 15 to 128 characters.')
+    message = t('Enter a valid email and a password of 10 to 128 characters.')
   }
   if (code === 'invalid_new_password') {
-    message = t('Use 15 to 128 characters and choose a less common password.')
+    message = t('Use 10 to 128 characters and choose a less common password.')
+  }
+  if (code === 'invalid_email') {
+    message = t('Enter a valid email address.')
+  }
+  if (code === 'email_unchanged') {
+    message = t('This is already your account email.')
+  }
+  if (code === 'email_taken') {
+    message = t('Another account already uses this email.')
+  }
+  if (code === 'platform_mail_unavailable') {
+    message = t('Platform mail is not configured.')
   }
   if (code === 'password_unchanged') {
     message = t('New password must be different from current password')
@@ -203,6 +215,17 @@ export async function changePlatformPassword(input: {
 }): Promise<void> {
   await client.post('/password', input)
   csrfToken = ''
+}
+
+export async function startPlatformEmailChange(email: string): Promise<void> {
+  await client.post('/email/change/start', { email })
+}
+
+export async function finishPlatformEmailChange(input: {
+  email: string
+  code: string
+}): Promise<void> {
+  await client.post('/email/change/finish', input)
 }
 
 export async function activateWorkspaceRoot(

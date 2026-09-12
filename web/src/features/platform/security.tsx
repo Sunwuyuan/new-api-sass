@@ -57,6 +57,7 @@ import {
   removePlatformPasskey,
   updatePlatformSession,
 } from './auth-api'
+import { PlatformEmailChangeDialog } from './email-change-dialog'
 import { PlatformLoginMethods } from './login-methods'
 import { PlatformPasswordDialog } from './password-dialog'
 import { ReauthenticateDialog } from './reauthenticate-dialog'
@@ -71,6 +72,8 @@ export default function PlatformSecurity() {
   const session = useQuery(platformSessionQuery)
   const [passwordOpen, setPasswordOpen] = useState(false)
   const [verifyOpen, setVerifyOpen] = useState(false)
+  const [emailOpen, setEmailOpen] = useState(false)
+  const [verifyForEmail, setVerifyForEmail] = useState(false)
   const [deleteID, setDeleteID] = useState<string | null>(null)
   const [supported, setSupported] = useState(false)
   const operation = useRef<AbortController | null>(null)
@@ -150,6 +153,17 @@ export default function PlatformSecurity() {
     )
   }
   const linked = methods.data.providers
+  const sessionFresh = Boolean(
+    session.data &&
+      Date.now() - Date.parse(session.data.authenticated_at) < 5 * 60 * 1000
+  )
+  const openEmailChange = () => {
+    if (sessionFresh) {
+      setEmailOpen(true)
+    } else {
+      setVerifyForEmail(true)
+    }
+  }
   const linkable = {
     ...status.data,
     github_oauth: status.data.github_oauth && !linked.includes('github'),
@@ -168,9 +182,6 @@ export default function PlatformSecurity() {
       <header className='flex flex-wrap items-start justify-between gap-3'>
         <div>
           <h1 className='text-2xl font-semibold'>{t('Account')}</h1>
-          {session.data?.user.email && (
-            <p className='mt-1 text-sm'>{session.data.user.email}</p>
-          )}
           <p className='text-muted-foreground mt-1 text-sm'>
             {t(
               'Password, Passkeys and connected sign-in methods for this platform account.'
@@ -187,6 +198,28 @@ export default function PlatformSecurity() {
       </header>
       <div className='grid items-start gap-4 lg:grid-cols-2'>
         <div className='space-y-4'>
+      <Card>
+        <CardHeader>
+          <CardTitle>{t('Email')}</CardTitle>
+          <CardDescription>
+            {t('Used for sign-in and platform notifications.')}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className='space-y-3'>
+          <p className='text-sm font-medium break-all'>
+            {session.data?.user.email ?? t('No email bound')}
+          </p>
+          {status.data.mail?.enabled ? (
+            <Button variant='outline' disabled={busy} onClick={openEmailChange}>
+              {t('Change email')}
+            </Button>
+          ) : (
+            <p className='text-muted-foreground text-sm'>
+              {t('Platform mail is not configured.')}
+            </p>
+          )}
+        </CardContent>
+      </Card>
       <Card>
         <CardHeader>
           <CardTitle>{t('Password')}</CardTitle>
@@ -325,6 +358,27 @@ export default function PlatformSecurity() {
         <ReauthenticateDialog
           title={t('Verify your identity')}
           onClose={() => setVerifyOpen(false)}
+        />
+      )}
+      {emailOpen && (
+        <PlatformEmailChangeDialog onClose={() => setEmailOpen(false)} />
+      )}
+      {verifyForEmail && (
+        <ReauthenticateDialog
+          title={t('Verify your identity')}
+          onClose={() => {
+            setVerifyForEmail(false)
+            const fresh = queryClient.getQueryData<PlatformSession>([
+              'platform',
+              'session',
+            ])
+            if (
+              fresh &&
+              Date.now() - Date.parse(fresh.authenticated_at) < 5 * 60 * 1000
+            ) {
+              setEmailOpen(true)
+            }
+          }}
         />
       )}
       {deleteID && (

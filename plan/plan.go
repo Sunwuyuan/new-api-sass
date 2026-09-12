@@ -101,7 +101,7 @@ func Defaults() []View {
 	return []View{
 		{
 			Name: "Lite", Price: "Free",
-			Limits: Limits{Requests: 10000, Users: 1},
+			Limits: Limits{Requests: 10000, Users: 1, Emails: 100},
 			Capabilities: Capabilities{
 				MaxWorkspaces: 1, PlatformEmail: true, TaskPlugins: true, DataExport: true, Passkey: true,
 			},
@@ -117,7 +117,7 @@ func Defaults() []View {
 		},
 		{
 			Name: "Standard", Price: "Contact administrator",
-			Limits: Limits{Requests: 100000, Users: 1000},
+			Limits: Limits{Requests: 100000, Users: 1000, Emails: 1000},
 			Capabilities: Capabilities{
 				CustomBranding: true, MaxWorkspaces: 5, PlatformEmail: true, TaskPlugins: true,
 				DataExport: true, WorkspaceOAuth: true, Topup: true, Passkey: true,
@@ -204,8 +204,8 @@ func backfillJSON(db *gorm.DB, p *Plan, column, storedJSON, defaultsJSON string)
 	return db.Model(p).Update(column, string(encoded)).Error
 }
 
-// Builtin request/user ceilings are product policy. Token, channel and email
-// counts are not consumption gates and stay unlimited.
+// Builtin request, user and email ceilings are product policy. Token and
+// channel counts are not consumption gates and stay unlimited.
 func syncBuiltinPlanPolicy(db *gorm.DB, p *Plan, entry View) error {
 	if err := db.First(p, p.ID).Error; err != nil {
 		return err
@@ -216,15 +216,16 @@ func syncBuiltinPlanPolicy(db *gorm.DB, p *Plan, entry View) error {
 	}
 	if view.Limits.Requests == entry.Limits.Requests &&
 		view.Limits.Users == entry.Limits.Users &&
-		view.Limits.Tokens == 0 && view.Limits.Channels == 0 && view.Limits.Emails == 0 &&
+		view.Limits.Emails == entry.Limits.Emails &&
+		view.Limits.Tokens == 0 && view.Limits.Channels == 0 &&
 		view.Capabilities.DataExport {
 		return nil
 	}
 	view.Limits.Requests = entry.Limits.Requests
 	view.Limits.Users = entry.Limits.Users
+	view.Limits.Emails = entry.Limits.Emails
 	view.Limits.Tokens = 0
 	view.Limits.Channels = 0
-	view.Limits.Emails = 0
 	view.Capabilities.DataExport = true
 	limits, err := common.Marshal(view.Limits)
 	if err != nil {

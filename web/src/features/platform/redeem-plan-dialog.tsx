@@ -31,30 +31,38 @@ import {
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 
 import { redeemHostingPlan } from './api'
 import type { Workspace } from './types'
 
 export function RedeemPlanDialog(props: {
-  workspace: Workspace
+  workspaces: Workspace[]
   onClose: () => void
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const schema = z.object({
+    tenant_id: z.string().min(1, t('Select a workspace')),
     code: z
       .string()
       .trim()
       .regex(/^[a-fA-F0-9]{64}$/, t('Enter a valid platform redemption code.')),
   })
+  const firstActive = props.workspaces.find(
+    (workspace) => workspace.status !== 'suspended'
+  )
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
-    defaultValues: { code: '' },
+    defaultValues: {
+      tenant_id: firstActive ? String(firstActive.id) : '',
+      code: '',
+    },
   })
   const mutation = useMutation({
     meta: { errorToast: false },
     mutationFn: (values: z.infer<typeof schema>) =>
-      redeemHostingPlan(props.workspace.id, values.code),
+      redeemHostingPlan(Number(values.tenant_id), values.code),
     onSuccess: (assignment) => {
       form.reset()
       void queryClient.invalidateQueries({ queryKey: ['platform'] })
@@ -73,23 +81,40 @@ export function RedeemPlanDialog(props: {
         if (!open && !mutation.isPending) props.onClose()
       }}
       title={t('Redeem hosting plan')}
-      desc={
-        <>
-          <p className='font-medium break-words'>
-            {props.workspace.name} · /t/{props.workspace.slug}
-          </p>
-          <p>
-            {t(
-              'Renewing the same plan extends its expiry. Switching plans starts a new term today. Each code can be used once per workspace.'
-            )}
-          </p>
-        </>
-      }
+      desc={t(
+        'Renewing the same plan extends its expiry. Switching plans starts a new term today. Each code can be used once per workspace.'
+      )}
       confirmText={t('Redeem')}
       handleConfirm={form.handleSubmit((values) => mutation.mutate(values))}
       isLoading={mutation.isPending}
     >
       <FieldGroup>
+        <Field data-invalid={!!form.formState.errors.tenant_id}>
+          <FieldLabel htmlFor='platform-redeem-workspace'>
+            {t('Workspace')}
+          </FieldLabel>
+          <NativeSelect
+            id='platform-redeem-workspace'
+            className='bg-background w-full'
+            aria-invalid={!!form.formState.errors.tenant_id}
+            disabled={mutation.isPending}
+            {...form.register('tenant_id')}
+          >
+            <NativeSelectOption value='' disabled>
+              {t('Select a workspace')}
+            </NativeSelectOption>
+            {props.workspaces.map((workspace) => (
+              <NativeSelectOption
+                key={workspace.id}
+                value={String(workspace.id)}
+                disabled={workspace.status === 'suspended'}
+              >
+                {workspace.name}
+              </NativeSelectOption>
+            ))}
+          </NativeSelect>
+          <FieldError>{form.formState.errors.tenant_id?.message}</FieldError>
+        </Field>
         <Field data-invalid={!!form.formState.errors.code}>
           <FieldLabel htmlFor='platform-redeem-code'>
             {t('Redemption code')}

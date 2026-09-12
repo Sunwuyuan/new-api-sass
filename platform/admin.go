@@ -217,13 +217,13 @@ func (s *Server) updatePlan(c *gin.Context) {
 		return
 	}
 	if input.Limits.Users < 0 || input.Limits.Users > 1000000000 ||
-		input.Limits.Requests < 0 || input.Limits.Requests > 1000000000 {
+		input.Limits.Requests < 0 || input.Limits.Requests > 1000000000 ||
+		input.Limits.Emails < 0 || input.Limits.Emails > 1000000000 {
 		writeError(c, http.StatusBadRequest, "invalid_plan")
 		return
 	}
 	input.Limits.Tokens = 0
 	input.Limits.Channels = 0
-	input.Limits.Emails = 0
 	limits, err := common.Marshal(input.Limits)
 	if err != nil {
 		transactionError(c, err)

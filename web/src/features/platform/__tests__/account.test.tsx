@@ -76,7 +76,7 @@ test('registration validates password length and directs the user to sign in', a
   )
   await user.click(screen.getByRole('button', { name: 'Create account' }))
   expect(
-    await screen.findByText('Use 15 to 128 characters for a new password.', {
+    await screen.findByText('Use 10 to 128 characters for a new password.', {
       selector: '[data-slot="field-error"]',
     })
   ).toBeVisible()

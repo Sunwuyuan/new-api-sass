@@ -221,7 +221,7 @@ export function PlatformAuthForm(props: {
                 />
                 {signUp && (
                   <FieldDescription>
-                    {t('Use 15 to 128 characters for a new password.')}
+                    {t('Use 10 to 128 characters for a new password.')}
                   </FieldDescription>
                 )}
                 <FieldError>

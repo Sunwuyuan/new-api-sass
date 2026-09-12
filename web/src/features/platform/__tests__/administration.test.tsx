@@ -706,6 +706,7 @@ test('usage analytics renders real totals, scoped workspace links, and an empty 
 })
 
 test('plans page shows hosting cards and a workspace redemption form', async () => {
+  const user = userEvent.setup()
   session = { ...administratorSession, user: member }
   network.adapter.mockImplementation(async (config) => {
     if (config.url === '/plans') {
@@ -758,13 +759,20 @@ test('plans page shows hosting cards and a workspace redemption form', async () 
   })
   await renderPlatform('/platform/plans')
   expect(await screen.findByRole('heading', { name: 'Plans' })).toBeVisible()
-  expect(await screen.findByRole('heading', { name: 'Lite' })).toBeVisible()
-  expect(screen.getByRole('heading', { name: 'Standard' })).toBeVisible()
+  const cards = within(
+    await screen.findByRole('region', { name: 'Hosting plans' })
+  )
+  expect(cards.getByText('Lite')).toBeVisible()
+  expect(cards.getByText('Standard')).toBeVisible()
+  expect(cards.getByText('Pro')).toBeVisible()
+  expect(cards.getByText('Free')).toBeVisible()
+  expect(cards.getAllByText('Contact administrator')).toHaveLength(2)
   expect(screen.queryByText('Recommended')).not.toBeInTheDocument()
   expect(screen.queryByRole('table')).not.toBeInTheDocument()
   expect(screen.queryByText('Tokens')).not.toBeInTheDocument()
-  expect(screen.getByLabelText('Apply a plan code')).toBeVisible()
-  expect(screen.getByRole('button', { name: 'Enter code' })).toBeDisabled()
+  expect(
+    cards.getByRole('link', { name: 'Create free workspace' })
+  ).toHaveAttribute('href', '/platform/workspaces/new')
   const chrome = screen
     .getByRole('button', { name: 'Toggle Sidebar' })
     .closest('header')
@@ -772,6 +780,15 @@ test('plans page shows hosting cards and a workspace redemption form', async () 
     throw new Error('plans page is missing the console header')
   }
   expect(within(chrome).queryByText('Workspace')).not.toBeInTheDocument()
+  const redeemButtons = screen.getAllByRole('button', { name: 'Redeem a code' })
+  expect(redeemButtons).toHaveLength(3)
+  expect(redeemButtons[0]).toBeDisabled()
+  await user.click(redeemButtons[1])
+  const dialog = await screen.findByRole('alertdialog')
+  expect(
+    within(dialog).getByRole('combobox', { name: 'Workspace' })
+  ).toBeVisible()
+  expect(within(dialog).getByLabelText('Redemption code')).toBeVisible()
 })
 
 test('administrators edit plan limits and features in one comparison table', async () => {

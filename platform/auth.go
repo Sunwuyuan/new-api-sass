@@ -227,8 +227,8 @@ func validateCredentials(input *credentials, newPassword bool) error {
 	if len(input.Password) > 512 || !utf8.ValidString(input.Password) {
 		return errors.New("invalid password")
 	}
-	if newPassword && (utf8.RuneCountInString(input.Password) < 15 || utf8.RuneCountInString(input.Password) > 128) {
-		return errors.New("password must contain 15 to 128 characters")
+	if newPassword && (utf8.RuneCountInString(input.Password) < 10 || utf8.RuneCountInString(input.Password) > 128) {
+		return errors.New("password must contain 10 to 128 characters")
 	}
 	if newPassword {
 		return common.ValidateNewAccountPassword(input.Password)
@@ -268,7 +268,7 @@ func (s *Server) register(c *gin.Context) {
 		return
 	}
 	if verify && user.ID > 0 {
-		if err := s.issueEmailChallenge(c, input.Email); err != nil {
+		if err := s.issueEmailChallenge(c, "email", input.Email); err != nil {
 			common.SysError("platform verification email failed: " + err.Error())
 		}
 	}

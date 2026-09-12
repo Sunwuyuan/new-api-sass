@@ -479,6 +479,22 @@ func TestSaaSContracts(t *testing.T) {
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/status", alpha.ID), map[string]string{"status": "active"}, nil).Code)
 	})
 
+	t.Run("platform email reserve enforces the monthly ceiling and releases failures", func(t *testing.T) {
+		now := time.Now().UTC()
+		month := now.Format("2006-01")
+		first, err := plan.ReserveEmail(alphaCtx, model.DB, 1, now)
+		require.NoError(t, err)
+		_, err = plan.ReserveEmail(alphaCtx, model.DB, 1, now)
+		require.ErrorIs(t, err, plan.ErrEmailLimit)
+		require.NoError(t, first(false))
+		var usage plan.Usage
+		require.NoError(t, model.DB.Where("tenant_id = ? AND month = ?", alpha.ID, month).First(&usage).Error)
+		assert.Zero(t, usage.Emails, "a failed send releases its email reservation")
+		third, err := plan.ReserveEmail(alphaCtx, model.DB, 1, now)
+		require.NoError(t, err)
+		require.NoError(t, third(true))
+	})
+
 	t.Run("phase two platform contracts", func(t *testing.T) {
 		testSaaSPhase2(t, saas, server, admin, adminPassword)
 	})

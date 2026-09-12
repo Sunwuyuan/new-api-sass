@@ -43,6 +43,11 @@ export type PlatformAuthStatus = OAuthProviderStatus & {
   user_agreement_url: string
   privacy_policy_url: string
   email_verification?: boolean
+  mail?: {
+    enabled: boolean
+    email_verification: boolean
+    notifications: boolean
+  }
 }
 
 export type PlatformAuthIntent = 'login' | 'link' | 'verify'

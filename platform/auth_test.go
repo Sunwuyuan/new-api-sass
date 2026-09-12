@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -846,4 +847,106 @@ func TestPlatformPublicAuthConfiguration(t *testing.T) {
 	t.Setenv("PLATFORM_OIDC_ISSUER", "http://identity.example.test")
 	_, err = loadAuthConfig()
 	assert.Error(t, err, "non-local identity endpoints require HTTPS")
+}
+
+type platformMailCapture struct {
+	mu   sync.Mutex
+	html map[string]string
+}
+
+func newPlatformMailCapture(t *testing.T, f *authFixture) *platformMailCapture {
+	t.Helper()
+	capture := &platformMailCapture{html: make(map[string]string)}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			To   []string `json:"to"`
+			HTML string   `json:"html"`
+		}
+		if err := common.DecodeJson(r.Body, &payload); err != nil || len(payload.To) != 1 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		capture.mu.Lock()
+		capture.html[payload.To[0]] = payload.HTML
+		capture.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+	f.server.Mail = MailSettings{Enabled: true, BaseURL: server.URL, APIKey: "synthetic-mail-key", From: "no-reply@example.test", Notifications: true}
+	return capture
+}
+
+var mailCodePattern = regexp.MustCompile(`<strong>(\d{6})</strong>`)
+
+func (m *platformMailCapture) code(t *testing.T, to string) string {
+	t.Helper()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	matches := mailCodePattern.FindStringSubmatch(m.html[to])
+	require.NotEmpty(t, matches, "no verification mail for "+to)
+	return matches[1]
+}
+
+func TestPlatformEmailChange(t *testing.T) {
+	f := newAuthFixture(t)
+	mailbox := newPlatformMailCapture(t, f)
+	alpha, user := f.account(t, "alpha")
+	_, _ = f.account(t, "beta")
+
+	// Validation failures never send mail.
+	response := alpha.request(t, http.MethodPost, "/email/change/start", gin.H{"email": "not-an-email"}, nil)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Equal(t, "invalid_email", gjson.GetBytes(response.Body.Bytes(), "code").String())
+	response = alpha.request(t, http.MethodPost, "/email/change/start", gin.H{"email": "alpha@example.test"}, nil)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Equal(t, "email_unchanged", gjson.GetBytes(response.Body.Bytes(), "code").String())
+	response = alpha.request(t, http.MethodPost, "/email/change/start", gin.H{"email": "beta@example.test"}, nil)
+	assert.Equal(t, http.StatusConflict, response.Code)
+	assert.Equal(t, "email_taken", gjson.GetBytes(response.Body.Bytes(), "code").String())
+
+	const updated = "alpha-renamed@example.test"
+	require.Equal(t, http.StatusOK, alpha.request(t, http.MethodPost, "/email/change/start", gin.H{"email": updated}, nil).Code)
+	code := mailbox.code(t, updated)
+	wrong := "000000"
+	if code == wrong {
+		wrong = "000001"
+	}
+	response = alpha.request(t, http.MethodPost, "/email/change/finish", gin.H{"email": updated, "code": wrong}, nil)
+	assert.Equal(t, http.StatusUnauthorized, response.Code)
+	assert.Equal(t, "invalid_verification_code", gjson.GetBytes(response.Body.Bytes(), "code").String())
+	require.Equal(t, http.StatusOK, alpha.request(t, http.MethodPost, "/email/change/finish", gin.H{"email": updated, "code": code}, nil).Code)
+
+	var stored User
+	require.NoError(t, f.server.DB.First(&stored, user.ID).Error)
+	require.NotNil(t, stored.Email)
+	assert.Equal(t, updated, *stored.Email)
+	assert.NotNil(t, stored.EmailVerifiedAt)
+	// The session survives an email change and reports the new address.
+	var session struct{ User User }
+	require.Equal(t, http.StatusOK, alpha.request(t, http.MethodGet, "/session", nil, &session).Code)
+	require.NotNil(t, session.User.Email)
+	assert.Equal(t, updated, *session.User.Email)
+	// The old address is notified and codes are single-use.
+	mailbox.mu.Lock()
+	_, notified := mailbox.html["alpha@example.test"]
+	mailbox.mu.Unlock()
+	assert.True(t, notified, "old address receives a change notification")
+	response = alpha.request(t, http.MethodPost, "/email/change/finish", gin.H{"email": updated, "code": code}, nil)
+	assert.Equal(t, http.StatusUnauthorized, response.Code)
+
+	// A stale session must re-authenticate before starting another change.
+	require.NoError(t, f.server.DB.Model(&Session{}).Where("user_id = ?", user.ID).Update("created_at", time.Now().Add(-10*time.Minute)).Error)
+	response = alpha.request(t, http.MethodPost, "/email/change/start", gin.H{"email": "alpha-third@example.test"}, nil)
+	assert.Equal(t, http.StatusUnauthorized, response.Code)
+	assert.Equal(t, "recent_login_required", gjson.GetBytes(response.Body.Bytes(), "code").String())
+}
+
+func TestPlatformPasswordLength(t *testing.T) {
+	f := newAuthFixture(t)
+	browser := f.browser()
+	response := browser.request(t, http.MethodPost, "/register", credentials{"length@example.test", "Kx9#mQ2vL"}, nil)
+	assert.Equal(t, http.StatusBadRequest, response.Code)
+	assert.Equal(t, "invalid_email_or_password_length", gjson.GetBytes(response.Body.Bytes(), "code").String())
+	require.Equal(t, http.StatusOK, browser.request(t, http.MethodPost, "/register", credentials{"length@example.test", "Kx9#mQ2vLz"}, nil).Code)
+	require.Equal(t, http.StatusOK, browser.request(t, http.MethodPost, "/login", credentials{"length@example.test", "Kx9#mQ2vLz"}, nil).Code)
 }
