@@ -8,23 +8,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
-	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/gin-gonic/gin"
 )
 
 func tenantFrontendPath(c *gin.Context) string {
-	path, query, hasQuery := strings.Cut(c.Request.RequestURI, "?")
-	if identity, err := tenant.FromContext(c.Request.Context()); err == nil && identity.Slug != "" {
-		prefix := "/t/" + identity.Slug
-		if path != prefix && !strings.HasPrefix(path, prefix+"/") && strings.HasPrefix(path, "/") {
-			path = prefix + path
-		}
-	}
-	if hasQuery {
-		return path + "?" + query
-	}
-	return path
+	return c.Request.RequestURI
 }
 
 func SetRouter(router *gin.Engine, assets WebAssets) {

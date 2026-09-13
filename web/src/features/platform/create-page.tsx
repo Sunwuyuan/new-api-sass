@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 
-import { getHostingPlans, getWorkspaces } from './api'
+import { getHostingPlans, getWildcardDomains, getWorkspaces } from './api'
 import { CreateWorkspace } from './create-workspace'
 import { PlatformLink } from './navigation'
 
@@ -35,6 +35,10 @@ export default function PlatformCreatePage() {
   const workspaces = useQuery({
     queryKey: ['platform', 'tenants', 'capacity'],
     queryFn: () => getWorkspaces(false, { page: 1, page_size: 1 }),
+  })
+  const wildcards = useQuery({
+    queryKey: ['platform', 'wildcard-domains'],
+    queryFn: getWildcardDomains,
   })
   return (
     <section className='max-w-3xl space-y-6'>
@@ -50,19 +54,23 @@ export default function PlatformCreatePage() {
           {t('Set up an independent API workspace.')}
         </p>
       </header>
-      {(plans.isPending || workspaces.isPending) && <LoadingState />}
-      {(plans.isError || workspaces.isError) && (
+      {(plans.isPending || workspaces.isPending || wildcards.isPending) && (
+        <LoadingState />
+      )}
+      {(plans.isError || workspaces.isError || wildcards.isError) && (
         <ErrorState
           onRetry={() => {
             void plans.refetch()
             void workspaces.refetch()
+            void wildcards.refetch()
           }}
         />
       )}
-      {plans.data && workspaces.data && (
+      {plans.data && workspaces.data && wildcards.data && (
         <CreateWorkspace
           plans={plans.data}
           liteAvailable={workspaces.data.lite_available !== false}
+          wildcardDomains={wildcards.data}
         />
       )}
     </section>

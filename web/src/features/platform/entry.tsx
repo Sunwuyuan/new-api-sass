@@ -18,7 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { lazy, type ReactNode } from 'react'
 
-import { tenantBasePath } from '@/lib/tenant'
+import { isPlatformShell } from '@/lib/tenant'
 
 const PlatformApp = lazy(() => import('./index'))
 const ActivateWorkspace = lazy(() => import('./activate-workspace'))
@@ -26,8 +26,8 @@ const ActivateWorkspace = lazy(() => import('./activate-workspace'))
 // Entering another workspace reloads the document so its router, query cache,
 // and in-memory authentication state start independently.
 export function PlatformEntry(props: { children: ReactNode }) {
-  if (!tenantBasePath) return <PlatformApp />
-  if (window.location.pathname === `${tenantBasePath}/activate`) {
+  if (isPlatformShell()) return <PlatformApp />
+  if (window.location.pathname === '/activate') {
     return <ActivateWorkspace />
   }
   return props.children

@@ -73,7 +73,7 @@ func importStandaloneWorkspace() error {
 			return err
 		}
 		// Redirects and callback links must use the new workspace entry point.
-		address := model.Option{TenantID: 1, Key: "ServerAddress", Value: saasPlatform.Origin + "/t/imported"}
+		address := model.Option{TenantID: 1, Key: "ServerAddress", Value: saasPlatform.Origin}
 		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "tenant_id"}, {Name: "key"}}, DoUpdates: clause.AssignmentColumns([]string{"value"})}).Create(&address).Error
 	})
 }

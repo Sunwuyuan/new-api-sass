@@ -29,7 +29,7 @@ import { initializeFrontendCache } from '@/lib/frontend-cache'
 import '@/lib/dayjs'
 import { createAppQueryClient } from '@/lib/query-client'
 import { readCachedStatus, statusQueryOptions } from '@/lib/status-query'
-import { tenantBasePath } from '@/lib/tenant'
+import { isPlatformShell, tenantBasePath } from '@/lib/tenant'
 
 import { DirectionProvider } from './context/direction-provider'
 import { FontProvider } from './context/font-provider'
@@ -75,7 +75,7 @@ if (!rootElement) {
 ;(function initSystemBranding() {
   try {
     if (
-      !tenantBasePath ||
+      isPlatformShell() ||
       typeof window === 'undefined' ||
       typeof document === 'undefined'
     ) {

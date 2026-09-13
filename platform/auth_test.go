@@ -90,7 +90,7 @@ func newAuthFixture(t *testing.T, seeds ...func(*gorm.DB)) *authFixture {
 		common.SetMainDatabaseType(previousType)
 		require.NoError(t, sqlDB.Close())
 	})
-	require.NoError(t, db.Migrator().DropTable(&AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &Session{}, &AuthAttempt{}, &RedemptionUse{}, &Redemption{}, &RootActivation{}, &Audit{}, &AdminGuard{}, &User{}, &plan.Assignment{}, &plan.Usage{}, &tenant.Workspace{}, &plan.Plan{}))
+	require.NoError(t, db.Migrator().DropTable(&AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &Session{}, &AuthAttempt{}, &RedemptionUse{}, &Redemption{}, &RootActivation{}, &Audit{}, &AdminGuard{}, &User{}, &plan.Assignment{}, &plan.Usage{}, &tenant.Workspace{}, &plan.Plan{}, &tenant.Host{}, &tenant.WildcardDomain{}))
 	for _, seed := range seeds {
 		seed(db)
 	}

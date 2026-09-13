@@ -7,7 +7,7 @@ published by the Free Software Foundation, either version 3 of the
 License, or (at your option) any later version.
 
 This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 GNU Affero General Public License for more details.
 
@@ -21,6 +21,8 @@ import { beforeEach, describe, expect, test } from 'vitest'
 import {
   applyTenantRequestURL,
   getTenantBasePath,
+  isPlatformPath,
+  isPlatformShell,
   scopedStorage,
   tenantPath,
 } from '@/lib/tenant'
@@ -52,53 +54,38 @@ describe('workspace storage', () => {
   })
 })
 
-test('only a valid workspace segment becomes the router base', () => {
-  expect(getTenantBasePath('/t/alpha/dashboard')).toBe('/t/alpha')
-  expect(getTenantBasePath('/t/beta')).toBe('/t/beta')
+test('path prefixes are not used as a workspace address', () => {
+  expect(getTenantBasePath('/t/alpha/dashboard')).toBe('')
   expect(getTenantBasePath('/platform')).toBe('')
-  expect(getTenantBasePath('/t/alpha%2Fbeta/dashboard')).toBe('')
+  expect(isPlatformPath('/platform')).toBe(true)
+  expect(isPlatformPath('/platform/workspaces/1')).toBe(true)
+  expect(isPlatformPath('/dashboard')).toBe(false)
 })
 
-test('workspace requests use that workspace API address', () => {
-  const previous = `${window.location.pathname}${window.location.search}`
-  window.history.pushState({}, '', '/t/alpha/dashboard')
-  try {
-    expect(tenantPath('/api/status')).toBe('/t/alpha/api/status')
-    expect(applyTenantRequestURL({ url: '/api/status' })).toEqual({
-      url: '/t/alpha/api/status',
-      baseURL: '/',
+test('workspace requests stay on the current host', () => {
+  expect(tenantPath('/api/status')).toBe('/api/status')
+  expect(applyTenantRequestURL({ url: '/api/status' })).toEqual({
+    url: '/api/status',
+    baseURL: '/',
+  })
+  expect(
+    applyTenantRequestURL({
+      url: '/api/user/self',
+      baseURL: '/t/alpha',
     })
-    expect(
-      applyTenantRequestURL({
-        url: '/t/alpha/api/user/self',
-        baseURL: '/t/alpha',
-      })
-    ).toEqual({
-      url: '/t/alpha/api/user/self',
-      baseURL: '/',
-    })
-    expect(
-      applyTenantRequestURL({ url: 'https://example.test/api/status' })
-    ).toEqual({
-      url: 'https://example.test/api/status',
-    })
-  } finally {
-    window.history.pushState({}, '', previous)
-  }
+  ).toEqual({
+    url: '/api/user/self',
+    baseURL: '/',
+  })
+  expect(
+    applyTenantRequestURL({ url: 'https://example.test/api/status' })
+  ).toEqual({
+    url: 'https://example.test/api/status',
+  })
 })
 
-test('platform pages do not invent a workspace API address', () => {
-  const previous = `${window.location.pathname}${window.location.search}`
-  window.history.pushState({}, '', '/platform')
-  try {
-    expect(tenantPath('/api/status')).toBe('/api/status')
-    expect(
-      applyTenantRequestURL({ url: '/api/status', baseURL: '/t/alpha' })
-    ).toEqual({
-      url: '/api/status',
-      baseURL: '/',
-    })
-  } finally {
-    window.history.pushState({}, '', previous)
-  }
+test('the platform console is selected from the path or localhost root', () => {
+  expect(isPlatformShell('/platform')).toBe(true)
+  expect(isPlatformShell('/dashboard')).toBe(false)
+  expect(isPlatformShell('/')).toBe(true)
 })

@@ -27,7 +27,9 @@ import type {
   PlatformSession,
   PlatformUser,
   Workspace,
+  WorkspaceHost,
   WorkspacePage,
+  WildcardDomain,
   PageParams,
   PageResult,
   PlatformRedemption,
@@ -103,13 +105,31 @@ client.interceptors.response.use(undefined, (error: unknown) => {
       'This workspace address is unavailable or your workspace limit has been reached.'
     )
   }
+  if (code === 'invalid_workspace_host') {
+    message = t('That hostname is not valid.')
+  }
+  if (code === 'workspace_host_taken') {
+    message = t('That hostname is already in use.')
+  }
+  if (code === 'workspace_host_limit_reached') {
+    message = t('This workspace has reached the domain limit.')
+  }
+  if (code === 'workspace_host_unverified') {
+    message = t(
+      'DNS records were not found yet. Wait for propagation and try again.'
+    )
+  }
+  if (code === 'invalid_wildcard_domain') {
+    message = t('Choose an available wildcard domain.')
+  }
+  if (code === 'wildcard_domain_in_use') {
+    message = t('This wildcard domain still has workspace prefixes.')
+  }
   if (code === 'lite_workspace_already_exists') {
     message = t('You already have a free Lite workspace.')
   }
   if (code === 'invalid_workspace_administrator') {
-    message = t(
-      'Check the administrator username, email and password.'
-    )
+    message = t('Check the administrator username, email and password.')
   }
   if (code === 'invalid_email_or_password_length') {
     message = t('Enter a valid email and a password of 10 to 128 characters.')
@@ -267,6 +287,8 @@ export async function getPlatformUsers(
 export async function createWorkspace(input: {
   name: string
   slug: string
+  prefix?: string
+  wildcard_domain_id?: number
   username: string
   display_name?: string
   email?: string
@@ -275,9 +297,82 @@ export async function createWorkspace(input: {
   code?: string
 }): Promise<{
   tenant: Workspace
+  hosts?: WorkspaceHost[]
+  primary_url?: string
   setup_url?: string
 }> {
   return (await client.post('/tenants', input)).data
+}
+
+export async function getWildcardDomains(): Promise<WildcardDomain[]> {
+  return (
+    await client.get<{ wildcard_domains: WildcardDomain[] }>(
+      '/wildcard-domains'
+    )
+  ).data.wildcard_domains
+}
+
+export async function getAdminWildcardDomains(): Promise<WildcardDomain[]> {
+  return (
+    await client.get<{ wildcard_domains: WildcardDomain[] }>(
+      '/admin/wildcard-domains'
+    )
+  ).data.wildcard_domains
+}
+
+export async function createWildcardDomain(input: {
+  domain: string
+  enabled?: boolean
+}): Promise<void> {
+  await client.post('/admin/wildcard-domains', input)
+}
+
+export async function updateWildcardDomain(
+  id: number,
+  input: { domain?: string; enabled?: boolean }
+): Promise<void> {
+  await client.post(`/admin/wildcard-domains/${id}`, input)
+}
+
+export async function deleteWildcardDomain(id: number): Promise<void> {
+  await client.post(`/admin/wildcard-domains/${id}/delete`)
+}
+
+export async function createWorkspaceHost(
+  id: number,
+  input:
+    | { kind?: 'wildcard'; prefix: string; wildcard_domain_id?: number }
+    | { kind: 'custom'; host: string; method?: 'txt' | 'cname' },
+  admin: boolean
+): Promise<WorkspaceHost> {
+  return (
+    await client.post<{ host: WorkspaceHost }>(
+      `${admin ? '/admin' : ''}/tenants/${id}/hosts`,
+      input
+    )
+  ).data.host
+}
+
+export async function verifyWorkspaceHost(
+  id: number,
+  hostId: number,
+  admin: boolean
+): Promise<WorkspaceHost> {
+  return (
+    await client.post<{ host: WorkspaceHost }>(
+      `${admin ? '/admin' : ''}/tenants/${id}/hosts/${hostId}/verify`
+    )
+  ).data.host
+}
+
+export async function deleteWorkspaceHost(
+  id: number,
+  hostId: number,
+  admin: boolean
+): Promise<void> {
+  await client.post(
+    `${admin ? '/admin' : ''}/tenants/${id}/hosts/${hostId}/delete`
+  )
 }
 
 export async function assignHostingPlan(
@@ -449,9 +544,7 @@ export async function getPlatformSettings(): Promise<PlatformAdminSettings> {
 
 export async function updatePlatformSettings(input: {
   auth?: Partial<PlatformAdminSettings['auth']> & {
-    providers?: Array<
-      PlatformOAuthProviderSetting & { client_secret?: string }
-    >
+    providers?: Array<PlatformOAuthProviderSetting & { client_secret?: string }>
   }
   mail?: Partial<PlatformAdminSettings['mail']> & { api_key?: string }
 }): Promise<void> {

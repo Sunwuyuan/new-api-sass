@@ -28,18 +28,9 @@ import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from '@/components/ui/tabs'
-import {
-  Field,
-  FieldError,
-  FieldLabel,
-} from '@/components/ui/field'
+import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 import { AssignPlanDialog } from './admin/assign-plan-dialog'
 import {
@@ -49,10 +40,12 @@ import {
   transferWorkspace,
   updateWorkspace,
 } from './api'
+import { workspaceHref, workspaceHostLabel } from './lib/workspace-url'
 import { PlatformLink, PlatformNotFound } from './navigation'
 import { RedeemPlanDialog } from './redeem-plan-dialog'
 import type { PlatformRouter } from './router'
 import { getWorkspaceDetail } from './workspace-api'
+import { WorkspaceHosts } from './workspace-hosts'
 import { WorkspaceStatus, WorkspaceUsageMeter } from './workspace-status'
 
 export default function PlatformWorkspaceDetail() {
@@ -132,6 +125,9 @@ export default function PlatformWorkspaceDetail() {
   }
   const data = detail.data
   const workspace = data.tenant
+  const entryURL = workspaceHref(data)
+  const setupURL = workspaceHref(data, '/setup')
+  const hostLabel = workspaceHostLabel(data)
   const owner = workspace.owner_platform_user_id === session.data?.user.id
   const suspended = workspace.status === 'suspended'
   const expired =
@@ -157,9 +153,7 @@ export default function PlatformWorkspaceDetail() {
             </h1>
             <WorkspaceStatus workspace={workspace} />
           </div>
-          <p className='text-muted-foreground text-sm break-all'>
-            /t/{workspace.slug}
-          </p>
+          <p className='text-muted-foreground text-sm break-all'>{hostLabel}</p>
           {expired && !suspended && (
             <p className='text-muted-foreground max-w-2xl text-sm'>
               {t(
@@ -169,18 +163,22 @@ export default function PlatformWorkspaceDetail() {
           )}
         </div>
         <div className='flex flex-wrap gap-2'>
-          <Button
-            render={<a href={`/t/${workspace.slug}/`} />}
-            nativeButton={false}
-            role='link'
-            disabled={suspended}
-          >
-            {t('Enter workspace')}
-          </Button>
-          {!data.setup_complete && (
+          {entryURL ? (
+            <Button
+              render={<a href={entryURL} />}
+              nativeButton={false}
+              role='link'
+              disabled={suspended}
+            >
+              {t('Enter workspace')}
+            </Button>
+          ) : (
+            <Button disabled>{t('Enter workspace')}</Button>
+          )}
+          {!data.setup_complete && setupURL && (
             <Button
               variant='outline'
-              render={<a href={`/t/${workspace.slug}/setup`} />}
+              render={<a href={setupURL} />}
               nativeButton={false}
               role='link'
               disabled={suspended}
@@ -197,225 +195,234 @@ export default function PlatformWorkspaceDetail() {
           <TabsTrigger value='usage'>{t('Usage')}</TabsTrigger>
         </TabsList>
         <TabsContent value='overview' className='space-y-4 pt-4'>
-      <div className='grid gap-4 lg:grid-cols-2'>
-        <Card>
-          <CardHeader>
-            <CardTitle>{t('Hosting plan')}</CardTitle>
-          </CardHeader>
-          <CardContent className='space-y-5'>
-            <p className='text-2xl font-semibold'>{data.plan.name}</p>
-            <dl className='grid grid-cols-2 gap-3 text-sm'>
-              <dt className='text-muted-foreground'>{t('Owner')}</dt>
-              <dd className='break-all'>{data.owner_name}</dd>
-              <dt className='text-muted-foreground'>{t('Plan expires')}</dt>
-              <dd>
-                {workspace.plan_expires_at
-                  ? new Date(workspace.plan_expires_at).toLocaleString()
-                  : t('No expiry')}
-              </dd>
-              <dt className='text-muted-foreground'>{t('Users')}</dt>
-              <dd>
-                {data.plan.limits.users === 0
-                  ? t('Unlimited')
-                  : data.plan.limits.users.toLocaleString()}
-              </dd>
-              <dt className='text-muted-foreground'>{t('Monthly requests')}</dt>
-              <dd>
-                {data.plan.limits.requests === 0
-                  ? t('Unlimited')
-                  : data.plan.limits.requests.toLocaleString()}
-              </dd>
-            </dl>
-            <p className='text-muted-foreground text-sm'>
-              {data.plan.capabilities.custom_branding
-                ? t('Custom branding')
-                : t('Basic branding')}{' '}
-              ·{' '}
-              {data.plan.capabilities.remove_platform_footer
-                ? t('Custom platform footer')
-                : t('Platform footer required')}
-            </p>
-            <div className='flex flex-wrap gap-2'>
-              {owner && (
-                <Button
-                  variant='outline'
-                  disabled={workspace.status === 'suspended'}
-                  onClick={() => setRedeemOpen(true)}
-                >
-                  {t('Redeem hosting plan')}
-                </Button>
-              )}
-              {admin && (
-                <Button
-                  variant='outline'
-                  disabled={!plans.data}
-                  onClick={() => setAssignOpen(true)}
-                >
-                  {t('Activate plan manually')}
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              {t('Monthly requests')} · {data.usage.month} UTC
-            </CardTitle>
-          </CardHeader>
-          <CardContent className='space-y-5'>
-            <WorkspaceUsageMeter
-              requests={data.usage.requests}
-              limit={data.plan.limits.requests}
-              name={workspace.name}
-            />
-            <p className='text-sm'>
-              {t('Remaining requests')}:{' '}
-              <strong className='tabular-nums'>
-                {remaining === null ? t('Unlimited') : remaining.toLocaleString()}
-              </strong>
-            </p>
-            <p className='text-muted-foreground text-sm'>
-              {t(
-                'Usage is counted from gateway requests in the UTC calendar month.'
-              )}
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-        </TabsContent>
-        <TabsContent value='settings' className='space-y-4 pt-4'>
-        <Card className='max-w-xl'>
-          <CardHeader>
-            <CardTitle>{t('Workspace')}</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <form
-              className='space-y-4'
-              onSubmit={(event) => {
-                event.preventDefault()
-                rename.mutate()
-              }}
-            >
-              <Field>
-                <FieldLabel htmlFor='workspace-display-name'>
-                  {t('Name')}
-                </FieldLabel>
-                <Input
-                  id='workspace-display-name'
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  disabled={rename.isPending}
+          <div className='grid gap-4 lg:grid-cols-2'>
+            <Card>
+              <CardHeader>
+                <CardTitle>{t('Hosting plan')}</CardTitle>
+              </CardHeader>
+              <CardContent className='space-y-5'>
+                <p className='text-2xl font-semibold'>{data.plan.name}</p>
+                <dl className='grid grid-cols-2 gap-3 text-sm'>
+                  <dt className='text-muted-foreground'>{t('Owner')}</dt>
+                  <dd className='break-all'>{data.owner_name}</dd>
+                  <dt className='text-muted-foreground'>{t('Plan expires')}</dt>
+                  <dd>
+                    {workspace.plan_expires_at
+                      ? new Date(workspace.plan_expires_at).toLocaleString()
+                      : t('No expiry')}
+                  </dd>
+                  <dt className='text-muted-foreground'>{t('Users')}</dt>
+                  <dd>
+                    {data.plan.limits.users === 0
+                      ? t('Unlimited')
+                      : data.plan.limits.users.toLocaleString()}
+                  </dd>
+                  <dt className='text-muted-foreground'>
+                    {t('Monthly requests')}
+                  </dt>
+                  <dd>
+                    {data.plan.limits.requests === 0
+                      ? t('Unlimited')
+                      : data.plan.limits.requests.toLocaleString()}
+                  </dd>
+                </dl>
+                <p className='text-muted-foreground text-sm'>
+                  {data.plan.capabilities.custom_branding
+                    ? t('Custom branding')
+                    : t('Basic branding')}{' '}
+                  ·{' '}
+                  {data.plan.capabilities.remove_platform_footer
+                    ? t('Custom platform footer')
+                    : t('Platform footer required')}
+                </p>
+                <div className='flex flex-wrap gap-2'>
+                  {owner && (
+                    <Button
+                      variant='outline'
+                      disabled={workspace.status === 'suspended'}
+                      onClick={() => setRedeemOpen(true)}
+                    >
+                      {t('Redeem hosting plan')}
+                    </Button>
+                  )}
+                  {admin && (
+                    <Button
+                      variant='outline'
+                      disabled={!plans.data}
+                      onClick={() => setAssignOpen(true)}
+                    >
+                      {t('Activate plan manually')}
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  {t('Monthly requests')} · {data.usage.month} UTC
+                </CardTitle>
+              </CardHeader>
+              <CardContent className='space-y-5'>
+                <WorkspaceUsageMeter
+                  requests={data.usage.requests}
+                  limit={data.plan.limits.requests}
+                  name={workspace.name}
                 />
-              </Field>
-              <Field>
-                <FieldLabel htmlFor='workspace-slug'>
-                  {t('Workspace address')}
-                </FieldLabel>
-                <Input
-                  id='workspace-slug'
-                  value={slug}
-                  onChange={(event) => setSlug(event.target.value)}
-                  disabled={rename.isPending}
-                />
-                <p className='text-muted-foreground text-xs'>
+                <p className='text-sm'>
+                  {t('Remaining requests')}:{' '}
+                  <strong className='tabular-nums'>
+                    {remaining === null
+                      ? t('Unlimited')
+                      : remaining.toLocaleString()}
+                  </strong>
+                </p>
+                <p className='text-muted-foreground text-sm'>
                   {t(
-                    'Changing the address updates the /t/ path. Existing bookmarks need the new URL.'
+                    'Usage is counted from gateway requests in the UTC calendar month.'
                   )}
                 </p>
-                <FieldError>{rename.error?.message}</FieldError>
-              </Field>
-              <Button
-                type='submit'
-                disabled={rename.isPending || !name.trim() || !slug.trim()}
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+        <TabsContent value='settings' className='space-y-4 pt-4'>
+          <Card className='max-w-xl'>
+            <CardHeader>
+              <CardTitle>{t('Workspace')}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form
+                className='space-y-4'
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  rename.mutate()
+                }}
               >
-                {t('Save changes')}
-              </Button>
-            </form>
-            <Button
-              className='mt-6'
-              variant='outline'
-              render={
-                <Link<
-                  PlatformRouter,
-                  string,
-                  | '/platform/workspaces/$workspaceId/administrators'
-                  | '/platform/admin/workspaces/$workspaceId/administrators'
+                <Field>
+                  <FieldLabel htmlFor='workspace-display-name'>
+                    {t('Name')}
+                  </FieldLabel>
+                  <Input
+                    id='workspace-display-name'
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    disabled={rename.isPending}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor='workspace-slug'>
+                    {t('Workspace ID')}
+                  </FieldLabel>
+                  <Input
+                    id='workspace-slug'
+                    value={slug}
+                    onChange={(event) => setSlug(event.target.value)}
+                    disabled={rename.isPending}
+                  />
+                  <p className='text-muted-foreground text-xs'>
+                    {t(
+                      'This is an internal identifier. Public access uses the domains below.'
+                    )}
+                  </p>
+                  <FieldError>{rename.error?.message}</FieldError>
+                </Field>
+                <Button
+                  type='submit'
+                  disabled={rename.isPending || !name.trim() || !slug.trim()}
                 >
-                  to={
-                    admin
-                      ? '/platform/admin/workspaces/$workspaceId/administrators'
-                      : '/platform/workspaces/$workspaceId/administrators'
-                  }
-                  params={{ workspaceId: String(id) }}
-                />
-              }
-              nativeButton={false}
-            >
-              {t('Workspace administrators')}
-            </Button>
-          </CardContent>
-        </Card>
+                  {t('Save changes')}
+                </Button>
+              </form>
+              <Button
+                className='mt-6'
+                variant='outline'
+                render={
+                  <Link<
+                    PlatformRouter,
+                    string,
+                    | '/platform/workspaces/$workspaceId/administrators'
+                    | '/platform/admin/workspaces/$workspaceId/administrators'
+                  >
+                    to={
+                      admin
+                        ? '/platform/admin/workspaces/$workspaceId/administrators'
+                        : '/platform/workspaces/$workspaceId/administrators'
+                    }
+                    params={{ workspaceId: String(id) }}
+                  />
+                }
+                nativeButton={false}
+              >
+                {t('Workspace administrators')}
+              </Button>
+            </CardContent>
+          </Card>
+          <WorkspaceHosts
+            workspaceId={id}
+            admin={admin}
+            hosts={data.hosts ?? []}
+          />
         </TabsContent>
         <TabsContent value='usage' className='space-y-6 pt-4'>
-      <section className='space-y-3'>
-        <h2 className='text-base font-semibold'>
-          {t('Monthly request history')}
-        </h2>
-        <StaticDataTable
-          data={data.history}
-          getRowKey={(row) => row.month}
-          emptyContent={t('No recorded usage yet')}
-          columns={[
-            { id: 'month', header: t('Month'), cell: (row) => row.month },
-            {
-              id: 'requests',
-              header: t('Requests'),
-              cell: (row) => row.requests.toLocaleString(),
-            },
-            {
-              id: 'emails',
-              header: t('Emails'),
-              cell: (row) => (row.emails ?? 0).toLocaleString(),
-            },
-          ]}
-        />
-      </section>
-      <section className='space-y-3'>
-        <h2 className='text-base font-semibold'>{t('Plan history')}</h2>
-        <StaticDataTable
-          data={data.assignments ?? []}
-          getRowKey={(row) => row.id}
-          emptyContent={t('No plan changes yet')}
-          columns={[
-            {
-              id: 'plan',
-              header: t('Hosting plan'),
-              cell: (row) =>
-                plans.data?.find((plan) => plan.id === row.plan_id)?.name ??
-                String(row.plan_id),
-            },
-            {
-              id: 'source',
-              header: t('Source'),
-              cell: (row) =>
-                row.source === 'redeem'
-                  ? t('Redemption code')
-                  : t('Manual activation'),
-            },
-            {
-              id: 'created',
-              header: t('Created at'),
-              cell: (row) => new Date(row.created_at).toLocaleString(),
-            },
-            {
-              id: 'expires',
-              header: t('Plan expires'),
-              cell: (row) => new Date(row.expires_at).toLocaleString(),
-            },
-          ]}
-        />
-      </section>
+          <section className='space-y-3'>
+            <h2 className='text-base font-semibold'>
+              {t('Monthly request history')}
+            </h2>
+            <StaticDataTable
+              data={data.history}
+              getRowKey={(row) => row.month}
+              emptyContent={t('No recorded usage yet')}
+              columns={[
+                { id: 'month', header: t('Month'), cell: (row) => row.month },
+                {
+                  id: 'requests',
+                  header: t('Requests'),
+                  cell: (row) => row.requests.toLocaleString(),
+                },
+                {
+                  id: 'emails',
+                  header: t('Emails'),
+                  cell: (row) => (row.emails ?? 0).toLocaleString(),
+                },
+              ]}
+            />
+          </section>
+          <section className='space-y-3'>
+            <h2 className='text-base font-semibold'>{t('Plan history')}</h2>
+            <StaticDataTable
+              data={data.assignments ?? []}
+              getRowKey={(row) => row.id}
+              emptyContent={t('No plan changes yet')}
+              columns={[
+                {
+                  id: 'plan',
+                  header: t('Hosting plan'),
+                  cell: (row) =>
+                    plans.data?.find((plan) => plan.id === row.plan_id)?.name ??
+                    String(row.plan_id),
+                },
+                {
+                  id: 'source',
+                  header: t('Source'),
+                  cell: (row) =>
+                    row.source === 'redeem'
+                      ? t('Redemption code')
+                      : t('Manual activation'),
+                },
+                {
+                  id: 'created',
+                  header: t('Created at'),
+                  cell: (row) => new Date(row.created_at).toLocaleString(),
+                },
+                {
+                  id: 'expires',
+                  header: t('Plan expires'),
+                  cell: (row) => new Date(row.expires_at).toLocaleString(),
+                },
+              ]}
+            />
+          </section>
         </TabsContent>
       </Tabs>
       {admin && (

@@ -62,7 +62,7 @@ func New(db *gorm.DB) (*Server, error) {
 	if err := migrateExternalAccountEmails(db); err != nil {
 		return nil, err
 	}
-	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}, &Setting{}, &EmailChallenge{}); err != nil {
+	if err := db.AutoMigrate(&User{}, &Session{}, &AuthAttempt{}, &AuthFlow{}, &OAuthIdentity{}, &PasskeyCredential{}, &RootActivation{}, &AdminGuard{}, &Audit{}, &Redemption{}, &RedemptionUse{}, &Setting{}, &EmailChallenge{}, &tenant.WildcardDomain{}, &tenant.Host{}); err != nil {
 		return nil, err
 	}
 	if err := db.Model(&User{}).Where("email_verified_at IS NULL").Update("email_verified_at", gorm.Expr("created_at")).Error; err != nil {
@@ -182,7 +182,12 @@ func (s *Server) Routes(router *gin.Engine) {
 	auth.POST("/passkey/:id/delete", s.deletePasskey)
 	auth.GET("/tenants", s.tenants)
 	auth.GET("/tenants/:id", s.workspaceDetail)
+	auth.GET("/tenants/:id/hosts", s.listWorkspaceHosts)
+	auth.POST("/tenants/:id/hosts", s.createWorkspaceHost)
+	auth.POST("/tenants/:id/hosts/:hid/verify", s.verifyWorkspaceHost)
+	auth.POST("/tenants/:id/hosts/:hid/delete", s.deleteWorkspaceHost)
 	auth.GET("/usage", s.usageSummary)
+	auth.GET("/wildcard-domains", s.wildcardDomains)
 	auth.POST("/tenants", s.createTenant)
 	auth.POST("/tenants/:id", s.updateWorkspace)
 	auth.POST("/tenants/:id/administrator", s.updateWorkspaceAdministrator)
@@ -192,8 +197,16 @@ func (s *Server) Routes(router *gin.Engine) {
 	admin.POST("/users/:id", s.updateUser)
 	admin.GET("/settings", s.adminSettings)
 	admin.POST("/settings", s.updateAdminSettings)
+	admin.GET("/wildcard-domains", s.wildcardDomains)
+	admin.POST("/wildcard-domains", s.createWildcardDomain)
+	admin.POST("/wildcard-domains/:id", s.updateWildcardDomain)
+	admin.POST("/wildcard-domains/:id/delete", s.deleteWildcardDomain)
 	admin.GET("/tenants", s.tenants)
 	admin.GET("/tenants/:id", s.workspaceDetail)
+	admin.GET("/tenants/:id/hosts", s.listWorkspaceHosts)
+	admin.POST("/tenants/:id/hosts", s.createWorkspaceHost)
+	admin.POST("/tenants/:id/hosts/:hid/verify", s.verifyWorkspaceHost)
+	admin.POST("/tenants/:id/hosts/:hid/delete", s.deleteWorkspaceHost)
 	admin.GET("/usage", s.usageSummary)
 	admin.POST("/tenants/:id/plan", s.assignPlan)
 	admin.POST("/tenants/:id/status", s.setTenantStatus)
@@ -288,6 +301,12 @@ func (s *Server) tenants(c *gin.Context) {
 		}
 		views = append(views, gin.H{"tenant": workspace, "usage": usage, "owner_email": ownerByID[workspace.OwnerPlatformUserID]})
 	}
+	if grouped, err := s.hostsForWorkspaces(db, tenantIDs); err != nil {
+		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		return
+	} else {
+		s.attachWorkspaceHosts(views, grouped)
+	}
 	response := gin.H{"success": true, "tenants": views, "pagination": page}
 	if !strings.Contains(c.FullPath(), "/admin/") {
 		available, err := liteAvailable(db, user.ID)
@@ -305,14 +324,16 @@ var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
 
 func (s *Server) createTenant(c *gin.Context) {
 	var input struct {
-		Slug        string `json:"slug"`
-		Name        string `json:"name"`
-		Username    string `json:"username"`
-		DisplayName string `json:"display_name"`
-		Email       string `json:"email"`
-		Password    string `json:"password"`
-		PlanID      int64  `json:"plan_id"`
-		Code        string `json:"code"`
+		Slug             string `json:"slug"`
+		Name             string `json:"name"`
+		Prefix           string `json:"prefix"`
+		WildcardDomainID int64  `json:"wildcard_domain_id"`
+		Username         string `json:"username"`
+		DisplayName      string `json:"display_name"`
+		Email            string `json:"email"`
+		Password         string `json:"password"`
+		PlanID           int64  `json:"plan_id"`
+		Code             string `json:"code"`
 	}
 	if c.ShouldBindJSON(&input) != nil || !slugPattern.MatchString(input.Slug) || strings.TrimSpace(input.Name) == "" || len([]rune(input.Name)) > 128 {
 		writeError(c, http.StatusBadRequest, "invalid_workspace")
@@ -401,7 +422,21 @@ func (s *Server) createTenant(c *gin.Context) {
 		if err := tx.WithContext(ctx).Create(&root).Error; err != nil {
 			return err
 		}
-		for key, value := range map[string]string{"SystemName": workspace.Name, "ServerAddress": s.Origin + "/t/" + workspace.Slug} {
+		address := s.Origin
+		if _, err := s.provisionWildcardHost(tx, workspace, input.Prefix, input.WildcardDomainID); err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+		} else {
+			var hosts []tenant.Host
+			if err := tx.Where("tenant_id = ?", workspace.ID).Find(&hosts).Error; err != nil {
+				return err
+			}
+			if url := s.workspaceURL(hosts, "/"); url != "" {
+				address = url
+			}
+		}
+		for key, value := range map[string]string{"SystemName": workspace.Name, "ServerAddress": address} {
 			if err := tx.WithContext(ctx).Create(&model.Option{Key: key, Value: value}).Error; err != nil {
 				return err
 			}
@@ -421,11 +456,22 @@ func (s *Server) createTenant(c *gin.Context) {
 		writeError(c, http.StatusConflict, "workspace_unavailable_or_limit_reached")
 		return
 	}
-	if user.Email != nil {
-		s.notify(c.Request.Context(), *user.Email, "Workspace ready",
-			"<p>Your workspace <strong>"+html.EscapeString(workspace.Name)+"</strong> is ready.</p><p>Open <a href=\""+html.EscapeString(s.Origin)+"/t/"+html.EscapeString(workspace.Slug)+"/setup\">setup</a> and sign in with the administrator account you created.</p>")
+	var hosts []tenant.Host
+	_ = s.DB.WithContext(c.Request.Context()).Where("tenant_id = ?", workspace.ID).Order("id").Find(&hosts).Error
+	setupURL := s.workspaceURL(hosts, "/setup")
+	items := make([]gin.H, 0, len(hosts))
+	for _, binding := range hosts {
+		items = append(items, s.hostView(binding))
 	}
-	c.JSON(http.StatusCreated, gin.H{"success": true, "tenant": workspace, "setup_url": "/t/" + workspace.Slug + "/setup"})
+	if user.Email != nil {
+		setupLink := setupURL
+		if setupLink == "" {
+			setupLink = s.Origin + "/platform/workspaces/" + strconv.FormatInt(workspace.ID, 10)
+		}
+		s.notify(c.Request.Context(), *user.Email, "Workspace ready",
+			"<p>Your workspace <strong>"+html.EscapeString(workspace.Name)+"</strong> is ready.</p><p>Open <a href=\""+html.EscapeString(setupLink)+"\">setup</a> and sign in with the administrator account you created.</p>")
+	}
+	c.JSON(http.StatusCreated, gin.H{"success": true, "tenant": workspace, "hosts": items, "primary_url": s.workspaceURL(hosts, "/"), "setup_url": setupURL})
 }
 
 func (s *Server) ActivateRoot(c *gin.Context) {

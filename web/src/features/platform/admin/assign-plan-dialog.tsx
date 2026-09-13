@@ -76,7 +76,7 @@ export function AssignPlanDialog(props: {
       desc={
         <>
           <p className='font-medium break-words'>
-            {props.workspace.name} · /t/{props.workspace.slug}
+            {props.workspace.name} · {props.workspace.slug}
           </p>
           <p>
             {t(

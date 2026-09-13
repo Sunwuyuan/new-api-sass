@@ -35,29 +35,36 @@ import {
 } from '@/components/ui/card'
 import {
   Field,
+  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { cn } from '@/lib/utils'
 
 import { createWorkspace } from './api'
 import { platformPasswordSchema } from './lib/schema'
+import { workspaceHref } from './lib/workspace-url'
 import { WorkspaceLink } from './navigation'
-import type { HostingPlan } from './types'
+import type { HostingPlan, WildcardDomain } from './types'
+
+const prefixPattern = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/
 
 export function CreateWorkspace(props: {
   plans: HostingPlan[]
   liteAvailable: boolean
+  wildcardDomains: WildcardDomain[]
 }) {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [setupURL, setSetupURL] = useState('')
   const [createdID, setCreatedID] = useState<number>()
-  const [createdSlug, setCreatedSlug] = useState('')
+  const [createdURL, setCreatedURL] = useState('')
+  const wildcards = props.wildcardDomains
   const lite = props.plans.find((plan) => plan.name === 'Lite')
   const initialPlan =
     lite && props.liteAvailable
@@ -66,12 +73,29 @@ export function CreateWorkspace(props: {
   const schema = z
     .object({
       name: z.string().trim().min(1, t('Required')).max(128),
-      slug: z
-        .string()
-        .regex(
-          /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/,
-          t('Use lowercase letters, numbers and hyphens, up to 48 characters.')
-        ),
+      slug:
+        wildcards.length === 0
+          ? z
+              .string()
+              .regex(
+                prefixPattern,
+                t(
+                  'Use lowercase letters, numbers and hyphens, up to 48 characters.'
+                )
+              )
+          : z.string(),
+      prefix:
+        wildcards.length > 0
+          ? z
+              .string()
+              .regex(
+                prefixPattern,
+                t(
+                  'Use lowercase letters, numbers and hyphens, up to 48 characters.'
+                )
+              )
+          : z.string(),
+      wildcard_domain_id: z.number().int(),
       username: z.string().trim().min(1, t('Required')).max(20),
       display_name: z.string().trim().max(20),
       email: z
@@ -114,11 +138,25 @@ export function CreateWorkspace(props: {
         })
       }
     })
+    .superRefine((values, ctx) => {
+      if (wildcards.length === 0) return
+      if (
+        !wildcards.some((domain) => domain.id === values.wildcard_domain_id)
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['wildcard_domain_id'],
+          message: t('Choose an available wildcard domain.'),
+        })
+      }
+    })
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: {
       name: '',
       slug: '',
+      prefix: '',
+      wildcard_domain_id: wildcards[0]?.id ?? 0,
       username: '',
       display_name: '',
       email: '',
@@ -137,7 +175,10 @@ export function CreateWorkspace(props: {
       const selected = props.plans.find((plan) => plan.id === values.plan_id)
       return createWorkspace({
         name: values.name,
-        slug: values.slug,
+        slug: wildcards.length > 0 ? values.prefix : values.slug,
+        prefix: wildcards.length > 0 ? values.prefix : undefined,
+        wildcard_domain_id:
+          wildcards.length > 0 ? values.wildcard_domain_id : undefined,
         username: values.username,
         display_name: values.display_name,
         email: values.email,
@@ -153,7 +194,7 @@ export function CreateWorkspace(props: {
           : ''
       )
       setCreatedID(data.tenant.id)
-      setCreatedSlug(data.tenant.slug)
+      setCreatedURL(workspaceHref(data, '/'))
       form.reset()
       void queryClient.invalidateQueries({ queryKey: ['platform'] })
     },
@@ -182,9 +223,7 @@ export function CreateWorkspace(props: {
               <FieldLabel>{t('Hosting plan')}</FieldLabel>
               <RadioGroup
                 className='grid gap-3 sm:grid-cols-3'
-                value={
-                  selectedPlan ? String(selectedPlan.id) : ''
-                }
+                value={selectedPlan ? String(selectedPlan.id) : ''}
                 onValueChange={(value) =>
                   form.setValue('plan_id', Number(value), {
                     shouldValidate: true,
@@ -245,102 +284,171 @@ export function CreateWorkspace(props: {
               </Field>
             )}
             <FieldGroup className='md:grid md:grid-cols-2'>
-            <Field data-invalid={!!form.formState.errors.name}>
-              <FieldLabel htmlFor='workspace-name'>{t('Name')}</FieldLabel>
-              <Input
-                id='workspace-name'
-                {...form.register('name')}
-                aria-invalid={!!form.formState.errors.name}
-                disabled={mutation.isPending}
-              />
-              <FieldError>{form.formState.errors.name?.message}</FieldError>
-            </Field>
-            <Field data-invalid={!!form.formState.errors.slug}>
-              <FieldLabel htmlFor='workspace-slug'>
-                {t('Workspace address')}
-              </FieldLabel>
-              <Input
-                id='workspace-slug'
-                {...form.register('slug')}
-                aria-invalid={!!form.formState.errors.slug}
-                disabled={mutation.isPending}
-                placeholder='my-workspace'
-              />
-              <FieldError>{form.formState.errors.slug?.message}</FieldError>
-            </Field>
-            <Field data-invalid={!!form.formState.errors.username}>
-              <FieldLabel htmlFor='workspace-admin-username'>
-                {t('Username')}
-              </FieldLabel>
-              <Input
-                id='workspace-admin-username'
-                autoComplete='off'
-                {...form.register('username')}
-                aria-invalid={!!form.formState.errors.username}
-                disabled={mutation.isPending}
-              />
-              <FieldError>{form.formState.errors.username?.message}</FieldError>
-            </Field>
-            <Field data-invalid={!!form.formState.errors.display_name}>
-              <FieldLabel htmlFor='workspace-admin-display'>
-                {t('Display Name')}
-              </FieldLabel>
-              <Input
-                id='workspace-admin-display'
-                autoComplete='off'
-                {...form.register('display_name')}
-                aria-invalid={!!form.formState.errors.display_name}
-                disabled={mutation.isPending}
-              />
-              <FieldError>
-                {form.formState.errors.display_name?.message}
-              </FieldError>
-            </Field>
-            <Field data-invalid={!!form.formState.errors.email}>
-              <FieldLabel htmlFor='workspace-admin-email'>
-                {t('Email')}
-              </FieldLabel>
-              <Input
-                id='workspace-admin-email'
-                type='email'
-                autoComplete='off'
-                {...form.register('email')}
-                aria-invalid={!!form.formState.errors.email}
-                disabled={mutation.isPending}
-              />
-              <FieldError>{form.formState.errors.email?.message}</FieldError>
-            </Field>
-            <Field data-invalid={!!form.formState.errors.password}>
-              <FieldLabel htmlFor='workspace-admin-password'>
-                {t('Password')}
-              </FieldLabel>
-              <PasswordInput
-                id='workspace-admin-password'
-                autoComplete='new-password'
-                {...form.register('password')}
-                aria-invalid={!!form.formState.errors.password}
-                disabled={mutation.isPending}
-              />
-              <FieldError>{form.formState.errors.password?.message}</FieldError>
-            </Field>
-            {mutation.isError && <p role='alert'>{mutation.error.message}</p>}
-            <Button type='submit' disabled={mutation.isPending}>
-              {mutation.isPending && <LoadingState inline size='sm' />}
-              {t('Create workspace')}
-            </Button>
+              <Field data-invalid={!!form.formState.errors.name}>
+                <FieldLabel htmlFor='workspace-name'>{t('Name')}</FieldLabel>
+                <Input
+                  id='workspace-name'
+                  {...form.register('name')}
+                  aria-invalid={!!form.formState.errors.name}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>{form.formState.errors.name?.message}</FieldError>
+              </Field>
+              {wildcards.length === 0 ? (
+                <Field data-invalid={!!form.formState.errors.slug}>
+                  <FieldLabel htmlFor='workspace-slug'>
+                    {t('Workspace ID')}
+                  </FieldLabel>
+                  <Input
+                    id='workspace-slug'
+                    {...form.register('slug')}
+                    aria-invalid={!!form.formState.errors.slug}
+                    disabled={mutation.isPending}
+                    placeholder='my-workspace'
+                  />
+                  <FieldDescription>
+                    {t(
+                      'No wildcard domain is configured. You can bind a custom domain after creating the workspace.'
+                    )}
+                  </FieldDescription>
+                  <FieldError>{form.formState.errors.slug?.message}</FieldError>
+                </Field>
+              ) : (
+                <Field data-invalid={!!form.formState.errors.prefix}>
+                  <FieldLabel htmlFor='workspace-prefix'>
+                    {t('Workspace prefix')}
+                  </FieldLabel>
+                  <div className='flex flex-wrap items-center gap-2'>
+                    <Input
+                      id='workspace-prefix'
+                      {...form.register('prefix')}
+                      aria-invalid={!!form.formState.errors.prefix}
+                      disabled={mutation.isPending}
+                      placeholder='docs'
+                      className='min-w-0 flex-1'
+                    />
+                    <span className='text-muted-foreground'>.</span>
+                    {wildcards.length === 1 ? (
+                      <span className='text-muted-foreground'>
+                        {wildcards[0].domain}
+                      </span>
+                    ) : (
+                      <NativeSelect
+                        id='workspace-wildcard-domain'
+                        aria-label={t('Wildcard domain')}
+                        value={String(form.watch('wildcard_domain_id') || '')}
+                        onChange={(event) =>
+                          form.setValue(
+                            'wildcard_domain_id',
+                            Number(event.target.value),
+                            { shouldValidate: true }
+                          )
+                        }
+                        disabled={mutation.isPending}
+                      >
+                        {wildcards.map((domain) => (
+                          <NativeSelectOption
+                            key={domain.id}
+                            value={String(domain.id)}
+                          >
+                            {domain.domain}
+                          </NativeSelectOption>
+                        ))}
+                      </NativeSelect>
+                    )}
+                  </div>
+                  <FieldDescription>
+                    {t(
+                      'This prefix is independent of the workspace name. You can add more prefixes later.'
+                    )}
+                  </FieldDescription>
+                  <FieldError>
+                    {form.formState.errors.prefix?.message ??
+                      form.formState.errors.wildcard_domain_id?.message}
+                  </FieldError>
+                </Field>
+              )}
+              <Field data-invalid={!!form.formState.errors.username}>
+                <FieldLabel htmlFor='workspace-admin-username'>
+                  {t('Username')}
+                </FieldLabel>
+                <Input
+                  id='workspace-admin-username'
+                  autoComplete='off'
+                  {...form.register('username')}
+                  aria-invalid={!!form.formState.errors.username}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>
+                  {form.formState.errors.username?.message}
+                </FieldError>
+              </Field>
+              <Field data-invalid={!!form.formState.errors.display_name}>
+                <FieldLabel htmlFor='workspace-admin-display'>
+                  {t('Display Name')}
+                </FieldLabel>
+                <Input
+                  id='workspace-admin-display'
+                  autoComplete='off'
+                  {...form.register('display_name')}
+                  aria-invalid={!!form.formState.errors.display_name}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>
+                  {form.formState.errors.display_name?.message}
+                </FieldError>
+              </Field>
+              <Field data-invalid={!!form.formState.errors.email}>
+                <FieldLabel htmlFor='workspace-admin-email'>
+                  {t('Email')}
+                </FieldLabel>
+                <Input
+                  id='workspace-admin-email'
+                  type='email'
+                  autoComplete='off'
+                  {...form.register('email')}
+                  aria-invalid={!!form.formState.errors.email}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>{form.formState.errors.email?.message}</FieldError>
+              </Field>
+              <Field data-invalid={!!form.formState.errors.password}>
+                <FieldLabel htmlFor='workspace-admin-password'>
+                  {t('Password')}
+                </FieldLabel>
+                <PasswordInput
+                  id='workspace-admin-password'
+                  autoComplete='new-password'
+                  {...form.register('password')}
+                  aria-invalid={!!form.formState.errors.password}
+                  disabled={mutation.isPending}
+                />
+                <FieldError>
+                  {form.formState.errors.password?.message}
+                </FieldError>
+              </Field>
+              {mutation.isError && <p role='alert'>{mutation.error.message}</p>}
+              <Button type='submit' disabled={mutation.isPending}>
+                {mutation.isPending && <LoadingState inline size='sm' />}
+                {t('Create workspace')}
+              </Button>
             </FieldGroup>
           </FieldGroup>
         </form>
         {createdID && (
           <div className='mt-6 flex flex-wrap items-center gap-3' role='status'>
             <p className='w-full'>{t('Workspace created.')}</p>
-            <Button
-              render={<a href={`/t/${createdSlug}/`} />}
-              nativeButton={false}
-              role='link'
-            >
-              {t('Enter workspace')}
-            </Button>
+            {createdURL ? (
+              <Button
+                render={<a href={createdURL} />}
+                nativeButton={false}
+                role='link'
+              >
+                {t('Enter workspace')}
+              </Button>
+            ) : (
+              <Button disabled>{t('Enter workspace')}</Button>
+            )}
             {setupURL && (
               <Button
                 variant='outline'

@@ -22,13 +22,7 @@ import { t } from 'i18next'
 
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
 import { hasSessionHint } from '@/lib/session-hint'
-import {
-  applyTenantRequestURL,
-  tenantBasePath,
-  tenantKey,
-  WORKSPACE_HEADER,
-  workspaceSlug,
-} from '@/lib/tenant'
+import { applyTenantRequestURL, tenantBasePath, tenantKey } from '@/lib/tenant'
 import {
   useAuthStore,
   type AuthBootstrapState,
@@ -86,10 +80,6 @@ const authClient = axios.create({
 
 authClient.interceptors.request.use((config) => {
   applyTenantRequestURL(config)
-  const slug = workspaceSlug()
-  if (slug) {
-    config.headers.set(WORKSPACE_HEADER, slug)
-  }
   return config
 })
 

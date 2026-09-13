@@ -17,7 +17,12 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { platformClient } from './api'
-import type { HostingPlan, PlanAssignment, Workspace } from './types'
+import type {
+  HostingPlan,
+  PlanAssignment,
+  Workspace,
+  WorkspaceHost,
+} from './types'
 
 export type WorkspaceAdministrator = {
   id: number
@@ -38,6 +43,8 @@ export type WorkspaceDetail = {
   assignments: Array<PlanAssignment & { created_at: string }>
   administrators?: WorkspaceAdministrator[]
   setup_complete?: boolean
+  hosts?: WorkspaceHost[]
+  primary_url?: string
 }
 export type UsageSummary = {
   month: string

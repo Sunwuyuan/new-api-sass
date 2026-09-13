@@ -70,10 +70,37 @@ export type Workspace = {
   plan_expires_at: string | null
 }
 
+export type WildcardDomain = {
+  id: number
+  domain: string
+  enabled: boolean
+}
+
+export type WorkspaceHost = {
+  id: number
+  tenant_id: number
+  kind: 'wildcard' | 'custom'
+  host: string
+  prefix?: string
+  wildcard_domain_id?: number | null
+  status: 'pending' | 'verified'
+  verification_method?: string
+  verified_at?: string | null
+  created_at?: string
+  url?: string
+  verification_token?: string
+  txt_name?: string
+  txt_value?: string
+  cname_host?: string
+  cname_target?: string
+}
+
 export type WorkspaceUsage = {
   tenant: Workspace
   usage: { month: string; requests: number; emails?: number }
   owner_email: string
+  hosts?: WorkspaceHost[]
+  primary_url?: string
 }
 
 export type PageParams = {
