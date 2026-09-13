@@ -31,3 +31,11 @@ openssl req -x509 -newkey rsa:2048 -nodes -days 825 \
 ```
 
 Browsers will warn until you attach a real domain + Let's Encrypt.
+
+## Auto-update (Watchtower)
+
+`watchtower` polls every 5 minutes and recreates only the `new-api` container when
+`ghcr.io/sunwuyuan/new-api-sass:latest` changes. Postgres / Redis / Caddy are not auto-updated.
+
+Disable: `docker compose stop watchtower` (or remove the service).
+

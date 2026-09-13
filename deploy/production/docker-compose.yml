@@ -88,6 +88,23 @@ services:
       timeout: 5s
       retries: 10
 
+  watchtower:
+    image: containrrr/watchtower:1.7.1
+    container_name: new-api-watchtower
+    restart: always
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - TZ=Asia/Shanghai
+      - WATCHTOWER_CLEANUP=true
+      - WATCHTOWER_POLL_INTERVAL=300
+      - WATCHTOWER_INCLUDE_STOPPED=false
+      - WATCHTOWER_ROLLING_RESTART=false
+    # Only auto-update the app image from GHCR; leave postgres/redis/caddy alone.
+    command: ["new-api"]
+    networks:
+      - new-api-network
+
 networks:
   new-api-network:
     driver: bridge
