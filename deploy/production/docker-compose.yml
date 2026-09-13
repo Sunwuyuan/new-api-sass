@@ -89,7 +89,7 @@ services:
       retries: 10
 
   watchtower:
-    image: containrrr/watchtower:1.7.1
+    image: nickfedor/watchtower:1.12.2
     container_name: new-api-watchtower
     restart: always
     volumes:
