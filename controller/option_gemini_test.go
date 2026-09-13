@@ -7,15 +7,15 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
-	"github.com/gin-gonic/gin"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateOptionRejectsInvalidGeminiSafetyThreshold(t *testing.T) {
 	response := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(response)
-	context.Request = httptest.NewRequest(
+	context, _ := testtenant.CreateTestContext(response)
+	context.Request = testtenant.NewRequest(
 		http.MethodPut,
 		"/api/option/",
 		strings.NewReader(`{"key":"gemini.safety_settings","value":"{\"default\":\"BLOCK_SOME\"}"}`),

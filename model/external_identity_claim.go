@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -19,6 +21,7 @@ var ErrExternalIdentityAlreadyClaimed = errors.New("external identity is already
 // subject and the user's provider slot single-owner without relying on a
 // check-then-update sequence.
 type ExternalIdentityClaim struct {
+	TenantID  int64     `json:"-" gorm:"not null;index;uniqueIndex:idx_external_identity_subject,priority:1;uniqueIndex:idx_external_identity_user,priority:1"`
 	Id        int64     `json:"id" gorm:"primaryKey"`
 	Provider  string    `json:"provider" gorm:"type:varchar(32);not null;uniqueIndex:idx_external_identity_subject,priority:1;uniqueIndex:idx_external_identity_user,priority:1"`
 	Subject   string    `json:"subject" gorm:"type:varchar(128);not null;uniqueIndex:idx_external_identity_subject,priority:2"`
@@ -76,9 +79,9 @@ func ReleaseExternalIdentityWithTx(tx *gorm.DB, provider string, userId int) err
 		Delete(&ExternalIdentityClaim{}).Error
 }
 
-func GetUserByTelegramID(telegramID string) (*User, error) {
+func GetUserByTelegramID(tenantCtx context.Context, telegramID string) (*User, error) {
 	var user User
-	err := DB.Where("telegram_id = ?", telegramID).First(&user).Error
+	err := DB.WithContext(tenantCtx).Where("telegram_id = ?", telegramID).First(&user).Error
 	return &user, err
 }
 
@@ -118,13 +121,13 @@ func releaseAllExternalIdentitiesWithTx(tx *gorm.DB, userId int) error {
 // InitializeExternalIdentityClaims imports legacy Telegram bindings after the
 // claim table is migrated. Existing duplicate ownership fails migration rather
 // than preserving an ambiguous login identity.
-func InitializeExternalIdentityClaims() error {
+func InitializeExternalIdentityClaims(tenantCtx context.Context) error {
 	var users []User
-	if err := DB.Unscoped().Select("id", "telegram_id").
+	if err := DB.WithContext(tenantCtx).Unscoped().Select("id", "telegram_id").
 		Where("telegram_id <> ?", "").Find(&users).Error; err != nil {
 		return err
 	}
-	return DB.Transaction(func(tx *gorm.DB) error {
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		for _, user := range users {
 			if err := ClaimExternalIdentityWithTx(tx, ExternalIdentityProviderTelegram, user.TelegramId, user.Id); err != nil {
 				return fmt.Errorf("backfill Telegram identity for user %d: %w", user.Id, err)

@@ -1,7 +1,6 @@
 package jsplugin
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,10 +11,12 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/plugins"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +40,7 @@ func BenchmarkTaskPluginRuntime(b *testing.B) {
 	for _, name := range []string{"HasExport", "MissingExport", "HookCall", "ParallelHookCall"} {
 		b.Run(name, func(b *testing.B) {
 			plugin, initializations := benchmarkAlibaba(b)
-			ctx := context.Background()
+			ctx := testtenant.Context()
 			input := map[string]any{"model": "wan2.5-i2v-preview", "upstreamModel": "wan2.5-i2v-preview", "requestBody": map[string]any{
 				"prompt": "animate the landscape", "image": "https://cdn.example/image.png", "duration": 5, "size": "720P",
 			}}
@@ -126,14 +127,14 @@ func BenchmarkTaskPluginSubmit(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
-				c, _ := gin.CreateTestContext(httptest.NewRecorder())
-				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+				c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 				c.Set("task_request", decoded.(map[string]any)["requestBody"])
 				c.Set(pluginruntime.ContextKeyRouteRequest, protocol.RouteRequestContext)
 				c.Set(pluginruntime.ContextKeyProtocolRequest, protocol)
 				c.Set(pluginruntime.ContextKeyPinnedEndpoint, pluginruntime.PinnedEndpoint{Plugin: plugin, Protocol: protocol.Protocol, Model: modelName})
-				info := &relaycommon.RelayInfo{OriginModelName: modelName, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: modelName, ChannelBaseUrl: "https://provider.example"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "benchmark-task"}}
-				adaptor := New(plugin)
+				info := &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: modelName, ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: modelName, ChannelBaseUrl: "https://provider.example"}, TaskRelayInfo: &relaycommon.TaskRelayInfo{PublicTaskID: "benchmark-task"}}
+				adaptor := New(testtenant.Context(), plugin)
 				adaptor.Init(info)
 				if taskErr := adaptor.ValidateRequestAndSetAction(c, info); taskErr != nil {
 					b.Fatal(taskErr)
@@ -180,7 +181,7 @@ func BenchmarkTaskPluginSSE(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				response := &http.Response{Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(wire))}
-				if _, err := New(plugin).readSubmitEvents(b.Context(), response, input); err != nil {
+				if _, err := New(testtenant.Context(), plugin).readSubmitEvents(b.Context(), response, input); err != nil {
 					b.Fatal(err)
 				}
 			}

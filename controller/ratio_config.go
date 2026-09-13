@@ -10,7 +10,7 @@ import (
 )
 
 func GetRatioConfig(c *gin.Context) {
-	if !ratio_setting.IsExposeRatioEnabled() {
+	if !ratio_setting.IsExposeRatioEnabled(c.Request.Context()) {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
 			"message": "倍率配置接口未启用",
@@ -21,6 +21,6 @@ func GetRatioConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
-		"data":    billing_setting.GetPricingSyncData(map[string]any(ratio_setting.GetExposedData())),
+		"data":    billing_setting.GetPricingSyncData(c.Request.Context(), map[string]any(ratio_setting.GetExposedData(c.Request.Context()))),
 	})
 }

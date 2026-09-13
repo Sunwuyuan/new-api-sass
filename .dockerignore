@@ -1,5 +1,14 @@
 .github
 .git
+.env
+.env.*
+/data
+/logs
+/upload
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
 *.md
 .vscode
 .gitignore

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -23,7 +25,7 @@ func TestConvertClaudeRequestTreatsZeroMaxTokensAsUnset(t *testing.T) {
 			{Role: "user", Content: "hello"},
 		},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-sonnet-4-5",
 		},
@@ -34,7 +36,7 @@ func TestConvertClaudeRequestTreatsZeroMaxTokensAsUnset(t *testing.T) {
 	converted, ok := out.(*dto.ClaudeRequest)
 	require.True(t, ok)
 	require.NotNil(t, converted.MaxTokens)
-	assert.Equal(t, uint(model_setting.GetClaudeSettings().GetDefaultMaxTokens(req.Model)), *converted.MaxTokens)
+	assert.Equal(t, uint(model_setting.GetClaudeSettings(testtenant.Context()).GetDefaultMaxTokens(req.Model)), *converted.MaxTokens)
 }
 
 func TestConvertClaudeRequestPreservesNativeClaudeCodeThinking(t *testing.T) {
@@ -53,7 +55,7 @@ func TestConvertClaudeRequestPreservesNativeClaudeCodeThinking(t *testing.T) {
 			{Role: "user", Content: "hello"},
 		},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: req.Model,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: req.Model,
@@ -76,7 +78,7 @@ func TestConvertClaudeRequestPreservesNativeClaudeCodeThinking(t *testing.T) {
 
 func TestConvertClaudeRequestZeroMaxTokensStillRaisesThinkingBudget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 
 	zero := uint(0)
 	original := &dto.ClaudeRequest{
@@ -86,7 +88,7 @@ func TestConvertClaudeRequestZeroMaxTokensStillRaisesThinkingBudget(t *testing.T
 			{Role: "user", Content: "hello"},
 		},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		Request:         original,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -116,7 +118,7 @@ func TestConvertClaudeRequestDoesNotOverwriteTrimmedUpstreamModelName(t *testing
 			{Role: "user", Content: "hello"},
 		},
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-3-7-sonnet",
 		},
@@ -128,7 +130,7 @@ func TestConvertClaudeRequestDoesNotOverwriteTrimmedUpstreamModelName(t *testing
 }
 
 func geminiToClaudeInfo() *relaycommon.RelayInfo {
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-3-7-sonnet",

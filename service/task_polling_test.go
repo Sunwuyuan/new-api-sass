@@ -12,9 +12,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	taskdto "github.com/QuantumNous/new-api/dto"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/bytedance/gopkg/util/gopool"
@@ -40,7 +43,7 @@ type batchPollingAdaptor struct {
 }
 
 func (a *batchPollingAdaptor) FetchMode() string { return "batch" }
-func (a *batchPollingAdaptor) FetchBatchTasks(_ string, _ string, tasks []*model.Task, _ string) (*http.Response, error) {
+func (a *batchPollingAdaptor) FetchBatchTasks(_ context.Context, _ string, _ string, tasks []*model.Task, _ string) (*http.Response, error) {
 	a.batchCalls++
 	a.batchIDs = a.batchIDs[:0]
 	for _, task := range tasks {
@@ -61,7 +64,7 @@ func (a *batchPollingAdaptor) ParseBatchResult(_ []*model.Task, _ *http.Response
 
 func (a *taskPollingFetchAdaptor) Init(_ *relaycommon.RelayInfo) {}
 
-func (a *taskPollingFetchAdaptor) FetchTask(_ string, _ string, task *model.Task, _ string) (*http.Response, error) {
+func (a *taskPollingFetchAdaptor) FetchTask(_ context.Context, _ string, _ string, task *model.Task, _ string) (*http.Response, error) {
 	taskID := ""
 	if task != nil {
 		taskID = task.GetUpstreamTaskID()
@@ -205,10 +208,10 @@ func TestUpdateVideoTasksDefaultSleepWaitsBetweenTasks(t *testing.T) {
 
 	adaptor := &taskPollingFetchAdaptor{}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testtenant.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	err := UpdateVideoTasks(ctx, constant.TaskPlatform("kling"), map[int][]string{
@@ -235,8 +238,8 @@ func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
 
 	batch := &batchPollingAdaptor{}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return batch }
-	DispatchPlatformUpdate(context.Background(), "batch-plugin", taskChannels, tasks)
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return batch }
+	DispatchPlatformUpdate(testtenant.Context(), "batch-plugin", taskChannels, tasks)
 	assert.Equal(t, 1, batch.batchCalls)
 	assert.Equal(t, 0, batch.fetchCount())
 	var persisted model.Task
@@ -244,12 +247,12 @@ func TestDispatchPlatformUpdateUsesFetchMode(t *testing.T) {
 	assert.Equal(t, "https://example.com/result", persisted.GetResultURL())
 
 	perTask := &taskPollingFetchAdaptor{}
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return perTask }
-	DispatchPlatformUpdate(context.Background(), "per-task-plugin", taskChannels, tasks)
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return perTask }
+	DispatchPlatformUpdate(testtenant.Context(), "per-task-plugin", taskChannels, tasks)
 	assert.Equal(t, 1, perTask.fetchCount())
 
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return nil }
-	assert.NotPanics(t, func() { DispatchPlatformUpdate(context.Background(), "missing-plugin", taskChannels, tasks) })
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return nil }
+	assert.NotPanics(t, func() { DispatchPlatformUpdate(testtenant.Context(), "missing-plugin", taskChannels, tasks) })
 	GetTaskAdaptorFunc = previousFactory
 }
 
@@ -307,7 +310,7 @@ func TestUpdateBatchTasksSettlesTieredUsageForTerminalStates(t *testing.T) {
 			taskIDs := []string{upstreamID}
 			taskMap := map[string]*model.Task{upstreamID: task}
 
-			require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: taskIDs}, taskMap))
+			require.NoError(t, UpdateBatchTasks(testtenant.Context(), adaptor, map[int][]string{channelID: taskIDs}, taskMap))
 
 			var persisted model.Task
 			require.NoError(t, model.DB.First(&persisted, task.ID).Error)
@@ -326,7 +329,7 @@ func TestUpdateBatchTasksSettlesTieredUsageForTerminalStates(t *testing.T) {
 			}
 
 			// A duplicate terminal response must not settle the same task twice.
-			require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: taskIDs}, taskMap))
+			require.NoError(t, UpdateBatchTasks(testtenant.Context(), adaptor, map[int][]string{channelID: taskIDs}, taskMap))
 			assert.Equal(t, initialQuota+(preConsumedQuota-testCase.actualQuota), getUserQuota(t, userID))
 			assert.Equal(t, int64(1), countLogs(t))
 		})
@@ -368,7 +371,7 @@ func TestUpdateBatchTasksRefundsFailedTieredTask(t *testing.T) {
 			UsageFacts: map[string]any{"units": float64(5)},
 		}},
 	}}
-	require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
+	require.NoError(t, UpdateBatchTasks(testtenant.Context(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
 
 	var persisted model.Task
 	require.NoError(t, model.DB.First(&persisted, task.ID).Error)
@@ -411,7 +414,7 @@ func TestUpdateBatchTasksRefundsFailedTaskWithoutUsageSettlement(t *testing.T) {
 	adaptor := &batchPollingAdaptor{results: map[string]*BatchTaskResult{
 		upstreamID: {TaskInfo: relaycommon.TaskInfo{TaskID: upstreamID, Status: model.TaskStatusFailure, Reason: "upstream failed", TotalTokens: 123}},
 	}}
-	require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
+	require.NoError(t, UpdateBatchTasks(testtenant.Context(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
 
 	assert.Equal(t, initialQuota+preConsumedQuota, getUserQuota(t, userID))
 	assert.Equal(t, tokenRemain+preConsumedQuota, getTokenRemainQuota(t, tokenID))
@@ -430,10 +433,10 @@ func TestUpdateVideoTasksCanSkipPollingSleepPerChannel(t *testing.T) {
 
 	adaptor := &taskPollingFetchAdaptor{}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testtenant.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	err := UpdateVideoTasks(ctx, constant.TaskPlatform("kling"), map[int][]string{
@@ -464,10 +467,10 @@ func TestUpdateVideoTasksDefaultSleepDoesNotBlockOtherChannels(t *testing.T) {
 
 	adaptor := &taskPollingFetchAdaptor{}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testtenant.Context(), 50*time.Millisecond)
 	defer cancel()
 
 	err := UpdateVideoTasks(ctx, constant.TaskPlatform("kling"), map[int][]string{
@@ -515,12 +518,12 @@ func TestUpdateVideoTasksSlowChannelDoesNotBlockOtherChannels(t *testing.T) {
 	}
 	t.Cleanup(releaseBlockedTask)
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
 	errCh := make(chan error, 1)
 	gopool.Go(func() {
-		errCh <- UpdateVideoTasks(context.Background(), constant.TaskPlatform("kling"), map[int][]string{
+		errCh <- UpdateVideoTasks(testtenant.Context(), constant.TaskPlatform("kling"), map[int][]string{
 			slowChannelID: {
 				slowTask.GetUpstreamTaskID(),
 			},
@@ -571,10 +574,10 @@ func TestUpdateVideoTasksMixedChannelSleepSettings(t *testing.T) {
 
 	adaptor := &taskPollingFetchAdaptor{}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(testtenant.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	err := UpdateVideoTasks(ctx, constant.TaskPlatform("kling"), map[int][]string{
@@ -638,13 +641,13 @@ func TestUpdateSunoTasksStalePollsRefundExactlyOnce(t *testing.T) {
 		}},
 	}}
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor { return adaptor }
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	require.NoError(t, updateBatchTasks(context.Background(), adaptor, channelID, []string{upstreamTaskID}, map[string]*model.Task{
+	require.NoError(t, updateBatchTasks(testtenant.Context(), adaptor, channelID, []string{upstreamTaskID}, map[string]*model.Task{
 		upstreamTaskID: &firstPollTask,
 	}))
-	require.NoError(t, updateBatchTasks(context.Background(), adaptor, channelID, []string{upstreamTaskID}, map[string]*model.Task{
+	require.NoError(t, updateBatchTasks(testtenant.Context(), adaptor, channelID, []string{upstreamTaskID}, map[string]*model.Task{
 		upstreamTaskID: &staleSecondPollTask,
 	}))
 
@@ -672,12 +675,12 @@ func TestRunTaskPollingOnceDoesNotRefundHistoricalFailedTask(t *testing.T) {
 	require.NoError(t, model.DB.Create(task).Error)
 
 	previousFactory := GetTaskAdaptorFunc
-	GetTaskAdaptorFunc = func(constant.TaskPlatform) TaskPollingAdaptor {
+	GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) TaskPollingAdaptor {
 		return &taskPollingFetchAdaptor{}
 	}
 	t.Cleanup(func() { GetTaskAdaptorFunc = previousFactory })
 
-	summary := RunTaskPollingOnce(context.Background(), nil)
+	summary := RunTaskPollingOnce(testtenant.Context(), nil)
 
 	assert.Zero(t, summary.UnfinishedTasks)
 	assert.Equal(t, initialQuota, getUserQuota(t, userID))
@@ -712,7 +715,7 @@ func TestSweepTimedOutTasksHonorsRefundRolloutBoundary(t *testing.T) {
 	constant.TaskTimeoutMinutes = 1
 	t.Cleanup(func() { constant.TaskTimeoutMinutes = previousTimeout })
 
-	sweepTimedOutTasks(context.Background())
+	sweepTimedOutTasks(testtenant.Context())
 
 	var reloadedLegacy model.Task
 	var reloadedModern model.Task
@@ -737,7 +740,7 @@ type scriptedPollingAdaptor struct {
 }
 
 func (a *scriptedPollingAdaptor) Init(*relaycommon.RelayInfo) {}
-func (a *scriptedPollingAdaptor) FetchTask(string, string, *model.Task, string) (*http.Response, error) {
+func (a *scriptedPollingAdaptor) FetchTask(context.Context, string, string, *model.Task, string) (*http.Response, error) {
 	if a.fetchErr != nil {
 		return nil, a.fetchErr
 	}
@@ -770,8 +773,8 @@ type scriptedBatchPollingAdaptor struct {
 }
 
 func (a *scriptedBatchPollingAdaptor) FetchMode() string { return "batch" }
-func (a *scriptedBatchPollingAdaptor) FetchBatchTasks(string, string, []*model.Task, string) (*http.Response, error) {
-	return a.FetchTask("", "", nil, "")
+func (a *scriptedBatchPollingAdaptor) FetchBatchTasks(context.Context, string, string, []*model.Task, string) (*http.Response, error) {
+	return a.FetchTask(testtenant.Context(), "", "", nil, "")
 }
 func (a *scriptedBatchPollingAdaptor) ParseBatchResult([]*model.Task, *http.Response, []byte) (map[string]*BatchTaskResult, error) {
 	if a.parseErr != nil {
@@ -892,7 +895,7 @@ func TestUpdateVideoSingleTaskPollClassification(t *testing.T) {
 			require.NoError(t, model.DB.Create(task).Error)
 
 			adaptor := &scriptedPollingAdaptor{statusCode: testCase.statusCode, fetchErr: testCase.fetchErr, parse: testCase.parse, parseErr: testCase.parseErr}
-			require.NoError(t, updateVideoSingleTask(context.Background(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
+			require.NoError(t, updateVideoSingleTask(testtenant.Context(), adaptor, ch, task.GetUpstreamTaskID(), map[string]*model.Task{
 				task.GetUpstreamTaskID(): task,
 			}))
 
@@ -979,7 +982,7 @@ func TestUpdateBatchTasksPollClassification(t *testing.T) {
 				}
 			}
 
-			require.NoError(t, UpdateBatchTasks(context.Background(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
+			require.NoError(t, UpdateBatchTasks(testtenant.Context(), adaptor, map[int][]string{channelID: {upstreamID}}, map[string]*model.Task{upstreamID: task}))
 
 			var persisted model.Task
 			require.NoError(t, model.DB.First(&persisted, task.ID).Error)

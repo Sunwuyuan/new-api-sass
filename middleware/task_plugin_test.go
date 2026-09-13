@@ -15,9 +15,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	appI18n "github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -36,13 +39,15 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 `
 
 func TestPrepareTaskPluginSubmitRejectsMissingModel(t *testing.T) {
-	_, err := jsplugin.DefaultRegistry.Register(genericTaskPluginSource, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(genericTaskPluginSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("generic-entry-test") })
+	t.Cleanup(func() {
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("generic-entry-test")
+	})
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Params = gin.Params{{Key: "key", Value: "generic-entry-test"}}
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/tasks/generic-entry-test", strings.NewReader(`{"prompt":"x"}`))
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/tasks/generic-entry-test", strings.NewReader(`{"prompt":"x"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 	PrepareTaskPluginSubmit()(c)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
@@ -73,7 +78,7 @@ export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedSubmit := false
 	router.POST("/vendor/jobs/:category", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		reachedSubmit = true
@@ -87,7 +92,7 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 		assert.Equal(t, "route-submit-test", c.GetString("platform"))
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs/video?tag=first&tag=second", strings.NewReader(`["prompt",2]`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs/video?tag=first&tag=second", strings.NewReader(`["prompt",2]`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -122,11 +127,11 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/uploads", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/uploads", bytes.NewReader(body.Bytes()))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/uploads", bytes.NewReader(body.Bytes()))
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	recorder := httptest.NewRecorder()
 
@@ -174,13 +179,13 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 					`decodeBatch: function() { throw new Error("decoder must not run"); },`, 1)
 			}
 			plugin := compileTaskRoutePlugin(t, source)
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST("/vendor/batch", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 				decodeRan = true
 				assert.Equal(t, "gpt-5.5", c.GetString("resolved_task_model"))
 				c.Status(http.StatusNoContent)
 			})
-			request := httptest.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(testCase.body))
+			request := testtenant.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(testCase.body))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 
@@ -210,12 +215,12 @@ export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
 	reached := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/batch", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		reached = true
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(`{"model":"gpt-5.5"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(`{"model":"gpt-5.5"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -242,11 +247,11 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/batch", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(`{"model":"gpt-5.6"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/batch", strings.NewReader(`{"model":"gpt-5.6"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -273,8 +278,8 @@ func TestBuildTaskPluginRouteRequestBodyUnion(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/body", strings.NewReader(testCase.body))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/body", strings.NewReader(testCase.body))
 			if testCase.contentType != "" {
 				c.Request.Header.Set("Content-Type", testCase.contentType)
 			}
@@ -297,8 +302,8 @@ func TestBuildTaskPluginRouteRequestBodyUnion(t *testing.T) {
 	_, err = file.Write([]byte("file bytes stay in Go"))
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/body", bytes.NewReader(multipartBody.Bytes()))
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/body", bytes.NewReader(multipartBody.Bytes()))
 	c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 	requestContext, err := buildTaskPluginRouteRequest(c)
 	require.NoError(t, err)
@@ -326,8 +331,8 @@ func TestBuildTaskPluginRouteRequestRejectsUnsafeBodies(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/body", bytes.NewReader(testCase.body))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/body", bytes.NewReader(testCase.body))
 			c.Request.Header.Set("Content-Type", testCase.contentType)
 			_, err := buildTaskPluginRouteRequest(c)
 			require.ErrorContains(t, err, testCase.errorText)
@@ -335,8 +340,8 @@ func TestBuildTaskPluginRouteRequestRejectsUnsafeBodies(t *testing.T) {
 	}
 
 	t.Run("conflicting Content-Type", func(t *testing.T) {
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/body", strings.NewReader(`{}`))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/body", strings.NewReader(`{}`))
 		c.Request.Header["Content-Type"] = []string{"application/json", "application/x-www-form-urlencoded"}
 		_, err := buildTaskPluginRouteRequest(c)
 		require.ErrorContains(t, err, "conflicting Content-Type")
@@ -346,8 +351,8 @@ func TestBuildTaskPluginRouteRequestRejectsUnsafeBodies(t *testing.T) {
 		previous := constant.MaxRequestBodyMB
 		constant.MaxRequestBodyMB = 1
 		t.Cleanup(func() { constant.MaxRequestBodyMB = previous })
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/body", strings.NewReader(strings.Repeat(" ", (1<<20)+1)))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/body", strings.NewReader(strings.Repeat(" ", (1<<20)+1)))
 		c.Request.Header.Set("Content-Type", "application/json")
 		_, err := buildTaskPluginRouteRequest(c)
 		require.ErrorContains(t, err, "request body exceeds 1 MB")
@@ -417,8 +422,8 @@ func TestBuildTaskPluginRouteRequestRejectsUnsafeBodies(t *testing.T) {
 			writer := multipart.NewWriter(&body)
 			testCase.build(t, writer)
 			require.NoError(t, writer.Close())
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/body", bytes.NewReader(body.Bytes()))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/body", bytes.NewReader(body.Bytes()))
 			c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 			_, err := buildTaskPluginRouteRequest(c)
 			require.ErrorContains(t, err, testCase.errorText)
@@ -436,8 +441,8 @@ func TestBuildTaskPluginRouteRequestRejectsUnsafeBodies(t *testing.T) {
 		_, err = file.Write(bytes.Repeat([]byte{'x'}, (1<<20)+1))
 		require.NoError(t, err)
 		require.NoError(t, writer.Close())
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/body", bytes.NewReader(body.Bytes()))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/body", bytes.NewReader(body.Bytes()))
 		c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 		_, err = buildTaskPluginRouteRequest(c)
 		require.ErrorContains(t, err, "multipart file exceeds 1 MB")
@@ -456,17 +461,19 @@ func TestPrepareTaskPluginEndpointPinsGenerationBeforeParseAndDistribution(t *te
 		 ctx.requestBody.prompt = "plugin-local-mutation";
 		 return {model: ctx.model, action: "first-action", requestBody: {prompt: "normalized"}};`,
 	)
-	first, err := jsplugin.DefaultRegistry.Register(firstSource, jsplugin.Options{})
+	first, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(firstSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedDistribution := false
 	router.POST(
 		"/v1/responses",
 		PinTaskPluginEndpoint(),
 		func(c *gin.Context) {
-			_, updateErr := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+			_, updateErr := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 				key,
 				"2.0.0",
 				`["claimed-model"]`,
@@ -493,13 +500,13 @@ func TestPrepareTaskPluginEndpointPinsGenerationBeforeParseAndDistribution(t *te
 			routeRequest := c.MustGet(jsplugin.ContextKeyRouteRequest).(jsplugin.RouteRequestContext)
 			assert.Equal(t, map[string]any{"prompt": "normalized"}, routeRequest.RequestBody)
 
-			current, found := jsplugin.DefaultRegistry.Get(key)
+			current, found := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 			require.True(t, found)
 			assert.NotSame(t, first, current)
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/responses?trace=one",
 		strings.NewReader(`{"model":"claimed-model","prompt":"hello"}`),
@@ -515,7 +522,7 @@ func TestPrepareTaskPluginEndpointPinsGenerationBeforeParseAndDistribution(t *te
 
 func TestPrepareTaskPluginEndpointClientDisconnectDoesNotCancelParseHook(t *testing.T) {
 	const key = "endpoint-detached-parse-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -523,9 +530,11 @@ func TestPrepareTaskPluginEndpointClientDisconnectDoesNotCancelParseHook(t *test
 		`return {model: "claimed-model"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedDistribution := false
 	router.POST(
 		"/v1/responses",
@@ -543,7 +552,7 @@ func TestPrepareTaskPluginEndpointClientDisconnectDoesNotCancelParseHook(t *test
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/responses",
 		strings.NewReader(`{"model":"claimed-model"}`),
@@ -559,7 +568,7 @@ func TestPrepareTaskPluginEndpointClientDisconnectDoesNotCancelParseHook(t *test
 
 func TestPrepareTaskPluginEndpointUsesStrictOriginalStreamFlag(t *testing.T) {
 	const key = "endpoint-stream-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -568,9 +577,11 @@ func TestPrepareTaskPluginEndpointUsesStrictOriginalStreamFlag(t *testing.T) {
 		 return {model: "claimed-model", requestBody: {stream: false}};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedDistribution := false
 	router.POST(
 		"/v1/responses",
@@ -585,7 +596,7 @@ func TestPrepareTaskPluginEndpointUsesStrictOriginalStreamFlag(t *testing.T) {
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/responses",
 		strings.NewReader(`{"model":"claimed-model","stream":true}`),
@@ -599,7 +610,7 @@ func TestPrepareTaskPluginEndpointUsesStrictOriginalStreamFlag(t *testing.T) {
 	assert.Equal(t, http.StatusNoContent, recorder.Code)
 
 	for _, invalid := range []string{`null`, `"true"`, `1`, `"yes"`} {
-		request = httptest.NewRequest(
+		request = testtenant.NewRequest(
 			http.MethodPost,
 			"/v1/responses",
 			strings.NewReader(`{"model":"claimed-model","stream":`+invalid+`}`),
@@ -613,7 +624,7 @@ func TestPrepareTaskPluginEndpointUsesStrictOriginalStreamFlag(t *testing.T) {
 
 func TestTaskPluginEndpointMissPreservesOrdinaryRequestBody(t *testing.T) {
 	const key = "endpoint-miss-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -621,9 +632,11 @@ func TestTaskPluginEndpointMissPreservesOrdinaryRequestBody(t *testing.T) {
 		`return {model: "claimed-model"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST(
 		"/v1/responses",
 		PinTaskPluginEndpoint(),
@@ -639,7 +652,7 @@ func TestTaskPluginEndpointMissPreservesOrdinaryRequestBody(t *testing.T) {
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/responses",
 		strings.NewReader(`{"model":"ordinary-model","input":"hello"}`),
@@ -655,7 +668,7 @@ func TestTaskPluginEndpointMissPreservesOrdinaryRequestBody(t *testing.T) {
 func TestTaskPluginEndpointUsesOneCanonicalModelForDuplicateJSONKeys(t *testing.T) {
 	require.NoError(t, appI18n.Init())
 	const key = "endpoint-duplicate-model-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -664,7 +677,9 @@ func TestTaskPluginEndpointUsesOneCanonicalModelForDuplicateJSONKeys(t *testing.
 		 return {model: ctx.requestBody.model};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	tests := []struct {
 		name string
@@ -682,7 +697,7 @@ func TestTaskPluginEndpointUsesOneCanonicalModelForDuplicateJSONKeys(t *testing.
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			reachedDownstream := false
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST(
 				"/v1/responses",
 				PinTaskPluginEndpoint(),
@@ -692,7 +707,7 @@ func TestTaskPluginEndpointUsesOneCanonicalModelForDuplicateJSONKeys(t *testing.
 					c.Status(http.StatusNoContent)
 				},
 			)
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(testCase.body))
+			request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(testCase.body))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 
@@ -737,7 +752,7 @@ func TestTaskPluginEndpointOnlyPreservesConditionalMiddlewareSemantics(t *testin
 		t.Run(testCase.name, func(t *testing.T) {
 			wrappedCalls := 0
 			reachedDownstream := false
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST(
 				"/v1/videos",
 				func(c *gin.Context) {
@@ -761,7 +776,7 @@ func TestTaskPluginEndpointOnlyPreservesConditionalMiddlewareSemantics(t *testin
 			)
 			recorder := httptest.NewRecorder()
 
-			router.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/videos", nil))
+			router.ServeHTTP(recorder, testtenant.NewRequest(http.MethodPost, "/v1/videos", nil))
 
 			assert.Equal(t, testCase.expectedWrapped, wrappedCalls)
 			assert.Equal(t, testCase.expectedDownstream, reachedDownstream)
@@ -772,7 +787,7 @@ func TestTaskPluginEndpointOnlyPreservesConditionalMiddlewareSemantics(t *testin
 
 func TestPrepareTaskPluginEndpointRejectsModelDriftBeforeDistribution(t *testing.T) {
 	const key = "endpoint-drift-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -780,10 +795,12 @@ func TestPrepareTaskPluginEndpointRejectsModelDriftBeforeDistribution(t *testing
 		`return {model: "outside-model"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	reachedDistribution := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST(
 		"/v1/responses",
 		PinTaskPluginEndpoint(),
@@ -793,7 +810,7 @@ func TestPrepareTaskPluginEndpointRejectsModelDriftBeforeDistribution(t *testing
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/responses",
 		strings.NewReader(`{"model":"claimed-model"}`),
@@ -814,7 +831,7 @@ func TestPrepareTaskPluginEndpointRejectsModelDriftBeforeDistribution(t *testing
 
 func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing.T) {
 	const key = "endpoint-multipart-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["video-model"]`,
@@ -824,7 +841,9 @@ func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing
 		 return {model: ctx.model, requestBody: {prompt: ctx.body.fields.prompt[0]}};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
@@ -836,7 +855,7 @@ func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedDistribution := false
 	router.POST(
 		"/v1/videos",
@@ -847,7 +866,7 @@ func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(http.MethodPost, "/v1/videos", bytes.NewReader(body.Bytes()))
+	request := testtenant.NewRequest(http.MethodPost, "/v1/videos", bytes.NewReader(body.Bytes()))
 	request.Header.Set("Content-Type", writer.FormDataContentType())
 	recorder := httptest.NewRecorder()
 
@@ -859,7 +878,7 @@ func TestPrepareTaskPluginEndpointAcceptsRegisteredVideoMultipartBody(t *testing
 
 func TestVideoGenerationsIsNotClaimedByOpenAIVideoProtocol(t *testing.T) {
 	const key = "endpoint-video-gen-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["generation-model"]`,
@@ -867,9 +886,11 @@ func TestVideoGenerationsIsNotClaimedByOpenAIVideoProtocol(t *testing.T) {
 		`return {model: ctx.requestBody.model, action: "generate"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reachedDistribution := false
 	router.POST(
 		"/v1/video/generations",
@@ -880,7 +901,7 @@ func TestVideoGenerationsIsNotClaimedByOpenAIVideoProtocol(t *testing.T) {
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/video/generations",
 		strings.NewReader(`{"model":"generation-model"}`),
@@ -908,14 +929,14 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/binary", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		body, err := io.ReadAll(c.Request.Body)
 		require.NoError(t, err)
 		assert.Equal(t, []byte{0, 1, 2, 3}, body)
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/binary", bytes.NewReader([]byte{0, 1, 2, 3}))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/binary", bytes.NewReader([]byte{0, 1, 2, 3}))
 	request.Header.Set("Content-Type", "application/octet-stream")
 	recorder := httptest.NewRecorder()
 
@@ -960,7 +981,7 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 	})
 
 	nextHandlerCalled := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/query",
 		pinTaskPluginRoute(plugin, 0),
 		func(c *gin.Context) {
@@ -974,7 +995,7 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 		},
 	)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/vendor/query", strings.NewReader(`{}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/query", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	router.ServeHTTP(recorder, request)
 
@@ -1004,10 +1025,10 @@ export const meta = {apiVersion:1,key:"dynamic-renderer",name:"Dynamic",version:
 export const native = {decode:function(){return {kind:"query",taskIds:[],renderer:"legacy"};},show:function(){return {};}};
 export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {taskId:"one"}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {status:"SUCCESS"}}
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reached := false
 	router.POST("/vendor/query", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) { reached = true })
-	request := httptest.NewRequest(http.MethodPost, "/vendor/query", strings.NewReader(`{}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/query", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1023,10 +1044,10 @@ export const meta = {apiVersion:1,key:"submit-renderer",name:"Submit",version:"1
 export const native = {decode:function(){return {kind:"submit",model:"model",requestBody:{},renderer:"legacy"};},created:function(){return {};}};
 export function buildSubmitRequest(){return {}} export function parseSubmitResponse(){return {taskId:"one"}} export function buildQueryRequest(){return {}} export function parseTaskResult(){return {status:"SUCCESS"}}
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	reached := false
 	router.POST("/vendor/submit", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) { reached = true })
-	request := httptest.NewRequest(http.MethodPost, "/vendor/submit", strings.NewReader(`{}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/submit", strings.NewReader(`{}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1066,7 +1087,7 @@ export const native = {status: function(ctx, task) { return {id: task.task_id}; 
 		TaskID: "legacy-task", UserId: 7, Platform: constant.TaskPlatform("651"),
 	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/vendor/jobs/:id",
 		pinTaskPluginRoute(plugin, 0),
 		func(c *gin.Context) {
@@ -1077,14 +1098,14 @@ export const native = {status: function(ctx, task) { return {id: task.task_id}; 
 	)
 
 	legacyRecorder := httptest.NewRecorder()
-	router.ServeHTTP(legacyRecorder, httptest.NewRequest(http.MethodGet, "/vendor/jobs/legacy-task", nil))
+	router.ServeHTTP(legacyRecorder, testtenant.NewRequest(http.MethodGet, "/vendor/jobs/legacy-task", nil))
 	assert.Equal(t, http.StatusOK, legacyRecorder.Code)
 	assert.JSONEq(t, `{"id":"legacy-task"}`, legacyRecorder.Body.String())
 
 	var firstBody string
 	for _, taskID := range []string{"missing-task", "foreign-task", "wrong-platform", "wrong-legacy-platform"} {
 		recorder := httptest.NewRecorder()
-		router.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/vendor/jobs/"+taskID, nil))
+		router.ServeHTTP(recorder, testtenant.NewRequest(http.MethodGet, "/vendor/jobs/"+taskID, nil))
 		assert.Equal(t, http.StatusNotFound, recorder.Code)
 		if firstBody == "" {
 			firstBody = recorder.Body.String()
@@ -1112,8 +1133,8 @@ export const native = {error: function(ctx, error) {
 }};
 `)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/failure", strings.NewReader(`{"credential":"do-not-copy"}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/failure", strings.NewReader(`{"credential":"do-not-copy"}`))
 	c.Set(jsplugin.ContextKeyPinnedRoute, jsplugin.PinnedRoute{Plugin: plugin})
 	c.Set(jsplugin.ContextKeyRouteRequest, jsplugin.RouteRequestContext{
 		Path: "/vendor/failure", Method: http.MethodPost, Params: map[string]string{}, Query: map[string][]string{},
@@ -1153,8 +1174,8 @@ func TestTaskPluginErrorFallbackIsSanitized(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			plugin := compileTaskRoutePlugin(t, genericTaskPluginSource+"\n"+testCase.renderHook)
 			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, "/vendor/failure", nil)
+			c, _ := testtenant.CreateTestContext(recorder)
+			c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/failure", nil)
 			c.Set(common.RequestIdKey, "fallback-req")
 			c.Set(jsplugin.ContextKeyPinnedRoute, jsplugin.PinnedRoute{Plugin: plugin})
 			c.Set(jsplugin.ContextKeyRouteRequest, jsplugin.RouteRequestContext{
@@ -1204,7 +1225,7 @@ func TestSunoFetchEmptyIDsReturnsSuccessfulEmptyArray(t *testing.T) {
 	plugin := compileTaskRoutePlugin(t, source)
 
 	nextHandlerCalled := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST(
 		"/suno/fetch",
 		pinTaskPluginRoute(plugin, 1),
@@ -1214,7 +1235,7 @@ func TestSunoFetchEmptyIDsReturnsSuccessfulEmptyArray(t *testing.T) {
 			c.Status(http.StatusTeapot)
 		},
 	)
-	request := httptest.NewRequest(http.MethodPost, "/suno/fetch", strings.NewReader(`{"ids":[]}`))
+	request := testtenant.NewRequest(http.MethodPost, "/suno/fetch", strings.NewReader(`{"ids":[]}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1239,11 +1260,11 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"prompt":"x"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"prompt":"x"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1274,7 +1295,7 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(func(c *gin.Context) {
 		c.Set(common.RequestIdKey, "native-error-req")
 		c.Next()
@@ -1282,7 +1303,7 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"prompt":"x"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"prompt":"x"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1306,11 +1327,11 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"detail-model"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"detail-model"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1337,11 +1358,11 @@ export function parseSubmitResponse() { return {taskId: "one"}; }
 export function buildQueryRequest() { return {url: "https://example.com"}; }
 export function parseTaskResult() { return {status: "SUCCESS"}; }
 `)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/vendor/jobs", pinTaskPluginRoute(plugin, 0), PrepareTaskPluginRoute(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
+	request := testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{}`))
 	request.Header["Content-Type"] = []string{"application/json", "application/x-www-form-urlencoded"}
 	recorder := httptest.NewRecorder()
 
@@ -1368,8 +1389,8 @@ func TestSanitizedTaskPluginErrorIgnoresDetailOn5xx(t *testing.T) {
 func TestTaskPluginErrorFallbackMessageIncludesRequestID(t *testing.T) {
 	plugin := compileTaskRoutePlugin(t, genericTaskPluginSource)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/failure", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/failure", nil)
 	c.Set(common.RequestIdKey, "req-fallback-1")
 	c.Set(jsplugin.ContextKeyPinnedRoute, jsplugin.PinnedRoute{Plugin: plugin})
 	c.Set(jsplugin.ContextKeyRouteRequest, jsplugin.RouteRequestContext{
@@ -1389,7 +1410,7 @@ func TestTaskPluginErrorFallbackMessageIncludesRequestID(t *testing.T) {
 
 func TestPrepareTaskPluginEndpointSurfacesDecodeHookMessage(t *testing.T) {
 	const key = "endpoint-decode-detail-test"
-	_, err := jsplugin.DefaultRegistry.Register(taskProtocolPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskProtocolPluginSource(
 		key,
 		"1.0.0",
 		`["claimed-model"]`,
@@ -1397,13 +1418,15 @@ func TestPrepareTaskPluginEndpointSurfacesDecodeHookMessage(t *testing.T) {
 		`throw new Error("model is required");`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"claimed-model"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 
@@ -1459,22 +1482,24 @@ func TestPinTaskPluginEndpointRejectsUnsupportedRequestForms(t *testing.T) {
 	}
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
-			_, err := jsplugin.DefaultRegistry.Register(taskResponsesPluginSource(
+			_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskResponsesPluginSource(
 				testCase.key, 0, `["form-gate-model"]`, testCase.supports, testCase.hooks, `return {model: ctx.model};`,
 			), jsplugin.Options{})
 			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(testCase.key)) })
+			t.Cleanup(func() {
+				require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(testCase.key))
+			})
 
 			reachedPrepare := false
 			quotaConsumed := false
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 				reachedPrepare = true
 				quotaConsumed = true
 				require.NoError(t, model.DB.Create(&model.Task{TaskID: "should-not-exist", UserId: 1}).Error)
 				c.Status(http.StatusNoContent)
 			})
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(testCase.body))
+			request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(testCase.body))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)
@@ -1497,21 +1522,23 @@ func TestPinTaskPluginEndpointRejectsUnsupportedRequestForms(t *testing.T) {
 
 func TestPinTaskPluginEndpointMalformedStreamStillFailsInPrepare(t *testing.T) {
 	const key = "form-gate-malformed-stream"
-	_, err := jsplugin.DefaultRegistry.Register(taskResponsesPluginSource(
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskResponsesPluginSource(
 		key, 0, `["form-gate-bool-model"]`, `["sync", "background"]`,
 		`renderFinal: function() { return {}; }`,
 		`return {model: ctx.model};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(key)) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key))
+	})
 
 	reachedNext := false
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 		reachedNext = true
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"form-gate-bool-model","stream":"yes"}`))
+	request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"form-gate-bool-model","stream":"yes"}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	router.ServeHTTP(recorder, request)
@@ -1522,22 +1549,26 @@ func TestPinTaskPluginEndpointMalformedStreamStillFailsInPrepare(t *testing.T) {
 }
 
 func TestPinTaskPluginEndpointMovesParserToSurvivingSharedCandidate(t *testing.T) {
-	streamOnly, err := jsplugin.DefaultRegistry.Register(taskResponsesPluginSource(
+	streamOnly, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskResponsesPluginSource(
 		"alpha-stream", constant.ChannelTypeReplicate, `["shared-form-model"]`, `["stream"]`,
 		`renderEvents: function() { return {events: [], done: false}; }`,
 		`return {model: ctx.model, action: "stream-parser"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("alpha-stream")) })
-	full, err := jsplugin.DefaultRegistry.Register(taskResponsesPluginSource(
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("alpha-stream"))
+	})
+	full, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskResponsesPluginSource(
 		"bravo-full", constant.ChannelTypeCodex, `["shared-form-model"]`, `["stream", "sync", "background"]`,
 		`renderEvents: function() { return {events: [], done: false}; }, renderFinal: function() { return {}; }`,
 		`return {model: ctx.model, action: "full-parser"};`,
 	), jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister("bravo-full")) })
+	t.Cleanup(func() {
+		require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("bravo-full"))
+	})
 
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation()
 	unfiltered := generation.LookupEndpointCandidates("POST", "/v1/responses", "shared-form-model")
 	require.Len(t, unfiltered, 2)
 	assert.Equal(t, "alpha-stream", unfiltered[0].Plugin.Meta.Key)
@@ -1545,13 +1576,13 @@ func TestPinTaskPluginEndpointMovesParserToSurvivingSharedCandidate(t *testing.T
 	t.Run("sync moves pin to second candidate", func(t *testing.T) {
 		var pinned jsplugin.PinnedEndpoint
 		var action string
-		router := gin.New()
+		router := testtenant.NewRouter()
 		router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 			pinned = c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
 			action = c.GetString("task_action")
 			c.Status(http.StatusNoContent)
 		})
-		request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"shared-form-model"}`))
+		request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"shared-form-model"}`))
 		request.Header.Set("Content-Type", "application/json")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
@@ -1566,13 +1597,13 @@ func TestPinTaskPluginEndpointMovesParserToSurvivingSharedCandidate(t *testing.T
 	t.Run("stream keeps first candidate", func(t *testing.T) {
 		var pinned jsplugin.PinnedEndpoint
 		var action string
-		router := gin.New()
+		router := testtenant.NewRouter()
 		router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 			pinned = c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
 			action = c.GetString("task_action")
 			c.Status(http.StatusNoContent)
 		})
-		request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"shared-form-model","stream":true}`))
+		request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"shared-form-model","stream":true}`))
 		request.Header.Set("Content-Type", "application/json")
 		recorder := httptest.NewRecorder()
 		router.ServeHTTP(recorder, request)
@@ -1716,12 +1747,14 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, spec := range []struct{ key, decode string }{{"decode-alpha", tc.alpha}, {"decode-beta", tc.beta}} {
-				_, err := jsplugin.DefaultRegistry.Register(taskResponsesPluginSource(spec.key, 0, `["decode-shared-model"]`, `["sync"]`, `renderFinal:function(){return {};}`, spec.decode), jsplugin.Options{})
+				_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(taskResponsesPluginSource(spec.key, 0, `["decode-shared-model"]`, `["sync"]`, `renderFinal:function(){return {};}`, spec.decode), jsplugin.Options{})
 				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, jsplugin.DefaultRegistry.Unregister(spec.key)) })
+				t.Cleanup(func() {
+					require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(spec.key))
+				})
 			}
 			var gotKeys []string
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST("/v1/responses", PinTaskPluginEndpoint(), PrepareTaskPluginEndpoint(), func(c *gin.Context) {
 				pinned := c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint)
 				for _, candidate := range pinned.Candidates {
@@ -1733,7 +1766,7 @@ func TestPrepareTaskPluginEndpointFiltersEachSharedCandidate(t *testing.T) {
 				assert.Equal(t, tc.wantKeys, service.GetChannelConstraints(c).Filters[0].TaskPluginKeys)
 				c.Status(http.StatusNoContent)
 			})
-			request := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"decode-shared-model","resolution":"1080p"}`))
+			request := testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"decode-shared-model","resolution":"1080p"}`))
 			request.Header.Set("Content-Type", "application/json")
 			recorder := httptest.NewRecorder()
 			router.ServeHTTP(recorder, request)

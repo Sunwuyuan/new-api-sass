@@ -17,7 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+
+import { tenantStorage } from '@/lib/tenant'
 
 interface NotificationState {
   // Last read Notice content signature (full trimmed message)
@@ -77,6 +79,7 @@ export const useNotificationStore = create<NotificationState>()(
       },
     }),
     {
+      storage: createJSONStorage(() => tenantStorage),
       name: 'notification-storage',
       partialize: (state) => ({
         lastReadNotice: state.lastReadNotice,

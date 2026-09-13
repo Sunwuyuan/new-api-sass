@@ -6,10 +6,11 @@ import (
 	"reflect"
 	"testing"
 
-	common2 "github.com/QuantumNous/new-api/common"
-	"github.com/QuantumNous/new-api/relaykit/types"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 
+	common2 "github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
@@ -1219,7 +1220,7 @@ func TestApplyParamOverrideNormalizeThinkingSignatureUnsupported(t *testing.T) {
 }
 
 func TestApplyParamOverrideConditionFromRetryAndLastErrorContext(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RetryIndex: 1,
 		LastError: types.WithOpenAIError(types.OpenAIError{
 			Message: "invalid thinking signature",
@@ -1312,7 +1313,7 @@ func TestApplyParamOverrideConditionByUserAndGPTModel(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := &RelayInfo{
+			info := &RelayInfo{Context: testtenant.Context(),
 				UserId: tt.userID,
 				ChannelMeta: &ChannelMeta{
 					ParamOverride:     paramOverride,
@@ -1330,7 +1331,7 @@ func TestApplyParamOverrideConditionByUserAndGPTModel(t *testing.T) {
 }
 
 func TestApplyParamOverrideConditionByGroupContext(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		UserGroup:  "vip",
 		TokenGroup: "premium",
 		UsingGroup: "priority-route",
@@ -1932,7 +1933,7 @@ func TestApplyParamOverrideConditionsObjectShorthand(t *testing.T) {
 }
 
 func TestApplyParamOverrideWithRelayInfoSyncRuntimeHeaders(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -1976,7 +1977,7 @@ func TestApplyParamOverrideWithRelayInfoSyncRuntimeHeaders(t *testing.T) {
 }
 
 func TestApplyParamOverrideWithRelayInfoMixedLegacyAndOperations(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RequestHeaders: map[string]string{
 			"Originator": "Codex CLI",
 		},
@@ -2014,7 +2015,7 @@ func TestApplyParamOverrideWithRelayInfoMixedLegacyAndOperations(t *testing.T) {
 }
 
 func TestApplyParamOverrideWithRelayInfoMoveAndCopyHeaders(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -2053,7 +2054,7 @@ func TestApplyParamOverrideWithRelayInfoMoveAndCopyHeaders(t *testing.T) {
 }
 
 func TestApplyParamOverrideWithRelayInfoSetHeaderMapRewritesAnthropicBeta(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -2087,7 +2088,7 @@ func TestApplyParamOverrideWithRelayInfoSetHeaderMapRewritesAnthropicBeta(t *tes
 }
 
 func TestGetEffectiveHeaderOverrideUsesRuntimeOverrideAsFinalResult(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		UseRuntimeHeadersOverride: true,
 		RuntimeHeadersOverride: map[string]any{
 			"x-runtime": "runtime-only",
@@ -2118,7 +2119,7 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 	}`
 	settings := dto.ChannelOtherSettings{}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, true)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, true)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2126,10 +2127,10 @@ func TestRemoveDisabledFieldsSkipWhenChannelPassThroughEnabled(t *testing.T) {
 }
 
 func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
-	original := model_setting.GetGlobalSettings().PassThroughRequestEnabled
-	model_setting.GetGlobalSettings().PassThroughRequestEnabled = true
+	original := model_setting.GetGlobalSettings(testtenant.Context()).PassThroughRequestEnabled
+	model_setting.GetGlobalSettings(testtenant.Context()).PassThroughRequestEnabled = true
 	t.Cleanup(func() {
-		model_setting.GetGlobalSettings().PassThroughRequestEnabled = original
+		model_setting.GetGlobalSettings(testtenant.Context()).PassThroughRequestEnabled = original
 	})
 
 	input := `{
@@ -2139,7 +2140,7 @@ func TestRemoveDisabledFieldsSkipWhenGlobalPassThroughEnabled(t *testing.T) {
 	}`
 	settings := dto.ChannelOtherSettings{}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, false)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2158,7 +2159,7 @@ func TestRemoveDisabledFieldsDefaultFiltering(t *testing.T) {
 	}`
 	settings := dto.ChannelOtherSettings{}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, false)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2169,7 +2170,7 @@ func TestRemoveDisabledFieldsNoControlledFieldsKeepsBody(t *testing.T) {
 	input := `{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}`
 	settings := dto.ChannelOtherSettings{}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, false)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2185,7 +2186,7 @@ func TestRemoveDisabledFieldsAllowInferenceGeo(t *testing.T) {
 		AllowInferenceGeo: true,
 	}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, false)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2201,7 +2202,7 @@ func TestRemoveDisabledFieldsAllowSpeed(t *testing.T) {
 		AllowSpeed: true,
 	}
 
-	out, err := RemoveDisabledFields([]byte(input), settings, false)
+	out, err := RemoveDisabledFields(testtenant.Context(), []byte(input), settings, false)
 	if err != nil {
 		t.Fatalf("RemoveDisabledFields returned error: %v", err)
 	}
@@ -2215,7 +2216,7 @@ func TestApplyParamOverrideWithRelayInfoRecordsOperationAuditInDebugMode(t *test
 		common2.DebugEnabled = originalDebugEnabled
 	})
 
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -2271,7 +2272,7 @@ func TestApplyParamOverrideWithRelayInfoRecordsOnlyKeyOperationsWhenDebugDisable
 		common2.DebugEnabled = originalDebugEnabled
 	})
 
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -2314,7 +2315,7 @@ func TestApplyParamOverrideWithRelayInfoRecordsConversationBodyOperationsWhenDeb
 		common2.DebugEnabled = originalDebugEnabled
 	})
 
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &ChannelMeta{
 			ParamOverride: map[string]any{
 				"operations": []any{
@@ -2489,7 +2490,7 @@ func TestApplyParamOverrideWithRelayInfoSynchronizesReasoningEffort(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := &RelayInfo{
+			info := &RelayInfo{Context: testtenant.Context(),
 				RelayFormat:     tt.relayFormat,
 				ReasoningEffort: tt.initialEffort,
 				ChannelMeta: &ChannelMeta{ParamOverride: map[string]any{
@@ -2510,7 +2511,7 @@ func TestReasoningEffortOverrideIsAuditedWithoutDebugMode(t *testing.T) {
 	t.Cleanup(func() {
 		common2.DebugEnabled = originalDebugEnabled
 	})
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RelayFormat: types.RelayFormatOpenAIResponses,
 		ChannelMeta: &ChannelMeta{ParamOverride: map[string]any{
 			"operations": []any{

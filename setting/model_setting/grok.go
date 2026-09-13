@@ -1,5 +1,7 @@
 package model_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 // GrokSettings defines Grok model configuration.
@@ -19,6 +21,6 @@ func init() {
 	config.GlobalConfig.Register("grok", &grokSettings)
 }
 
-func GetGrokSettings() *GrokSettings {
-	return &grokSettings
+func GetGrokSettings(tenantCtx context.Context) *GrokSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("grok").(*GrokSettings)
 }

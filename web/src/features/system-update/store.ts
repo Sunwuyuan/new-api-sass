@@ -24,6 +24,8 @@ import {
   type StateStorage,
 } from 'zustand/middleware'
 
+import { tenantKey, tenantStorage } from '@/lib/tenant'
+
 import { systemReleaseSchema } from './releases'
 
 const updateSnapshotSchema = z
@@ -50,21 +52,21 @@ interface SystemUpdateStore {
 const updateStorage: StateStorage = {
   getItem: (key) => {
     try {
-      return localStorage.getItem(key)
+      return tenantStorage.getItem(key)
     } catch {
       return null
     }
   },
   setItem: (key, value) => {
     try {
-      localStorage.setItem(key, value)
+      tenantStorage.setItem(key, value)
     } catch {
       /* In-memory state remains usable. */
     }
   },
   removeItem: (key) => {
     try {
-      localStorage.removeItem(key)
+      tenantStorage.removeItem(key)
     } catch {
       /* Storage can be unavailable. */
     }
@@ -153,7 +155,7 @@ export const useSystemUpdatePreferencesStore =
 let preferenceSubscribers = 0
 
 function handlePreferenceStorage(event: StorageEvent): void {
-  if (event.key === preferencesStorageKey || event.key === null) {
+  if (event.key === tenantKey(preferencesStorageKey) || event.key === null) {
     void useSystemUpdatePreferencesStore.persist.rehydrate()
   }
 }

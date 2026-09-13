@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"fmt"
 	"strconv"
@@ -28,15 +30,15 @@ func getDuration() time.Duration {
 }
 
 // startCleanupTask starts a background task to clean up expired entries
-func startCleanupTask() {
+func startCleanupTask(tenantCtx context.Context) {
 	gopool.Go(func() {
 		for {
 			time.Sleep(time.Hour)
 			now := time.Now()
-			notifyLimitStore.Range(func(key, value any) bool {
+			TenantState(tenantCtx).notifyLimitStore.Range(func(key, value any) bool {
 				if limit, ok := value.(limitCount); ok {
 					if now.Sub(limit.Timestamp) >= getDuration() {
-						notifyLimitStore.Delete(key)
+						TenantState(tenantCtx).notifyLimitStore.Delete(key)
 					}
 				}
 				return true
@@ -47,25 +49,25 @@ func startCleanupTask() {
 
 // CheckNotificationLimit checks if the user has exceeded their notification limit
 // Returns true if the user can send notification, false if limit exceeded
-func CheckNotificationLimit(userId int, notifyType string) (bool, error) {
+func CheckNotificationLimit(tenantCtx context.Context, userId int, notifyType string) (bool, error) {
 	if common.RedisEnabled {
-		return checkRedisLimit(userId, notifyType)
+		return checkRedisLimit(tenantCtx, userId, notifyType)
 	}
-	return checkMemoryLimit(userId, notifyType)
+	return checkMemoryLimit(tenantCtx, userId, notifyType)
 }
 
-func checkRedisLimit(userId int, notifyType string) (bool, error) {
+func checkRedisLimit(tenantCtx context.Context, userId int, notifyType string) (bool, error) {
 	key := fmt.Sprintf("notify_limit:%d:%s:%s", userId, notifyType, time.Now().Format("2006010215"))
 
 	// Get current count
-	count, err := common.RedisGet(key)
+	count, err := common.RedisGet(tenantCtx, key)
 	if err != nil && err.Error() != "redis: nil" {
 		return false, fmt.Errorf("failed to get notification count: %w", err)
 	}
 
 	// If key doesn't exist, initialize it
 	if count == "" {
-		err = common.RedisSet(key, "1", getDuration())
+		err = common.RedisSet(tenantCtx, key, "1", getDuration())
 		return true, err
 	}
 
@@ -78,7 +80,7 @@ func checkRedisLimit(userId int, notifyType string) (bool, error) {
 	}
 
 	// Only increment if under limit
-	err = common.RedisIncr(key, 1)
+	err = common.RedisIncr(tenantCtx, key, 1)
 	if err != nil {
 		return false, fmt.Errorf("failed to increment notification count: %w", err)
 	}
@@ -86,16 +88,16 @@ func checkRedisLimit(userId int, notifyType string) (bool, error) {
 	return true, nil
 }
 
-func checkMemoryLimit(userId int, notifyType string) (bool, error) {
+func checkMemoryLimit(tenantCtx context.Context, userId int, notifyType string) (bool, error) {
 	// Ensure cleanup task is started
-	cleanupOnce.Do(startCleanupTask)
+	TenantState(tenantCtx).cleanupOnce.Do(func() { startCleanupTask(tenantCtx) })
 
 	key := fmt.Sprintf("%d:%s:%s", userId, notifyType, time.Now().Format("2006010215"))
 	now := time.Now()
 
 	// Get current limit count or initialize new one
 	var currentLimit limitCount
-	if value, ok := notifyLimitStore.Load(key); ok {
+	if value, ok := TenantState(tenantCtx).notifyLimitStore.Load(key); ok {
 		currentLimit = value.(limitCount)
 		// Check if the entry has expired
 		if now.Sub(currentLimit.Timestamp) >= getDuration() {
@@ -112,7 +114,7 @@ func checkMemoryLimit(userId int, notifyType string) (bool, error) {
 	limit := constant.NotifyLimitCount
 
 	// Store updated count
-	notifyLimitStore.Store(key, currentLimit)
+	TenantState(tenantCtx).notifyLimitStore.Store(key, currentLimit)
 
 	return currentLimit.Count <= limit, nil
 }

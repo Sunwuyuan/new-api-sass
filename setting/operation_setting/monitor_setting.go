@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"os"
@@ -38,28 +40,28 @@ func init() {
 	config.GlobalConfig.Register("monitor_setting", &monitorSetting)
 }
 
-func GetMonitorSetting() *MonitorSetting {
+func GetMonitorSetting(tenantCtx context.Context) *MonitorSetting {
 	if os.Getenv("CHANNEL_TEST_FREQUENCY") != "" {
 		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_TEST_FREQUENCY"))
 		if err == nil && frequency > 0 {
-			monitorSetting.AutoTestChannelEnabled = true
-			monitorSetting.AutoTestChannelMinutes = float64(frequency)
-			monitorSetting.ChannelTestMode = ChannelTestModeScheduledAll
+			(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).AutoTestChannelEnabled = true
+			(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).AutoTestChannelMinutes = float64(frequency)
+			(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).ChannelTestMode = ChannelTestModeScheduledAll
 		}
 	}
 	if enabled, ok := os.LookupEnv("CHANNEL_TEST_ENABLED"); ok {
 		parsed, err := strconv.ParseBool(enabled)
 		if err == nil {
-			monitorSetting.AutoTestChannelEnabled = parsed
+			(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).AutoTestChannelEnabled = parsed
 		}
 	}
-	switch monitorSetting.ChannelTestMode {
+	switch (*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).ChannelTestMode {
 	case ChannelTestModeAutoBanOnly, ChannelTestModePassiveRecovery:
 	default:
-		monitorSetting.ChannelTestMode = ChannelTestModeScheduledAll
+		(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).ChannelTestMode = ChannelTestModeScheduledAll
 	}
-	monitorSetting.ChannelTestConcurrency = NormalizeChannelTestConcurrency(monitorSetting.ChannelTestConcurrency)
-	return &monitorSetting
+	(*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).ChannelTestConcurrency = NormalizeChannelTestConcurrency((*(config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting))).ChannelTestConcurrency)
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("monitor_setting").(*MonitorSetting)
 }
 
 func NormalizeChannelTestConcurrency(concurrency int) int {

@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -23,7 +25,7 @@ type UserQuotaAdjustment struct {
 	After    int
 }
 
-func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuotaAdjustment, error) {
+func AdjustUserQuota(tenantCtx context.Context, userID, operatorRole int, mode string, value int) (*UserQuotaAdjustment, error) {
 	if userID <= 0 || (mode != "add" && mode != "subtract" && mode != "override") {
 		return nil, ErrInvalidUserQuotaAdjustment
 	}
@@ -35,7 +37,7 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 	}
 
 	var adjustment UserQuotaAdjustment
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var user User
 		if err := lockForUpdate(tx).First(&user, userID).Error; err != nil {
 			return err
@@ -79,7 +81,7 @@ func AdjustUserQuota(userID, operatorRole int, mode string, value int) (*UserQuo
 	// Both balances are bounded above, so their difference fits in int64.
 	delta := int64(adjustment.After) - int64(adjustment.Before)
 	if delta != 0 {
-		if err := cacheIncrUserQuota(userID, delta); err != nil {
+		if err := cacheIncrUserQuota(tenantCtx, userID, delta); err != nil {
 			common.SysError(fmt.Sprintf("failed to sync manual quota adjustment for user %d: %s", userID, err))
 		}
 	}

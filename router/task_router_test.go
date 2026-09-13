@@ -22,6 +22,7 @@ import (
 	"net/http"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,7 +33,7 @@ import (
 // never catch. Registering against a real engine is the only guard.
 func TestSetTaskRouterRegistersWithoutConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	engine := gin.New()
+	engine := testtenant.NewRouter()
 	require.NotPanics(t, func() { SetTaskRouter(engine) })
 
 	routes := engine.Routes()

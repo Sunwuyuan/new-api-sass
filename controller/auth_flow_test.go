@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/service"
@@ -76,7 +77,7 @@ func TestSecurityLoginCodeCompletesOnce(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
 			factor := &model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}
 			require.NoError(t, model.DB.Create(factor).Error)
-			challenge, err := service.StartLoginVerification(user, "password")
+			challenge, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 			require.NoError(t, err)
 			require.NotNil(t, challenge)
 			code, err := totp.GenerateCode(factor.Secret, time.Now())
@@ -89,12 +90,12 @@ func TestSecurityLoginCodeCompletesOnce(t *testing.T) {
 			}
 			body, err := common.Marshal(map[string]string{"flow_token": challenge.FlowToken, "code": code})
 			require.NoError(t, err)
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST("/api/user/login/verify", VerifyLogin)
 			router.POST("/api/user/login/2fa", Verify2FALogin)
 			for attempt := range 2 {
 				response := httptest.NewRecorder()
-				router.ServeHTTP(response, httptest.NewRequest("POST", test.path, strings.NewReader(string(body))))
+				router.ServeHTTP(response, testtenant.NewRequest("POST", test.path, strings.NewReader(string(body))))
 				var result securityEnrollmentResponse
 				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 				assert.Equal(t, attempt == 0, result.Success, response.Body.String())
@@ -108,7 +109,7 @@ func TestSecurityLoginCodeCompletesOnce(t *testing.T) {
 					assert.Empty(t, response.Header().Values("Set-Cookie"))
 				}
 			}
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.EqualValues(t, 2, count)
 		})
@@ -121,7 +122,7 @@ func TestSecurityLoginRejectsChangedOrExpiredAuthorization(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
 			factor := &model.TwoFA{UserId: user.Id, Secret: "JBSWY3DPEHPK3PXP", IsEnabled: true}
 			require.NoError(t, model.DB.Create(factor).Error)
-			challenge, err := service.StartLoginVerification(user, "password")
+			challenge, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 			require.NoError(t, err)
 			method := "2fa"
 			switch change {
@@ -151,7 +152,7 @@ func TestSecurityLoginRejectsChangedOrExpiredAuthorization(t *testing.T) {
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			assert.False(t, result.Success, change)
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, count)
 		})
@@ -183,7 +184,7 @@ func TestSecurityLoginPasskeyDoesNotRequireAdditionalTwoFA(t *testing.T) {
 					require.Equal(t, "required", result.Data.Options.PublicKey.UserVerification)
 					flowToken, challenge = result.Data.FlowToken, result.Data.Options.PublicKey.Challenge
 				} else {
-					pending, err := service.StartLoginVerification(user, "oauth:github")
+					pending, err := service.StartLoginVerification(testtenant.Context(), user, "oauth:github")
 					require.NoError(t, err)
 					parentToken = pending.FlowToken
 					flowToken, challenge = beginSecurityLoginPasskey(t, parentToken)
@@ -203,10 +204,10 @@ func TestSecurityLoginPasskeyDoesNotRequireAdditionalTwoFA(t *testing.T) {
 				}
 				body, err := common.Marshal(payload)
 				require.NoError(t, err)
-				router := gin.New()
+				router := testtenant.NewRouter()
 				router.POST(path, handler)
 				response := httptest.NewRecorder()
-				router.ServeHTTP(response, httptest.NewRequest("POST", path, strings.NewReader(string(body))))
+				router.ServeHTTP(response, testtenant.NewRequest("POST", path, strings.NewReader(string(body))))
 				var result securityEnrollmentResponse
 				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 				require.Equal(t, verified, result.Success, response.Body.String())
@@ -225,7 +226,7 @@ func TestSecurityLoginPasskeyDoesNotRequireAdditionalTwoFA(t *testing.T) {
 func TestSecurityLoginPasskeyConcurrentCompletionCreatesOneSession(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	key := newSecurityLoginPasskey(t, user.Id)
-	pending, err := service.StartLoginVerification(user, "password")
+	pending, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 	require.NoError(t, err)
 	requests := make([]string, 2)
 	for index := range requests {
@@ -258,7 +259,7 @@ func TestSecurityLoginPasskeyConcurrentCompletionCreatesOneSession(t *testing.T)
 		}
 	}
 	assert.Equal(t, 1, successes)
-	count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+	count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, count)
 }
@@ -266,7 +267,7 @@ func TestSecurityLoginPasskeyConcurrentCompletionCreatesOneSession(t *testing.T)
 func TestSecurityLoginSessionFailureRollsBackChallengeConsumption(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	key := newSecurityLoginPasskey(t, user.Id)
-	pending, err := service.StartLoginVerification(user, "password")
+	pending, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 	require.NoError(t, err)
 	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("login_session_failure", func(tx *gorm.DB) {
 		if tx.Statement.Table == "user_sessions" {
@@ -285,12 +286,12 @@ func TestSecurityLoginSessionFailureRollsBackChallengeConsumption(t *testing.T) 
 		if fail {
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
 			assert.NotContains(t, response.Body.String(), "private")
-			_, err = model.GetAuthFlow(pending.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeLoginVerification})
+			_, err = model.GetAuthFlow(testtenant.Context(), pending.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeLoginVerification})
 			require.NoError(t, err, "a failed session transaction must leave the parent challenge usable")
 			require.NoError(t, model.DB.Callback().Create().Remove("login_session_failure"))
 		}
 	}
-	count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+	count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, count)
 }
@@ -298,9 +299,9 @@ func TestSecurityLoginSessionFailureRollsBackChallengeConsumption(t *testing.T) 
 func TestSecurityLoginFactorStateDoesNotAddPasswordLoginQueries(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	newSecurityLoginPasskey(t, user.Id)
-	previousPasswordLogin := common.PasswordLoginEnabled
-	common.PasswordLoginEnabled = true
-	t.Cleanup(func() { common.PasswordLoginEnabled = previousPasswordLogin })
+	previousPasswordLogin := common.TenantState(testtenant.Context()).PasswordLoginEnabled
+	common.TenantState(testtenant.Context()).PasswordLoginEnabled = true
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).PasswordLoginEnabled = previousPasswordLogin })
 	queries := 0
 	require.NoError(t, model.DB.Callback().Query().After("gorm:query").Register("login_query_count", func(tx *gorm.DB) {
 		if !tx.DryRun {
@@ -308,7 +309,7 @@ func TestSecurityLoginFactorStateDoesNotAddPasswordLoginQueries(t *testing.T) {
 		}
 	}))
 	t.Cleanup(func() { _ = model.DB.Callback().Query().Remove("login_query_count") })
-	state, err := model.GetUserVerificationState(user.Id)
+	state, err := model.GetUserVerificationState(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.True(t, state.HasPassword)
 	assert.True(t, state.HasPasskey)
@@ -325,9 +326,9 @@ type boundLoginOAuthProvider struct {
 	userID int
 }
 
-func (*boundLoginOAuthProvider) IsUserIDTaken(string) bool    { return true }
-func (*boundLoginOAuthProvider) ProviderUserIDColumn() string { return "github_id" }
-func (provider *boundLoginOAuthProvider) FillUserByProviderID(user *model.User, _ string) error {
+func (*boundLoginOAuthProvider) IsUserIDTaken(context.Context, string) bool { return true }
+func (*boundLoginOAuthProvider) ProviderUserIDColumn() string               { return "github_id" }
+func (provider *boundLoginOAuthProvider) FillUserByProviderID(_ context.Context, user *model.User, _ string) error {
 	return model.DB.First(user, provider.userID).Error
 }
 
@@ -356,9 +357,11 @@ func TestSecurityLoginAllPrimaryTransportsRequireAdditionalVerification(t *testi
 					_, _ = w.Write([]byte(`{"success":true,"data":"bound-wechat"}`))
 				}))
 				t.Cleanup(upstream.Close)
-				previousEnabled, previousAddress := common.WeChatAuthEnabled, common.WeChatServerAddress
-				common.WeChatAuthEnabled, common.WeChatServerAddress = true, upstream.URL
-				t.Cleanup(func() { common.WeChatAuthEnabled, common.WeChatServerAddress = previousEnabled, previousAddress })
+				previousEnabled, previousAddress := common.TenantState(testtenant.Context()).WeChatAuthEnabled, common.TenantState(testtenant.Context()).WeChatServerAddress
+				common.TenantState(testtenant.Context()).WeChatAuthEnabled, common.TenantState(testtenant.Context()).WeChatServerAddress = true, upstream.URL
+				t.Cleanup(func() {
+					common.TenantState(testtenant.Context()).WeChatAuthEnabled, common.TenantState(testtenant.Context()).WeChatServerAddress = previousEnabled, previousAddress
+				})
 				response = securityEnrollmentRequest("GET", "/api/oauth/wechat?code=wechat-code", "", "", service.AuthIdentity{}, WeChatAuth)
 			default:
 				const slug = "unified-login-test"
@@ -372,21 +375,21 @@ func TestSecurityLoginAllPrimaryTransportsRequireAdditionalVerification(t *testi
 						_, _ = w.Write([]byte(`{"sub":"bound-custom","name":"User"}`))
 					}))
 					t.Cleanup(upstream.Close)
-					oauth.RegisterCustom(slug, oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{
+					oauth.RegisterCustom(testtenant.Context(), slug, oauth.NewGenericOAuthProvider(&model.CustomOAuthProvider{
 						Id: 42, Slug: slug, Name: "Custom login", Enabled: true, ClientId: "client", ClientSecret: "secret", UserIdField: "sub",
 						TokenEndpoint: upstream.URL + "/token", UserInfoEndpoint: upstream.URL + "/userinfo",
 					}))
 					require.NoError(t, model.DB.Create(&model.UserOAuthBinding{UserId: user.Id, ProviderId: 42, ProviderUserId: "bound-custom"}).Error)
 				} else {
-					oauth.Register(slug, &boundLoginOAuthProvider{userID: user.Id})
+					oauth.Register(testtenant.Context(), slug, &boundLoginOAuthProvider{userID: user.Id})
 				}
-				t.Cleanup(func() { oauth.Unregister(slug) })
-				token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{Purpose: model.AuthFlowPurposeOAuth, Provider: slug, Intent: model.AuthFlowIntentLogin, Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute)})
+				t.Cleanup(func() { oauth.Unregister(testtenant.Context(), slug) })
+				token, _, err := model.CreateAuthFlow(testtenant.Context(), model.AuthFlowCreate{Purpose: model.AuthFlowPurposeOAuth, Provider: slug, Intent: model.AuthFlowIntentLogin, Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute)})
 				require.NoError(t, err)
-				router := gin.New()
+				router := testtenant.NewRouter()
 				router.GET("/api/oauth/:provider", HandleOAuth)
 				response = httptest.NewRecorder()
-				router.ServeHTTP(response, httptest.NewRequest("GET", "/api/oauth/"+slug+"?state="+token+"&code=provider-code", nil))
+				router.ServeHTTP(response, testtenant.NewRequest("GET", "/api/oauth/"+slug+"?state="+token+"&code=provider-code", nil))
 			}
 			var result struct {
 				Success bool                   `json:"success"`
@@ -398,7 +401,7 @@ func TestSecurityLoginAllPrimaryTransportsRequireAdditionalVerification(t *testi
 			assert.Equal(t, []service.VerificationMethodOption{{Method: "passkey", Available: true}}, result.Data.Methods)
 			assert.NotEmpty(t, result.Data.FlowToken)
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, count)
 		})
@@ -410,7 +413,7 @@ func TestSecurityLoginPasskeyCannotCompleteAnotherChallenge(t *testing.T) {
 		t.Run(fmt.Sprintf("other-user=%t", otherUser), func(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
 			key := newSecurityLoginPasskey(t, user.Id)
-			first, err := service.StartLoginVerification(user, "password")
+			first, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 			require.NoError(t, err)
 			passkeyToken, challenge := beginSecurityLoginPasskey(t, first.FlowToken)
 			if otherUser {
@@ -418,7 +421,7 @@ func TestSecurityLoginPasskeyCannotCompleteAnotherChallenge(t *testing.T) {
 				require.NoError(t, model.DB.Create(user).Error)
 				newSecurityLoginPasskey(t, user.Id)
 			}
-			second, err := service.StartLoginVerification(user, "password")
+			second, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 			require.NoError(t, err)
 			body, err := common.Marshal(map[string]any{"flow_token": second.FlowToken, "passkey_flow_token": passkeyToken, "credential": securityPasskeyResponse(t, key, challenge, false, 0)})
 			require.NoError(t, err)
@@ -444,9 +447,9 @@ func TestSecurityLoginPasskeyCanManageTwoFAWithScopedProofs(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, model.DB.Create(&model.TwoFABackupCode{UserId: user.Id, CodeHash: hash}).Error)
 			if scope == service.VerificationScopeTwoFABackupCodes {
-				_, err := service.VerifySecurityInput(identity, service.VerificationInput{Scope: scope, Method: "2fa", Code: "ABCD-1234"})
+				_, err := service.VerifySecurityInput(testtenant.Context(), identity, service.VerificationInput{Scope: scope, Method: "2fa", Code: "ABCD-1234"})
 				assert.ErrorIs(t, err, service.ErrVerificationFailed)
-				remaining, err := model.GetUnusedBackupCodeCount(user.Id)
+				remaining, err := model.GetUnusedBackupCodeCount(testtenant.Context(), user.Id)
 				require.NoError(t, err)
 				assert.Equal(t, 1, remaining, "backup codes cannot authorize generating replacement backup codes")
 			}
@@ -485,12 +488,12 @@ func TestSecurityLoginPasskeyCanManageTwoFAWithScopedProofs(t *testing.T) {
 			response = securityEnrollmentRequest("POST", path, `{}`, proof.ProofToken, identity, handler)
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			require.True(t, result.Success, response.Body.String())
-			stored, err := model.GetUserById(user.Id, false)
+			stored, err := model.GetUserById(testtenant.Context(), user.Id, false)
 			require.NoError(t, err)
 			assert.Equal(t, identity.UserAuthVersion+1, stored.AuthVersion)
-			_, err = model.GetPasskeyByUserID(user.Id)
+			_, err = model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err, "managing 2FA must retain the alternative Passkey factor")
-			factor, err := model.GetTwoFAByUserId(user.Id)
+			factor, err := model.GetTwoFAByUserId(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			if scope == service.VerificationScopeTwoFADisable {
 				assert.Nil(t, factor)
@@ -537,7 +540,7 @@ func TestSecurityLoginRegisteredPasskeyRequiresUserVerification(t *testing.T) {
 			var finished securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &finished))
 			assert.Equal(t, verified, finished.Success, response.Body.String())
-			_, err = model.GetPasskeyByUserID(user.Id)
+			_, err = model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			if verified {
 				require.NoError(t, err)
 			} else {
@@ -566,9 +569,9 @@ func TestSecurityLoginRequiresConfiguredFactors(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
-			previousPasswordLogin := common.PasswordLoginEnabled
-			common.PasswordLoginEnabled = true
-			t.Cleanup(func() { common.PasswordLoginEnabled = previousPasswordLogin })
+			previousPasswordLogin := common.TenantState(testtenant.Context()).PasswordLoginEnabled
+			common.TenantState(testtenant.Context()).PasswordLoginEnabled = true
+			t.Cleanup(func() { common.TenantState(testtenant.Context()).PasswordLoginEnabled = previousPasswordLogin })
 			if test.passkey {
 				require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id, CredentialID: "login-key", PublicKey: "public-key"}).Error)
 			}
@@ -580,8 +583,8 @@ func TestSecurityLoginRequiresConfiguredFactors(t *testing.T) {
 				}
 				require.NoError(t, model.DB.Create(factor).Error)
 			}
-			system_setting.GetPasskeySettings().Enabled = !test.disabled
-			before, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			system_setting.GetPasskeySettings(testtenant.Context()).Enabled = !test.disabled
+			before, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			response := securityEnrollmentRequest(http.MethodPost, "/api/user/login", `{"username":"enrollment-user","password":"enrollment-password"}`, "", service.AuthIdentity{}, Login)
 			var result struct {
@@ -595,7 +598,7 @@ func TestSecurityLoginRequiresConfiguredFactors(t *testing.T) {
 				} `json:"data"`
 			}
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
-			after, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			after, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			if test.unavailable {
 				assert.False(t, result.Success)
@@ -629,8 +632,8 @@ type authFlowTestOAuthProvider struct {
 	userInfoCalls int
 }
 
-func (*authFlowTestOAuthProvider) GetName() string { return "Auth Flow Test" }
-func (*authFlowTestOAuthProvider) IsEnabled() bool { return true }
+func (*authFlowTestOAuthProvider) GetName(context.Context) string { return "Auth Flow Test" }
+func (*authFlowTestOAuthProvider) IsEnabled(context.Context) bool { return true }
 func (provider *authFlowTestOAuthProvider) ExchangeToken(context.Context, string, *gin.Context) (*oauth.OAuthToken, error) {
 	provider.exchangeCalls++
 	if provider.exchangeErr != nil {
@@ -645,11 +648,13 @@ func (provider *authFlowTestOAuthProvider) GetUserInfo(context.Context, *oauth.O
 	}
 	return &oauth.OAuthUser{ProviderUserID: "external-user"}, nil
 }
-func (*authFlowTestOAuthProvider) IsUserIDTaken(string) bool                      { return false }
-func (*authFlowTestOAuthProvider) FillUserByProviderID(*model.User, string) error { return nil }
-func (*authFlowTestOAuthProvider) SetProviderUserID(*model.User, string)          {}
-func (*authFlowTestOAuthProvider) GetProviderPrefix() string                      { return "flow_" }
-func (*authFlowTestOAuthProvider) ProviderUserIDColumn() string                   { return "" }
+func (*authFlowTestOAuthProvider) IsUserIDTaken(context.Context, string) bool { return false }
+func (*authFlowTestOAuthProvider) FillUserByProviderID(context.Context, *model.User, string) error {
+	return nil
+}
+func (*authFlowTestOAuthProvider) SetProviderUserID(*model.User, string) {}
+func (*authFlowTestOAuthProvider) GetProviderPrefix() string             { return "flow_" }
+func (*authFlowTestOAuthProvider) ProviderUserIDColumn() string          { return "" }
 
 func setupAuthFlowControllerTest(t *testing.T) *authFlowTestOAuthProvider {
 	t.Helper()
@@ -663,9 +668,9 @@ func setupAuthFlowControllerTest(t *testing.T) *authFlowTestOAuthProvider {
 	model.DB, model.LOG_DB = db, db
 	common.SetMainDatabaseType(common.DatabaseTypeSQLite)
 	provider := &authFlowTestOAuthProvider{}
-	oauth.Register("auth-flow-test", provider)
+	oauth.Register(testtenant.Context(), "auth-flow-test", provider)
 	t.Cleanup(func() {
-		oauth.Unregister("auth-flow-test")
+		oauth.Unregister(testtenant.Context(), "auth-flow-test")
 		model.DB, model.LOG_DB = previousDB, previousLogDB
 		common.RedisEnabled = previousRedis
 		common.SetMainDatabaseType(previousType)
@@ -676,8 +681,8 @@ func setupAuthFlowControllerTest(t *testing.T) *authFlowTestOAuthProvider {
 func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 	setupAuthFlowControllerTest(t)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"auth-flow-test","intent":"login","aff":"invite-code"}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/api/oauth/state", strings.NewReader(`{"provider":"auth-flow-test","intent":"login","aff":"invite-code"}`))
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	GenerateOAuthCode(c)
@@ -691,7 +696,7 @@ func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	require.True(t, response.Success)
-	flow, err := model.GetAuthFlow(response.Data.FlowToken, model.AuthFlowMatch{
+	flow, err := model.GetAuthFlow(testtenant.Context(), response.Data.FlowToken, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 	})
 	require.NoError(t, err)
@@ -704,8 +709,8 @@ func TestGenerateOAuthCodeCarriesAffiliateInLoginFlow(t *testing.T) {
 
 func TestGenerateOAuthCodeBindsFlowToAuthenticatedSession(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
-	oauth.Register("auth-flow-test", &authFlowTestOAuthProvider{})
-	t.Cleanup(func() { oauth.Unregister("auth-flow-test") })
+	oauth.Register(testtenant.Context(), "auth-flow-test", &authFlowTestOAuthProvider{})
+	t.Cleanup(func() { oauth.Unregister(testtenant.Context(), "auth-flow-test") })
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: []byte(`{"provider":"auth-flow-test"}`)}, service.VerificationMethodPassword)
 	response := securityEnrollmentRequest(http.MethodPost, "/api/oauth/state", `{"provider":"auth-flow-test","intent":"bind"}`, proof, identity, GenerateOAuthCode)
 	var result struct {
@@ -716,7 +721,7 @@ func TestGenerateOAuthCodeBindsFlowToAuthenticatedSession(t *testing.T) {
 	}
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
-	flow, err := model.GetAuthFlow(result.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentBind, UserId: identity.UserID, SessionId: identity.SessionID})
+	flow, err := model.GetAuthFlow(testtenant.Context(), result.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentBind, UserId: identity.UserID, SessionId: identity.SessionID})
 	require.NoError(t, err)
 	assert.Equal(t, identity.UserID, flow.UserId)
 	assert.Equal(t, identity.SessionID, flow.SessionId)
@@ -737,19 +742,19 @@ func TestOAuthLoginConsumesFlowOnlyAfterProviderIdentity(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			provider.exchangeErr = test.exchangeErr
 			provider.userInfoErr = test.userInfoErr
-			token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+			token, _, err := model.CreateAuthFlow(testtenant.Context(), model.AuthFlowCreate{
 				Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 				Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute),
 			})
 			require.NoError(t, err)
 
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.GET("/api/oauth/:provider", HandleOAuth)
-			request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+"&code=test", nil)
+			request := testtenant.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+token+"&code=test", nil)
 			response := httptest.NewRecorder()
 			router.ServeHTTP(response, request)
 
-			flow, err := model.GetAuthFlow(token, model.AuthFlowMatch{
+			flow, err := model.GetAuthFlow(testtenant.Context(), token, model.AuthFlowMatch{
 				Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 			})
 			require.NoError(t, err)
@@ -763,30 +768,30 @@ func TestOAuthLoginConsumesFlowAfterProviderIdentityAndOnProviderError(t *testin
 
 	provider.exchangeErr = nil
 	provider.userInfoErr = nil
-	successToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+	successToken, _, err := model.CreateAuthFlow(testtenant.Context(), model.AuthFlowCreate{
 		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 		Payload: `{invalid`, ExpiresAt: time.Now().Add(time.Minute),
 	})
 	require.NoError(t, err)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/api/oauth/:provider", HandleOAuth)
-	request := httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+successToken+"&code=test", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+successToken+"&code=test", nil)
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	_, err = model.GetAuthFlow(successToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+	_, err = model.GetAuthFlow(testtenant.Context(), successToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
 	assert.ErrorIs(t, err, model.ErrAuthFlowConsumed)
 	assert.Equal(t, 1, provider.exchangeCalls)
 	assert.Equal(t, 1, provider.userInfoCalls)
 
-	providerErrorToken, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+	providerErrorToken, _, err := model.CreateAuthFlow(testtenant.Context(), model.AuthFlowCreate{
 		Purpose: model.AuthFlowPurposeOAuth, Provider: "auth-flow-test", Intent: model.AuthFlowIntentLogin,
 		Payload: `{}`, ExpiresAt: time.Now().Add(time.Minute),
 	})
 	require.NoError(t, err)
-	request = httptest.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+providerErrorToken+"&error=access_denied", nil)
+	request = testtenant.NewRequest(http.MethodGet, "/api/oauth/auth-flow-test?state="+providerErrorToken+"&error=access_denied", nil)
 	response = httptest.NewRecorder()
 	router.ServeHTTP(response, request)
-	_, err = model.GetAuthFlow(providerErrorToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+	_, err = model.GetAuthFlow(testtenant.Context(), providerErrorToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
 	assert.ErrorIs(t, err, model.ErrAuthFlowConsumed)
 	assert.Equal(t, 1, provider.exchangeCalls)
 	assert.Equal(t, 1, provider.userInfoCalls)
@@ -795,8 +800,8 @@ func TestOAuthLoginConsumesFlowAfterProviderIdentityAndOnProviderError(t *testin
 func TestOAuthBindProviderErrorConsumesSessionBoundFlow(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
 	provider := &authFlowTestOAuthProvider{}
-	oauth.Register("auth-flow-test", provider)
-	t.Cleanup(func() { oauth.Unregister("auth-flow-test") })
+	oauth.Register(testtenant.Context(), "auth-flow-test", provider)
+	t.Cleanup(func() { oauth.Unregister(testtenant.Context(), "auth-flow-test") })
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: service.VerificationScopeAccountBind, Context: []byte(`{"provider":"auth-flow-test"}`)}, service.VerificationMethodPassword)
 	started := securityEnrollmentRequest(http.MethodPost, "/api/oauth/state", `{"provider":"auth-flow-test","intent":"bind"}`, proof, identity, GenerateOAuthCode)
 	var result struct {
@@ -811,7 +816,7 @@ func TestOAuthBindProviderErrorConsumesSessionBoundFlow(t *testing.T) {
 		HandleOAuth(c)
 	})
 	assert.Equal(t, http.StatusOK, response.Code)
-	_, err := model.GetAuthFlow(result.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
+	_, err := model.GetAuthFlow(testtenant.Context(), result.Data.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposeOAuth})
 	assert.ErrorIs(t, err, model.ErrAuthFlowConsumed)
 	assert.Zero(t, provider.exchangeCalls)
 	assert.Zero(t, provider.userInfoCalls)

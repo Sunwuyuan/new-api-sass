@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type LegalSettings struct {
@@ -16,6 +18,6 @@ func init() {
 	config.GlobalConfig.Register("legal", &defaultLegalSettings)
 }
 
-func GetLegalSettings() *LegalSettings {
-	return &defaultLegalSettings
+func GetLegalSettings(tenantCtx context.Context) *LegalSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("legal").(*LegalSettings)
 }

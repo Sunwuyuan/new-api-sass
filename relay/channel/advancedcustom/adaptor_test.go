@@ -10,7 +10,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
@@ -480,8 +483,8 @@ func TestAdaptorConvertsResponsesRequestToOpenAIChatUpstream(t *testing.T) {
 	info.RequestURLPath = "/v1/responses"
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	converted, err := adaptor.ConvertOpenAIResponsesRequest(c, info, dto.OpenAIResponsesRequest{
@@ -583,8 +586,8 @@ func TestAdaptorResponsesToGeminiUsesResponsesBridge(t *testing.T) {
 	info.UpstreamModelName = "gemini-test"
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Request.Header.Set("Content-Type", "application/json")
 
 	payload := dto.GeminiChatResponse{
@@ -621,7 +624,7 @@ func TestAdaptorResponsesToGeminiUsesResponsesBridge(t *testing.T) {
 }
 
 func TestAdaptorResponsesToGeminiAddsThoughtSignatureForFunctionCallHistory(t *testing.T) {
-	geminiSettings := model_setting.GetGeminiSettings()
+	geminiSettings := model_setting.GetGeminiSettings(testtenant.Context())
 	originalThoughtSignatureEnabled := geminiSettings.FunctionCallThoughtSignatureEnabled
 	geminiSettings.FunctionCallThoughtSignatureEnabled = true
 	t.Cleanup(func() {
@@ -830,7 +833,7 @@ func TestAdaptorConvertsGeminiRequestToOpenAIChatUpstream(t *testing.T) {
 }
 
 func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.RelayInfo {
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayFormat:     types.RelayFormatOpenAI,
 		RelayMode:       relayconstant.RelayModeChatCompletions,
 		RequestURLPath:  "/v1/chat/completions",
@@ -849,8 +852,8 @@ func advancedCustomRelayInfo(config *dto.AdvancedCustomConfig) *relaycommon.Rela
 
 func advancedCustomGinContext(path string) *gin.Context {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, path, nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, path, nil)
 	c.Request.Header.Set("Content-Type", "application/json")
 	return c
 }

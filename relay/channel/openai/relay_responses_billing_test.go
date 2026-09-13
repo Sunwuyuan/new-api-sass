@@ -10,6 +10,8 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -20,9 +22,9 @@ import (
 
 func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	operation_setting.SetToolPriceForTest("priced_fn", 5.0)
+	operation_setting.SetToolPriceForTest(testtenant.Context(), "priced_fn", 5.0)
 	t.Cleanup(func() {
-		operation_setting.DeleteToolPriceForTest("priced_fn")
+		operation_setting.DeleteToolPriceForTest(testtenant.Context(), "priced_fn")
 	})
 
 	body, err := common.Marshal(dto.OpenAIResponsesResponse{
@@ -41,10 +43,10 @@ func TestOaiResponsesHandlerCountsOutputCallsNotDeclarations(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(w)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1",
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -85,10 +87,10 @@ func TestOaiResponsesHandlerDeclaredToolsWithoutOutputCountZero(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(w)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1",
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -139,9 +141,9 @@ func TestOaiResponsesHandlerCountsCompletedImageGenerationOutputs(t *testing.T) 
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	info := &relaycommon.RelayInfo{OriginModelName: "gpt-5.1"}
+	c, _ := testtenant.CreateTestContext(w)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: "gpt-5.1"}
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(bytes.NewReader(body)),
@@ -173,9 +175,9 @@ func TestOaiResponsesHandlerIncompleteStatusCommitsZeroImageGeneration(t *testin
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	info := &relaycommon.RelayInfo{
+	c, _ := testtenant.CreateTestContext(w)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1",
 		ResponsesUsageInfo: &relaycommon.ResponsesUsageInfo{
 			BuiltInTools: map[string]*relaycommon.BuildInToolInfo{
@@ -212,10 +214,10 @@ func runResponsesImageBillingStream(t *testing.T, events ...string) *relaycommon
 	body.WriteString("data: [DONE]\n\n")
 
 	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(w)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "responses-image-billing-test")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1",
 		DisablePing:     true,
 		ChannelMeta: &relaycommon.ChannelMeta{

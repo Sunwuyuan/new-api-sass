@@ -1,19 +1,39 @@
 package config
 
 import (
-	"encoding/json"
+	"context"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/tenant"
 )
 
 // ConfigManager 统一管理所有配置
 type ConfigManager struct {
 	configs map[string]any
 	mutex   sync.RWMutex
+	tenants tenant.Registry[*ConfigManager]
+}
+
+// ForTenant returns the same independent configuration objects to readers and
+// option writers. The global registry contains immutable startup defaults.
+func (cm *ConfigManager) ForTenant(ctx context.Context) *ConfigManager {
+	value, err := cm.tenants.Get(ctx, func() *ConfigManager {
+		result := NewConfigManager()
+		cm.mutex.RLock()
+		defer cm.mutex.RUnlock()
+		for name, configuration := range cm.configs {
+			result.configs[name] = tenant.Clone(configuration)
+		}
+		return result
+	})
+	if err != nil {
+		panic(err)
+	}
+	return value
 }
 
 var GlobalConfig = NewConfigManager()
@@ -38,6 +58,22 @@ func (cm *ConfigManager) Get(name string) any {
 	return cm.configs[name]
 }
 
+// Update publishes a new immutable configuration snapshot. In-flight requests
+// may finish reading the previous snapshot without racing an option writer.
+func (cm *ConfigManager) Update(name string, values map[string]string) error {
+	cm.mutex.Lock()
+	defer cm.mutex.Unlock()
+	if cm.configs[name] == nil {
+		return nil
+	}
+	next := tenant.Clone(cm.configs[name])
+	if err := updateConfigFromMap(next, values); err != nil {
+		return err
+	}
+	cm.configs[name] = next
+	return nil
+}
+
 // LoadFromDB 从数据库加载配置
 func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 	cm.mutex.Lock()
@@ -57,10 +93,12 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 
 		// 如果找到配置项，则更新配置
 		if len(configMap) > 0 {
-			if err := updateConfigFromMap(config, configMap); err != nil {
+			next := tenant.Clone(config)
+			if err := updateConfigFromMap(next, configMap); err != nil {
 				common.SysError("failed to update config " + name + ": " + err.Error())
 				continue
 			}
+			cm.configs[name] = next
 		}
 	}
 
@@ -134,7 +172,7 @@ func configToMap(config any) (map[string]string, error) {
 		case reflect.Pointer:
 			// 处理指针类型：如果非 nil，序列化指向的值
 			if !field.IsNil() {
-				bytes, err := json.Marshal(field.Interface())
+				bytes, err := common.Marshal(field.Interface())
 				if err != nil {
 					return nil, err
 				}
@@ -145,7 +183,7 @@ func configToMap(config any) (map[string]string, error) {
 			}
 		case reflect.Map, reflect.Slice, reflect.Struct:
 			// 复杂类型使用JSON序列化
-			bytes, err := json.Marshal(field.Interface())
+			bytes, err := common.Marshal(field.Interface())
 			if err != nil {
 				return nil, err
 			}
@@ -247,7 +285,7 @@ func updateConfigFromMap(config any, configMap map[string]string) error {
 					field.Set(reflect.New(field.Type().Elem()))
 				}
 				// 反序列化到指针指向的值
-				err := json.Unmarshal([]byte(strValue), field.Interface())
+				err := common.Unmarshal([]byte(strValue), field.Interface())
 				if err != nil {
 					continue
 				}
@@ -257,12 +295,12 @@ func updateConfigFromMap(config any, configMap map[string]string) error {
 			// absent from the new JSON). Allocate a fresh map so removed keys
 			// are properly cleared.
 			fresh := reflect.New(field.Type())
-			if err := json.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
+			if err := common.Unmarshal([]byte(strValue), fresh.Interface()); err != nil {
 				continue
 			}
 			field.Set(fresh.Elem())
 		case reflect.Slice, reflect.Struct:
-			err := json.Unmarshal([]byte(strValue), field.Addr().Interface())
+			err := common.Unmarshal([]byte(strValue), field.Addr().Interface())
 			if err != nil {
 				continue
 			}

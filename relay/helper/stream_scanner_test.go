@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 	"github.com/gin-gonic/gin"
@@ -32,14 +34,14 @@ func setupStreamTest(t *testing.T, body io.Reader) (*gin.Context, *http.Response
 	t.Helper()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	resp := &http.Response{
 		Body: io.NopCloser(body),
 	}
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
 
@@ -61,10 +63,10 @@ func TestStreamScannerHandler_NilInputs(t *testing.T) {
 	t.Parallel()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/", nil)
 
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	StreamScannerHandler(c, nil, info, func(data string, sr *StreamResult) {})
 	StreamScannerHandler(c, &http.Response{Body: io.NopCloser(strings.NewReader(""))}, info, nil)
@@ -217,7 +219,7 @@ func TestStreamScannerHandler_DataWithExtraSpaces(t *testing.T) {
 // pooled reuse), the upstream body must be closed to stop token generation,
 // and no data received after the disconnect may be processed or written.
 func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testtenant.Context())
 	defer cancel()
 
 	pr, pw := io.Pipe()
@@ -227,11 +229,11 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 	})
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(ctx)
 
 	resp := &http.Response{Body: pr}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		DisablePing: true,
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
@@ -286,7 +288,7 @@ func TestStreamScannerHandler_ClientCancelAbortsUpstreamAndReturns(t *testing.T)
 // ---------- Ping tests ----------
 
 func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
+	setting := operation_setting.GetGeneralSetting(testtenant.Context())
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds
 	setting.PingIntervalEnabled = true
@@ -307,11 +309,11 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 	}()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	resp := &http.Response{Body: pr}
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	var count atomic.Int64
 	done := make(chan struct{})
@@ -337,7 +339,7 @@ func TestStreamScannerHandler_PingSentDuringSlowUpstream(t *testing.T) {
 }
 
 func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
-	setting := operation_setting.GetGeneralSetting()
+	setting := operation_setting.GetGeneralSetting(testtenant.Context())
 	oldEnabled := setting.PingIntervalEnabled
 	oldSeconds := setting.PingIntervalSeconds
 	setting.PingIntervalEnabled = true
@@ -348,11 +350,11 @@ func TestStreamScannerHandler_PingDisabledByRelayInfo(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	resp := &http.Response{Body: io.NopCloser(strings.NewReader(buildSSEBody(5)))}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		DisablePing: true,
 		ChannelMeta: &relaycommon.ChannelMeta{},
 	}
@@ -465,11 +467,11 @@ func TestStreamScannerHandler_StreamStatus_Timeout(t *testing.T) {
 	}()
 
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
 	resp := &http.Response{Body: pr}
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{}}
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{}}
 
 	done := make(chan struct{})
 	go func() {

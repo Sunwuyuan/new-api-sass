@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +15,7 @@ func TestNewOutboundJSONBody_GetBodyReplaysFullBody(t *testing.T) {
 
 	payload := []byte(`{"model":"test-model","messages":[{"role":"user","content":"hello"}]}`)
 
-	body, closer, err := NewOutboundJSONBody(payload)
+	body, closer, err := NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
@@ -42,7 +43,7 @@ func TestNewOutboundJSONBody_GetBodyAfterPartialRead(t *testing.T) {
 
 	payload := []byte(`{"model":"test-model","input":"0123456789"}`)
 
-	body, closer, err := NewOutboundJSONBody(payload)
+	body, closer, err := NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
@@ -117,7 +118,7 @@ func TestNewOutboundJSONBody_GetBodyReadersAreIndependent(t *testing.T) {
 
 	payload := []byte(`{"model":"test-model","input":"abcdefghijklmnopqrstuvwxyz"}`)
 
-	body, closer, err := NewOutboundJSONBody(payload)
+	body, closer, err := NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 
@@ -146,7 +147,7 @@ func TestNewOutboundJSONBody_GetBodyReadersAreIndependent_DiskStorage(t *testing
 
 	payload := []byte(`{"model":"test-model","input":"abcdefghijklmnopqrstuvwxyz"}`)
 
-	body, closer, err := NewOutboundJSONBody(payload)
+	body, closer, err := NewOutboundJSONBody(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer closer.Close()
 

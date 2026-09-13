@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -87,7 +88,7 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 		TokenUsed: 999,
 	})
 
-	rootRows, err := GetFlowQuotaData(900, 2000, "", 0, common.RoleRootUser)
+	rootRows, err := GetFlowQuotaData(testtenant.Context(), 900, 2000, "", 0, common.RoleRootUser)
 	require.NoError(t, err)
 	require.Len(t, rootRows, 3)
 	// Token 11 was soft-deleted, so its name is intentionally left empty for the
@@ -110,7 +111,7 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 	require.Equal(t, 22, rootRows[1].TokenID)
 	require.Equal(t, "backup", rootRows[1].TokenName)
 
-	adminRows, err := GetFlowQuotaData(900, 2000, "alice", 0, common.RoleAdminUser)
+	adminRows, err := GetFlowQuotaData(testtenant.Context(), 900, 2000, "alice", 0, common.RoleAdminUser)
 	require.NoError(t, err)
 	require.Len(t, adminRows, 2)
 	require.Equal(t, 0, adminRows[0].TokenID)
@@ -121,7 +122,7 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 	require.Equal(t, "east", adminRows[0].ChannelName)
 	require.Equal(t, 150, adminRows[0].Quota)
 
-	selfRows, err := GetFlowQuotaData(900, 2000, "", 1, common.RoleCommonUser)
+	selfRows, err := GetFlowQuotaData(testtenant.Context(), 900, 2000, "", 1, common.RoleCommonUser)
 	require.NoError(t, err)
 	require.Len(t, selfRows, 1)
 	require.Empty(t, selfRows[0].Username)
@@ -134,11 +135,11 @@ func TestGetFlowQuotaDataUsesQuotaDataRoleSpecificDimensions(t *testing.T) {
 
 func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 	truncateTables(t)
-	CacheQuotaDataLock.Lock()
-	CacheQuotaData = make(map[string]*QuotaData)
-	CacheQuotaDataLock.Unlock()
+	TenantState(testtenant.Context()).CacheQuotaDataLock.Lock()
+	TenantState(testtenant.Context()).CacheQuotaData = make(map[string]*QuotaData)
+	TenantState(testtenant.Context()).CacheQuotaDataLock.Unlock()
 
-	LogQuotaData(QuotaDataLogParams{
+	LogQuotaData(testtenant.Context(), QuotaDataLogParams{
 		UserID:    1,
 		Username:  "alice",
 		ModelName: "gpt-a",
@@ -150,7 +151,7 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 		Quota:     100,
 		TokenUsed: 40,
 	})
-	LogQuotaData(QuotaDataLogParams{
+	LogQuotaData(testtenant.Context(), QuotaDataLogParams{
 		UserID:    1,
 		Username:  "alice",
 		ModelName: "gpt-a",
@@ -162,7 +163,7 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 		Quota:     50,
 		TokenUsed: 20,
 	})
-	LogQuotaData(QuotaDataLogParams{
+	LogQuotaData(testtenant.Context(), QuotaDataLogParams{
 		UserID:    1,
 		Username:  "alice",
 		ModelName: "gpt-a",
@@ -175,7 +176,7 @@ func TestLogQuotaDataSplitsRowsByUseGroupTokenChannelAndNode(t *testing.T) {
 		TokenUsed: 10,
 	})
 
-	SaveQuotaDataCache()
+	SaveQuotaDataCache(testtenant.Context())
 
 	var rows []QuotaData
 	require.NoError(t, DB.Order("quota DESC").Find(&rows).Error)

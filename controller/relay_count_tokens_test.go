@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,8 +23,8 @@ func TestCountClaudeTokensReturnsInputTokensWhenRelayCountingDisabled(t *testing
 	})
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/messages/count_tokens?beta=true",
 		strings.NewReader(`{
@@ -48,8 +49,8 @@ func TestCountClaudeTokensReturnsInputTokensWhenRelayCountingDisabled(t *testing
 func TestCountClaudeTokensRejectsMissingMessages(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(
 		http.MethodPost,
 		"/v1/messages/count_tokens",
 		strings.NewReader(`{"model":"gemini-3.6-flash"}`),

@@ -1,5 +1,7 @@
 package passkey
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -20,21 +22,21 @@ import (
 var ErrRPIDUnavailable = system_setting.ErrPasskeyRPIDUnavailable
 
 // BuildWebAuthn constructs a WebAuthn instance using the current passkey settings and request context.
-func BuildWebAuthn(r *http.Request) (*webauthn.WebAuthn, error) {
-	return BuildWebAuthnForRPID(r, "")
+func BuildWebAuthn(tenantCtx context.Context, r *http.Request) (*webauthn.WebAuthn, error) {
+	return BuildWebAuthnForRPID(tenantCtx, r, "")
 }
 
 // BuildWebAuthnForRPID uses a single configured RP ID, never a list of IDs to
 // try against the same signed response. An empty ID is for new registrations.
-func BuildWebAuthnForRPID(r *http.Request, selectedRPID string) (*webauthn.WebAuthn, error) {
-	settings := system_setting.PasskeySettingsSnapshot()
+func BuildWebAuthnForRPID(tenantCtx context.Context, r *http.Request, selectedRPID string) (*webauthn.WebAuthn, error) {
+	settings := system_setting.PasskeySettingsSnapshot(tenantCtx)
 
 	displayName := strings.TrimSpace(settings.RPDisplayName)
 	if displayName == "" {
-		displayName = common.SystemName
+		displayName = common.TenantState(tenantCtx).SystemName
 	}
 
-	origins, err := resolveOrigins(r, &settings)
+	origins, err := resolveOrigins(tenantCtx, r, &settings)
 	if err != nil {
 		return nil, err
 	}
@@ -94,9 +96,9 @@ func BuildWebAuthnForRPID(r *http.Request, selectedRPID string) (*webauthn.WebAu
 
 // BuildLoginWebAuthn gives a known credential's binding precedence over a
 // browser's last-successful-domain hint. All choices remain server controlled.
-func BuildLoginWebAuthn(r *http.Request, hint, credentialRPID string) (*webauthn.WebAuthn, []string, error) {
-	settings := system_setting.PasskeySettingsSnapshot()
-	origins, err := resolveOrigins(r, &settings)
+func BuildLoginWebAuthn(tenantCtx context.Context, r *http.Request, hint, credentialRPID string) (*webauthn.WebAuthn, []string, error) {
+	settings := system_setting.PasskeySettingsSnapshot(tenantCtx)
+	origins, err := resolveOrigins(tenantCtx, r, &settings)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +133,7 @@ func BuildLoginWebAuthn(r *http.Request, hint, credentialRPID string) (*webauthn
 	if !slices.Contains(available, selected) {
 		return nil, nil, ErrRPIDUnavailable
 	}
-	wa, err := BuildWebAuthnForRPID(r, selected)
+	wa, err := BuildWebAuthnForRPID(tenantCtx, r, selected)
 	return wa, available, err
 }
 
@@ -157,7 +159,7 @@ func originsForRPID(origins []string, rpID string) []string {
 	return allowed
 }
 
-func resolveOrigins(r *http.Request, settings *system_setting.PasskeySettings) ([]string, error) {
+func resolveOrigins(tenantCtx context.Context, r *http.Request, settings *system_setting.PasskeySettings) ([]string, error) {
 	originsStr := strings.TrimSpace(settings.Origins)
 	if originsStr != "" {
 		originList := strings.Split(originsStr, ",")
@@ -188,8 +190,8 @@ autoDetect:
 	host := r.Host
 
 	// 如果无法从请求获取Host，尝试从ServerAddress获取
-	if host == "" && system_setting.ServerAddress != "" {
-		if parsed, err := url.Parse(system_setting.ServerAddress); err == nil && parsed.Host != "" {
+	if host == "" && system_setting.TenantState(tenantCtx).ServerAddress != "" {
+		if parsed, err := url.Parse(system_setting.TenantState(tenantCtx).ServerAddress); err == nil && parsed.Host != "" {
 			host = parsed.Host
 			if scheme == "" && parsed.Scheme != "" {
 				scheme = parsed.Scheme
@@ -197,7 +199,7 @@ autoDetect:
 		}
 	}
 	if host == "" {
-		return nil, fmt.Errorf("无法确定 Passkey 的 Origin，请在系统设置或 Passkey 设置中指定。当前 Host: '%s', ServerAddress: '%s'", r.Host, system_setting.ServerAddress)
+		return nil, fmt.Errorf("无法确定 Passkey 的 Origin，请在系统设置或 Passkey 设置中指定。当前 Host: '%s', ServerAddress: '%s'", r.Host, system_setting.TenantState(tenantCtx).ServerAddress)
 	}
 	if scheme == "" {
 		scheme = "https"

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/go-redis/redis/v8"
 	"github.com/stretchr/testify/assert"
@@ -125,7 +126,7 @@ func TestUserSessionCacheTTLUsesShortCacheWindow(t *testing.T) {
 		if test.status == UserSessionStatusActive {
 			cacheDeadline = userSessionCacheDeadline()
 		}
-		require.NoError(t, writeUserSessionCache(entry, cacheDeadline), test.name)
+		require.NoError(t, writeUserSessionCache(testtenant.Context(), entry, cacheDeadline), test.name)
 		ttl := server.TTL(userSessionCacheKey(sid))
 		assert.Positive(t, ttl, test.name)
 		assert.LessOrEqual(t, ttl, test.wantMaxTTL, test.name)
@@ -133,7 +134,7 @@ func TestUserSessionCacheTTLUsesShortCacheWindow(t *testing.T) {
 
 	initialTTL := server.TTL(userSessionCacheKey("short-cache-ttl-0"))
 	server.FastForward(time.Second)
-	_, err := getUserSessionCache("short-cache-ttl-0")
+	_, err := getUserSessionCache(testtenant.Context(), "short-cache-ttl-0")
 	require.NoError(t, err)
 	remainingTTL := server.TTL(userSessionCacheKey("short-cache-ttl-0"))
 	assert.Positive(t, remainingTTL)
@@ -144,7 +145,7 @@ func TestUserSessionCacheTTLUsesShortCacheWindow(t *testing.T) {
 	nearExpiry.ExpiresAt = time.Now().Add(2 * time.Second).Unix()
 	nearExpiryDeadline := userSessionCacheDeadline()
 	remainingLifetime := time.Until(time.Unix(nearExpiry.ExpiresAt, 0))
-	require.NoError(t, writeUserSessionCache(nearExpiry, nearExpiryDeadline))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), nearExpiry, nearExpiryDeadline))
 	nearExpiryTTL := server.TTL(userSessionCacheKey(nearExpiry.SID))
 	assert.Positive(t, nearExpiryTTL)
 	assert.LessOrEqual(t, nearExpiryTTL, remainingLifetime, "cache TTL must not exceed the Session remaining lifetime")
@@ -152,7 +153,7 @@ func TestUserSessionCacheTTLUsesShortCacheWindow(t *testing.T) {
 	common.SyncFrequency = 0
 	fallback := newTestUserSession("short-cache-ttl-fallback", 1200, now).cacheEntry()
 	fallback.ExpiresAt = now + 300
-	require.NoError(t, writeUserSessionCache(fallback, userSessionCacheDeadline()))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), fallback, userSessionCacheDeadline()))
 	fallbackTTL := server.TTL(userSessionCacheKey(fallback.SID))
 	assert.Greater(t, fallbackTTL, 59*time.Second)
 	assert.LessOrEqual(t, fallbackTTL, 60*time.Second, "non-positive cache frequency must use the existing 60-second fallback")
@@ -168,13 +169,13 @@ func TestStaleActiveSessionCacheFillCannotRestartWindowAfterDenyExpires(t *testi
 	denied.RevokedAt = now
 	denied.RevokedReason = "test-revoke"
 
-	require.NoError(t, writeUserSessionCache(&denied, time.Time{}))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), &denied, time.Time{}))
 	cacheKey := userSessionCacheKey(active.SID)
 	assert.True(t, server.Exists(cacheKey))
 	server.FastForward(3 * time.Second)
 	assert.False(t, server.Exists(cacheKey), "the short deny tombstone must have expired in this race setup")
 
-	err := writeUserSessionCache(active, time.Now().Add(-time.Millisecond))
+	err := writeUserSessionCache(testtenant.Context(), active, time.Now().Add(-time.Millisecond))
 	assert.ErrorIs(t, err, errUserSessionCacheObservationStale)
 	assert.False(t, server.Exists(cacheKey), "a delayed pre-revoke active snapshot must not restart a fresh cache window")
 }
@@ -186,7 +187,7 @@ func TestActiveSessionCacheFillUsesRemainingObservationWindow(t *testing.T) {
 	entry := newTestUserSession("bounded-active-cache-fill", 1202, now).cacheEntry()
 	deadline := time.Now().Add(1500 * time.Millisecond)
 
-	require.NoError(t, writeUserSessionCache(entry, deadline))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), entry, deadline))
 	ttl := server.TTL(userSessionCacheKey(entry.SID))
 	assert.Positive(t, ttl)
 	assert.LessOrEqual(t, ttl, 1500*time.Millisecond, "a delayed fill must inherit only the unused observation window")
@@ -200,14 +201,14 @@ func TestSessionCacheLuaUsesAbsoluteActiveAndRelativeDenyExpiry(t *testing.T) {
 	common.RDB.AddHook(setMiniRedisTimeOnEvalHook{server: server, at: deadline.Add(time.Second)})
 
 	active := newTestUserSession("delayed-active-cache-eval", 1203, now).cacheEntry()
-	require.NoError(t, writeUserSessionCache(active, deadline))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), active, deadline))
 	assert.False(t, server.Exists(userSessionCacheKey(active.SID)), "an active fill executed after its absolute deadline must not recreate the cache")
 
 	denied := newTestUserSession("delayed-deny-cache-eval", 1204, now).cacheEntry()
 	denied.Status = UserSessionStatusRevoked
 	denied.RevokedAt = now
 	denied.RevokedReason = "test-revoke"
-	require.NoError(t, writeUserSessionCache(denied, time.Time{}))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), denied, time.Time{}))
 	denyTTL := server.TTL(userSessionCacheKey(denied.SID))
 	assert.Positive(t, denyTTL)
 	assert.LessOrEqual(t, denyTTL, 2*time.Second, "a delayed deny publication must receive a full relative short TTL at Redis execution")
@@ -221,24 +222,24 @@ func TestUserSessionCreateListAndRevokeOne(t *testing.T) {
 	t.Cleanup(func() { _ = DB.Unscoped().Delete(&User{}, user.Id).Error })
 	first := newTestUserSession("session-one", 1001, now)
 	second := newTestUserSession("session-two", 1001, now+1)
-	require.NoError(t, CreateUserSession(first))
-	require.NoError(t, CreateUserSession(second))
+	require.NoError(t, CreateUserSession(testtenant.Context(), first))
+	require.NoError(t, CreateUserSession(testtenant.Context(), second))
 
-	sessions, err := ListActiveUserSessions(1001, first.SID, now)
+	sessions, err := ListActiveUserSessions(testtenant.Context(), 1001, first.SID, now)
 	require.NoError(t, err)
 	require.Len(t, sessions, 2)
 	assert.Equal(t, first.SID, sessions[0].SID)
 
-	revoked, err := RevokeUserSession(1001, first.SID, "user_revoked")
+	revoked, err := RevokeUserSession(testtenant.Context(), 1001, first.SID, "user_revoked")
 	require.NoError(t, err)
 	assert.True(t, revoked)
-	revoked, err = RevokeUserSession(1001, first.SID, "duplicate")
+	revoked, err = RevokeUserSession(testtenant.Context(), 1001, first.SID, "duplicate")
 	require.NoError(t, err)
 	assert.False(t, revoked)
 
-	_, err = GetUserSessionCached(first.SID)
+	_, err = GetUserSessionCached(testtenant.Context(), first.SID)
 	assert.ErrorIs(t, err, ErrUserSessionInactive)
-	active, err := GetUserSessionCached(second.SID)
+	active, err := GetUserSessionCached(testtenant.Context(), second.SID)
 	require.NoError(t, err)
 	assert.Equal(t, second.SID, active.SID)
 }
@@ -248,25 +249,25 @@ func TestRotateUserSessionRefreshRaceAndReuse(t *testing.T) {
 	now := time.Now().Unix()
 	createUserSessionTestUser(t, 1002, 1)
 	session := newTestUserSession("rotate-session", 1002, now)
-	require.NoError(t, CreateUserSession(session))
+	require.NoError(t, CreateUserSession(testtenant.Context(), session))
 
-	rotated, err := RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "next-hash", now+10, 30*time.Second)
+	rotated, err := RotateUserSessionRefresh(testtenant.Context(), 1002, session.SID, session.RefreshHash, "next-hash", now+10, 30*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, "next-hash", rotated.RefreshHash)
 	assert.Equal(t, session.RefreshHash, rotated.PreviousRefreshHash)
 	assert.Equal(t, now+40, rotated.PreviousValidUntil)
 
-	_, err = RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "unused-hash", now+20, 30*time.Second)
+	_, err = RotateUserSessionRefresh(testtenant.Context(), 1002, session.SID, session.RefreshHash, "unused-hash", now+20, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshRace)
-	_, err = RotateUserSessionRefresh(1002, session.SID, "unknown-hash", "unused-hash", now+20, 30*time.Second)
+	_, err = RotateUserSessionRefresh(testtenant.Context(), 1002, session.SID, "unknown-hash", "unused-hash", now+20, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshInvalid)
-	stored, getErr := GetUserSessionBySID(session.SID)
+	stored, getErr := GetUserSessionBySID(testtenant.Context(), session.SID)
 	require.NoError(t, getErr)
 	assert.Equal(t, UserSessionStatusActive, stored.Status)
 
-	_, err = RotateUserSessionRefresh(1002, session.SID, session.RefreshHash, "unused-hash", now+41, 30*time.Second)
+	_, err = RotateUserSessionRefresh(testtenant.Context(), 1002, session.SID, session.RefreshHash, "unused-hash", now+41, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshReuse)
-	stored, getErr = GetUserSessionBySID(session.SID)
+	stored, getErr = GetUserSessionBySID(testtenant.Context(), session.SID)
 	require.NoError(t, getErr)
 	assert.Equal(t, UserSessionStatusRevoked, stored.Status)
 	assert.Equal(t, "refresh_reuse", stored.RevokedReason)
@@ -282,7 +283,7 @@ func TestUserSessionPreviousRefreshHashNormalizesLegacyPadding(t *testing.T) {
 	blank.PreviousRefreshHash = strings.Repeat(" ", 64)
 	blank.PreviousValidUntil = now + 60
 	require.NoError(t, DB.Create(blank).Error)
-	loadedBlank, err := GetUserSessionBySID(blank.SID)
+	loadedBlank, err := GetUserSessionBySID(testtenant.Context(), blank.SID)
 	require.NoError(t, err)
 	assert.Empty(t, loadedBlank.PreviousRefreshHash)
 
@@ -291,7 +292,7 @@ func TestUserSessionPreviousRefreshHashNormalizesLegacyPadding(t *testing.T) {
 	valid.PreviousRefreshHash = digest
 	valid.PreviousValidUntil = now + 60
 	require.NoError(t, DB.Create(valid).Error)
-	loadedValid, err := GetUserSessionBySID(valid.SID)
+	loadedValid, err := GetUserSessionBySID(testtenant.Context(), valid.SID)
 	require.NoError(t, err)
 	assert.Equal(t, digest, loadedValid.PreviousRefreshHash)
 
@@ -300,10 +301,10 @@ func TestUserSessionPreviousRefreshHashNormalizesLegacyPadding(t *testing.T) {
 			"previous_refresh_hash": digest + "   ",
 			"previous_valid_until":  now + 60,
 		}).Error)
-	_, err = RotateUserSessionRefresh(valid.UserID, valid.SID, digest, strings.Repeat("c", 64), now+1, 30*time.Second)
+	_, err = RotateUserSessionRefresh(testtenant.Context(), valid.UserID, valid.SID, digest, strings.Repeat("c", 64), now+1, 30*time.Second)
 	assert.ErrorIs(t, err, ErrUserSessionRefreshRace)
 
-	revoked, err := RevokeUserSessionByRefreshHash(valid.SID, digest, "legacy-padded-refresh-logout")
+	revoked, err := RevokeUserSessionByRefreshHash(testtenant.Context(), valid.SID, digest, "legacy-padded-refresh-logout")
 	require.NoError(t, err)
 	assert.True(t, revoked, "refresh-cookie logout must accept a legacy CHAR-padded previous digest inside its grace window")
 }
@@ -315,7 +316,7 @@ func TestUserSessionCacheExcludesRefreshDigests(t *testing.T) {
 	session := newTestUserSession("cache-without-refresh-digests", 1011, now)
 	session.PreviousRefreshHash = strings.Repeat("a", 64)
 	session.PreviousValidUntil = now + 30
-	require.NoError(t, writeUserSessionCache(session.cacheEntry(), userSessionCacheDeadline()))
+	require.NoError(t, writeUserSessionCache(testtenant.Context(), session.cacheEntry(), userSessionCacheDeadline()))
 
 	cacheKey := userSessionCacheKey(session.SID)
 	fields, err := common.RDB.HGetAll(context.Background(), cacheKey).Result()
@@ -329,7 +330,7 @@ func TestUserSessionCacheExcludesRefreshDigests(t *testing.T) {
 		"PreviousRefreshHash", strings.Repeat("c", 64)+"   ",
 		"PreviousValidUntil", now+30,
 	).Err())
-	entry, err := getUserSessionCache(session.SID)
+	entry, err := getUserSessionCache(testtenant.Context(), session.SID)
 	require.NoError(t, err)
 	cachedSession := entry.session()
 	assert.Empty(t, cachedSession.RefreshHash)
@@ -347,23 +348,23 @@ func TestRevokeOtherUserSessionsKeepsCurrent(t *testing.T) {
 		if sid == "other-one" {
 			session.UserAuthVersion = 99
 		}
-		require.NoError(t, CreateUserSession(session))
+		require.NoError(t, CreateUserSession(testtenant.Context(), session))
 	}
-	require.NoError(t, CreateUserSession(newTestUserSession("different-user", 1004, now)))
+	require.NoError(t, CreateUserSession(testtenant.Context(), newTestUserSession("different-user", 1004, now)))
 
-	count, err := RevokeOtherUserSessions(1003, "current-session", "revoke_others")
+	count, err := RevokeOtherUserSessions(testtenant.Context(), 1003, "current-session", "revoke_others")
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), count)
 
-	current, err := GetUserSessionCached("current-session")
+	current, err := GetUserSessionCached(testtenant.Context(), "current-session")
 	require.NoError(t, err)
 	assert.Equal(t, UserSessionStatusActive, current.Status)
-	_, err = GetUserSessionCached("other-one")
+	_, err = GetUserSessionCached(testtenant.Context(), "other-one")
 	assert.True(t, errors.Is(err, ErrUserSessionInactive))
-	stale, err := GetUserSessionBySID("other-one")
+	stale, err := GetUserSessionBySID(testtenant.Context(), "other-one")
 	require.NoError(t, err)
 	assert.Equal(t, UserSessionStatusRevoked, stale.Status, "revocation must include active sessions from stale auth versions")
-	different, err := GetUserSessionCached("different-user")
+	different, err := GetUserSessionCached(testtenant.Context(), "different-user")
 	require.NoError(t, err)
 	assert.Equal(t, 1004, different.UserID)
 }
@@ -373,19 +374,19 @@ func TestRevokeUserSessionByRefreshHashRequiresSecret(t *testing.T) {
 	now := time.Now().Unix()
 	createUserSessionTestUser(t, 1005, 1)
 	session := newTestUserSession("refresh-logout-session", 1005, now)
-	require.NoError(t, CreateUserSession(session))
+	require.NoError(t, CreateUserSession(testtenant.Context(), session))
 
-	revoked, err := RevokeUserSessionByRefreshHash(session.SID, "wrong-hash", "logout")
+	revoked, err := RevokeUserSessionByRefreshHash(testtenant.Context(), session.SID, "wrong-hash", "logout")
 	require.NoError(t, err)
 	assert.False(t, revoked)
-	active, err := GetUserSessionCached(session.SID)
+	active, err := GetUserSessionCached(testtenant.Context(), session.SID)
 	require.NoError(t, err)
 	assert.Equal(t, UserSessionStatusActive, active.Status)
 
-	revoked, err = RevokeUserSessionByRefreshHash(session.SID, session.RefreshHash, "logout")
+	revoked, err = RevokeUserSessionByRefreshHash(testtenant.Context(), session.SID, session.RefreshHash, "logout")
 	require.NoError(t, err)
 	assert.True(t, revoked)
-	_, err = GetUserSessionCached(session.SID)
+	_, err = GetUserSessionCached(testtenant.Context(), session.SID)
 	assert.ErrorIs(t, err, ErrUserSessionInactive)
 }
 
@@ -412,14 +413,14 @@ func TestUserSessionGrowthCountsUseBroadActiveAndStrictIssuancePredicates(t *tes
 	rows[4].ExpiresAt = now
 	require.NoError(t, DB.Create(&rows).Error)
 
-	activeCount, err := CountActiveUserSessions(1006, now)
+	activeCount, err := CountActiveUserSessions(testtenant.Context(), 1006, now)
 	require.NoError(t, err)
 	assert.Equal(t, int64(2), activeCount, "active count includes stale auth versions but excludes expired and revoked rows")
 
-	issuedCount, err := CountUserSessionsCreatedSince(1006, now-3600)
+	issuedCount, err := CountUserSessionsCreatedSince(testtenant.Context(), 1006, now-3600)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), issuedCount, "issuance count includes every status and uses a strict cutoff")
-	globalCount, err := CountUserSessionsCreatedSince(0, now-3600)
+	globalCount, err := CountUserSessionsCreatedSince(testtenant.Context(), 0, now-3600)
 	require.NoError(t, err)
 	assert.Equal(t, issuedCount, globalCount)
 }
@@ -442,7 +443,7 @@ func TestListActiveUserSessionsKeepsCurrentAndBoundsOtherSessions(t *testing.T) 
 	rows = append(rows, *stale)
 	require.NoError(t, DB.CreateInBatches(rows, 100).Error)
 
-	sessions, err := ListActiveUserSessions(1007, current.SID, now)
+	sessions, err := ListActiveUserSessions(testtenant.Context(), 1007, current.SID, now)
 	require.NoError(t, err)
 	require.Len(t, sessions, 100)
 	assert.Equal(t, current.SID, sessions[0].SID)
@@ -451,7 +452,7 @@ func TestListActiveUserSessionsKeepsCurrentAndBoundsOtherSessions(t *testing.T) 
 		assert.NotEqual(t, stale.SID, session.SID)
 	}
 
-	sessionsWithoutCurrent, err := ListActiveUserSessions(1007, "missing-current", now)
+	sessionsWithoutCurrent, err := ListActiveUserSessions(testtenant.Context(), 1007, "missing-current", now)
 	require.NoError(t, err)
 	assert.Len(t, sessionsWithoutCurrent, userSessionListLimit, "a missing current SID must not reduce the total list limit")
 }
@@ -484,13 +485,13 @@ func TestRevokeUserSessionsReturnsCumulativeProgressAndSupportsRetry(t *testing.
 		}
 	})
 
-	affected, err := RevokeAllUserSessions(1008, "batch-test")
+	affected, err := RevokeAllUserSessions(testtenant.Context(), 1008, "batch-test")
 	assert.ErrorIs(t, err, forcedErr)
 	assert.Equal(t, int64(userSessionRevokeBatchSize), affected)
 	require.NoError(t, DB.Callback().Update().Remove(callbackName))
 	callbackRegistered = false
 
-	retried, err := RevokeAllUserSessions(1008, "batch-test-retry")
+	retried, err := RevokeAllUserSessions(testtenant.Context(), 1008, "batch-test-retry")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), retried)
 	var activeCount int64
@@ -557,8 +558,8 @@ func TestDeleteExpiredUserSessionsLoopsInChunksAndRechecksPredicate(t *testing.T
 	}))
 	t.Cleanup(func() { _ = DB.Callback().Delete().Remove(callbackName) })
 
-	require.NoError(t, DeleteExpiredUserSessions(now))
-	require.NoError(t, DeleteOldRevokedUserSessions(now))
+	require.NoError(t, DeleteExpiredUserSessions(testtenant.Context(), now))
+	require.NoError(t, DeleteOldRevokedUserSessions(testtenant.Context(), now))
 	assert.Equal(t, 4, deleteCalls, "expired and retained-revoked scans each delete in bounded chunks")
 	var remaining []UserSession
 	require.NoError(t, DB.Order("sid").Find(&remaining).Error)
@@ -616,15 +617,15 @@ func TestUserUpdateBumpsAuthVersionOnlyForAuthorizationChanges(t *testing.T) {
 	assert.Equal(t, int64(1), user.AuthVersion)
 
 	user.DisplayName = "profile-only"
-	require.NoError(t, user.Update(false))
+	require.NoError(t, user.Update(testtenant.Context(), false))
 	assert.Equal(t, int64(1), user.AuthVersion)
 
 	user.Group = "vip"
-	require.NoError(t, user.Update(false))
+	require.NoError(t, user.Update(testtenant.Context(), false))
 	assert.Equal(t, int64(2), user.AuthVersion)
 
 	user.Role = common.RoleAdminUser
-	require.NoError(t, user.Update(false))
+	require.NoError(t, user.Update(testtenant.Context(), false))
 	assert.Equal(t, int64(3), user.AuthVersion)
 }
 
@@ -642,13 +643,13 @@ func TestPasswordResetBumpsAuthVersionAndRevokesSessions(t *testing.T) {
 	require.NoError(t, DB.Create(user).Error)
 	t.Cleanup(func() { _ = DB.Unscoped().Delete(&User{}, user.Id).Error })
 	session := newTestUserSession("password-reset-session", user.Id, now)
-	require.NoError(t, CreateUserSession(session))
+	require.NoError(t, CreateUserSession(testtenant.Context(), session))
 
-	require.NoError(t, ResetUserPasswordByEmail(user.Email, "new-password"))
+	require.NoError(t, ResetUserPasswordByEmail(testtenant.Context(), user.Email, "new-password"))
 	var stored User
 	require.NoError(t, DB.First(&stored, user.Id).Error)
 	assert.Equal(t, int64(2), stored.AuthVersion)
-	storedSession, err := GetUserSessionBySID(session.SID)
+	storedSession, err := GetUserSessionBySID(testtenant.Context(), session.SID)
 	require.NoError(t, err)
 	assert.Equal(t, UserSessionStatusRevoked, storedSession.Status)
 	assert.Equal(t, "password_reset", storedSession.RevokedReason)

@@ -18,6 +18,7 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useTranslation } from 'react-i18next'
 
+import { tenantPath } from '@/lib/tenant'
 import { cn } from '@/lib/utils'
 
 import type { SystemStatus } from '../types'
@@ -25,19 +26,26 @@ import type { SystemStatus } from '../types'
 interface TermsFooterProps {
   variant?: 'sign-in' | 'sign-up'
   className?: string
-  status?: SystemStatus | null
+  status?: Pick<
+    SystemStatus,
+    'user_agreement_enabled' | 'privacy_policy_enabled'
+  > | null
+  agreementUrl?: string
+  privacyUrl?: string
 }
 
 export function TermsFooter({
   variant = 'sign-in',
   className,
   status,
+  agreementUrl,
+  privacyUrl,
 }: TermsFooterProps) {
   const { t } = useTranslation()
   const text =
     variant === 'sign-in'
-      ? 'By clicking sign in, you agree to our'
-      : 'By creating an account, you agree to our'
+      ? t('By clicking sign in, you agree to our')
+      : t('By creating an account, you agree to our')
 
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
   const hasPrivacyPolicy = Boolean(status?.privacy_policy_enabled)
@@ -47,12 +55,12 @@ export function TermsFooter({
   }
 
   const agreementLink = {
-    label: 'User Agreement',
-    href: '/user-agreement',
+    label: t('User Agreement'),
+    href: agreementUrl || tenantPath('/user-agreement'),
   }
   const privacyLink = {
-    label: 'Privacy Policy',
-    href: '/privacy-policy',
+    label: t('Privacy Policy'),
+    href: privacyUrl || tenantPath('/privacy-policy'),
   }
 
   const activeLinks =

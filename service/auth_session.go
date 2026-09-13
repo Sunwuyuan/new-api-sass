@@ -1,5 +1,8 @@
 package service
 
+import context "context"
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"errors"
 	"fmt"
@@ -49,19 +52,19 @@ type AuthBundle struct {
 	RefreshToken    string           `json:"-"`
 }
 
-func CreateLoginSession(userID int, loginMethod, ip, userAgent string) (*AuthBundle, error) {
-	return createLoginSession(userID, 0, loginMethod, ip, userAgent)
+func CreateLoginSession(tenantCtx context.Context, userID int, loginMethod, ip, userAgent string) (*AuthBundle, error) {
+	return createLoginSession(tenantCtx, userID, 0, loginMethod, ip, userAgent)
 }
 
-func CreateLoginSessionAtAuthVersion(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
+func CreateLoginSessionAtAuthVersion(tenantCtx context.Context, userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
 	if expectedAuthVersion <= 0 {
 		return nil, ErrLoginSessionInvalid
 	}
-	return createLoginSession(userID, expectedAuthVersion, loginMethod, ip, userAgent)
+	return createLoginSession(tenantCtx, userID, expectedAuthVersion, loginMethod, ip, userAgent)
 }
 
-func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
-	user, err := model.GetUserCache(userID)
+func createLoginSession(tenantCtx context.Context, userID int, expectedAuthVersion int64, loginMethod, ip, userAgent string) (*AuthBundle, error) {
+	user, err := model.GetUserCache(tenantCtx, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -72,36 +75,36 @@ func createLoginSession(userID int, expectedAuthVersion int64, loginMethod, ip, 
 		return nil, ErrLoginSessionRevoked
 	}
 	now := time.Now().Unix()
-	activeCount, err := model.CountActiveUserSessions(userID, now)
+	activeCount, err := model.CountActiveUserSessions(tenantCtx, userID, now)
 	if err != nil {
 		return nil, err
 	}
 	if activeCount >= int64(common.UserSessionActiveLimit) {
 		return nil, model.ErrUserSessionLimit
 	}
-	issuanceCount, err := model.CountUserSessionsCreatedSince(userID, now-common.UserSessionIssuanceWindowSeconds)
+	issuanceCount, err := model.CountUserSessionsCreatedSince(tenantCtx, userID, now-common.UserSessionIssuanceWindowSeconds)
 	if err != nil {
 		return nil, err
 	}
 	if issuanceCount >= int64(common.UserSessionIssuanceLimit) {
 		return nil, model.ErrUserSessionIssuanceLimit
 	}
-	session, refreshSecret, err := newLoginSession(userID, user.AuthVersion, loginMethod, ip, userAgent)
+	session, refreshSecret, err := newLoginSession(tenantCtx, userID, user.AuthVersion, loginMethod, ip, userAgent)
 	if err != nil {
 		return nil, err
 	}
-	if err := model.CreateUserSession(session); err != nil {
+	if err := model.CreateUserSession(tenantCtx, session); err != nil {
 		return nil, err
 	}
-	bundle, err := issueAuthBundle(session, session.SID+"."+refreshSecret, true)
+	bundle, err := issueAuthBundle(tenantCtx, session, session.SID+"."+refreshSecret, true)
 	if err != nil {
-		_, _ = model.RevokeUserSession(userID, session.SID, "token_issue_failed")
+		_, _ = model.RevokeUserSession(tenantCtx, userID, session.SID, "token_issue_failed")
 		return nil, err
 	}
 	return bundle, nil
 }
 
-func newLoginSession(userID int, authVersion int64, loginMethod, ip, userAgent string) (*model.UserSession, string, error) {
+func newLoginSession(tenantCtx context.Context, userID int, authVersion int64, loginMethod, ip, userAgent string) (*model.UserSession, string, error) {
 	refreshSecret, err := common.GenerateRandomCharsKey(64)
 	if err != nil {
 		return nil, "", err
@@ -113,7 +116,7 @@ func newLoginSession(userID int, authVersion int64, loginMethod, ip, userAgent s
 		Version:         1,
 		UserAuthVersion: authVersion,
 		Status:          model.UserSessionStatusActive,
-		RefreshHash:     hashRefreshSecret(refreshSecret),
+		RefreshHash:     hashRefreshSecret(tenantCtx, refreshSecret),
 		LoginMethod:     strings.TrimSpace(loginMethod),
 		IP:              truncateAuthMetadata(ip, 64),
 		UserAgent:       truncateAuthMetadata(userAgent, 512),
@@ -127,8 +130,8 @@ func newLoginSession(userID int, authVersion int64, loginMethod, ip, userAgent s
 	return session, refreshSecret, nil
 }
 
-func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.UserBase, error) {
-	session, err := model.GetUserSessionCached(identity.SessionID)
+func ValidateLoginSession(tenantCtx context.Context, identity AuthIdentity) (*model.UserSession, *model.UserBase, error) {
+	session, err := model.GetUserSessionCached(tenantCtx, identity.SessionID)
 	if err != nil {
 		if errors.Is(err, model.ErrUserSessionInactive) {
 			return nil, nil, ErrLoginSessionRevoked
@@ -139,7 +142,7 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 	if session.UserID != identity.UserID || session.Status != model.UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= now || session.Version != identity.SessionVersion || session.UserAuthVersion != identity.UserAuthVersion {
 		return nil, nil, ErrLoginSessionRevoked
 	}
-	user, err := model.GetUserCache(identity.UserID)
+	user, err := model.GetUserCache(tenantCtx, identity.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -151,11 +154,11 @@ func ValidateLoginSession(identity AuthIdentity) (*model.UserSession, *model.Use
 
 // ValidateSessionReference validates a server-side flow bound to an existing
 // dashboard session without requiring an access token on the callback request.
-func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
+func ValidateSessionReference(tenantCtx context.Context, userID int, sid string) (AuthIdentity, error) {
 	if userID <= 0 || strings.TrimSpace(sid) == "" {
 		return AuthIdentity{}, ErrLoginSessionInvalid
 	}
-	session, err := model.GetUserSessionCached(sid)
+	session, err := model.GetUserSessionCached(tenantCtx, sid)
 	if err != nil {
 		return AuthIdentity{}, err
 	}
@@ -165,7 +168,7 @@ func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
 		UserAuthVersion: session.UserAuthVersion,
 		SessionVersion:  session.Version,
 	}
-	if _, _, err := ValidateLoginSession(identity); err != nil {
+	if _, _, err := ValidateLoginSession(tenantCtx, identity); err != nil {
 		return AuthIdentity{}, err
 	}
 	return identity, nil
@@ -175,30 +178,30 @@ func ValidateSessionReference(userID int, sid string) (AuthIdentity, error) {
 // preserves only the current browser session at a new session version and
 // returns a replacement access token. Call after a successful 2FA/passkey
 // security-setting mutation that did not already advance AuthVersion.
-func AdvanceCurrentSessionSecurity(identity AuthIdentity, reason string) (*AuthBundle, error) {
-	nextUserAuthVersion, err := model.BumpUserAuthVersion(identity.UserID)
+func AdvanceCurrentSessionSecurity(tenantCtx context.Context, identity AuthIdentity, reason string) (*AuthBundle, error) {
+	nextUserAuthVersion, err := model.BumpUserAuthVersion(tenantCtx, identity.UserID)
 	if err != nil {
 		return nil, err
 	}
-	return advanceCurrentSessionToVersion(identity, nextUserAuthVersion, reason)
+	return advanceCurrentSessionToVersion(tenantCtx, identity, nextUserAuthVersion, reason)
 }
 
 // AdvanceCurrentSessionToUserVersion is used when the security mutation and
 // AuthVersion increment were committed in the same transaction (for example,
 // a password change).
-func AdvanceCurrentSessionToUserVersion(identity AuthIdentity, reason string) (*AuthBundle, error) {
-	user, err := model.GetUserCache(identity.UserID)
+func AdvanceCurrentSessionToUserVersion(tenantCtx context.Context, identity AuthIdentity, reason string) (*AuthBundle, error) {
+	user, err := model.GetUserCache(tenantCtx, identity.UserID)
 	if err != nil {
 		return nil, err
 	}
 	if user.Status != common.UserStatusEnabled || user.AuthVersion <= identity.UserAuthVersion {
 		return nil, ErrLoginSessionRevoked
 	}
-	return advanceCurrentSessionToVersion(identity, user.AuthVersion, reason)
+	return advanceCurrentSessionToVersion(tenantCtx, identity, user.AuthVersion, reason)
 }
 
-func advanceCurrentSessionToVersion(identity AuthIdentity, nextUserAuthVersion int64, reason string) (*AuthBundle, error) {
-	session, err := model.AdvanceUserSessionAuthVersion(
+func advanceCurrentSessionToVersion(tenantCtx context.Context, identity AuthIdentity, nextUserAuthVersion int64, reason string) (*AuthBundle, error) {
+	session, err := model.AdvanceUserSessionAuthVersion(tenantCtx,
 		identity.UserID,
 		identity.SessionID,
 		identity.SessionVersion,
@@ -208,13 +211,13 @@ func advanceCurrentSessionToVersion(identity AuthIdentity, nextUserAuthVersion i
 	if err != nil {
 		return nil, err
 	}
-	if _, err := model.RevokeOtherUserSessions(identity.UserID, identity.SessionID, reason); err != nil {
+	if _, err := model.RevokeOtherUserSessions(tenantCtx, identity.UserID, identity.SessionID, reason); err != nil {
 		return nil, err
 	}
-	return issueAuthBundle(session, "", true)
+	return issueAuthBundle(tenantCtx, session, "", true)
 }
 
-func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*AuthBundle, *model.User, error) {
+func RefreshLoginSession(tenantCtx context.Context, rawRefreshToken, expectedSID, ip, userAgent string) (*AuthBundle, *model.User, error) {
 	sid, secret, ok := splitRefreshToken(rawRefreshToken)
 	if !ok {
 		return nil, nil, ErrRefreshTokenInvalid
@@ -222,7 +225,7 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if expectedSID = strings.TrimSpace(expectedSID); expectedSID != "" && expectedSID != sid {
 		return nil, nil, ErrLoginSessionMismatch
 	}
-	session, err := model.GetUserSessionCached(sid)
+	session, err := model.GetUserSessionCached(tenantCtx, sid)
 	if err != nil {
 		if errors.Is(err, model.ErrUserSessionInactive) {
 			return nil, nil, ErrLoginSessionRevoked
@@ -232,25 +235,25 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	if session.Status != model.UserSessionStatusActive || session.RevokedAt != 0 || session.ExpiresAt <= time.Now().Unix() {
 		return nil, nil, ErrLoginSessionRevoked
 	}
-	userCache, err := model.GetUserCache(session.UserID)
+	userCache, err := model.GetUserCache(tenantCtx, session.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
-	currentUser, err := model.GetSelfUserById(session.UserID)
+	currentUser, err := model.GetSelfUserById(tenantCtx, session.UserID)
 	if err != nil {
 		return nil, nil, err
 	}
 	if userCache.Status != common.UserStatusEnabled || userCache.AuthVersion != session.UserAuthVersion ||
 		currentUser.Status != common.UserStatusEnabled || currentUser.AuthVersion != session.UserAuthVersion {
-		_, _ = model.RevokeUserSession(session.UserID, session.SID, "user_security_changed")
+		_, _ = model.RevokeUserSession(tenantCtx, session.UserID, session.SID, "user_security_changed")
 		return nil, nil, ErrLoginSessionRevoked
 	}
-	nextSecret := deriveNextRefreshSecret(sid, secret)
-	rotated, err := model.RotateUserSessionRefresh(session.UserID, sid, hashRefreshSecret(secret), hashRefreshSecret(nextSecret), time.Now().Unix(), RefreshReplayWindow)
+	nextSecret := deriveNextRefreshSecret(tenantCtx, sid, secret)
+	rotated, err := model.RotateUserSessionRefresh(tenantCtx, session.UserID, sid, hashRefreshSecret(tenantCtx, secret), hashRefreshSecret(tenantCtx, nextSecret), time.Now().Unix(), RefreshReplayWindow)
 	if err != nil {
 		if errors.Is(err, model.ErrUserSessionRefreshRace) && rotated != nil &&
-			hashRefreshSecret(nextSecret) == rotated.RefreshHash {
-			bundle, issueErr := issueAuthBundle(rotated, sid+"."+nextSecret, true)
+			hashRefreshSecret(tenantCtx, nextSecret) == rotated.RefreshHash {
+			bundle, issueErr := issueAuthBundle(tenantCtx, rotated, sid+"."+nextSecret, true)
 			if issueErr != nil {
 				return nil, nil, issueErr
 			}
@@ -269,14 +272,14 @@ func RefreshLoginSession(rawRefreshToken, expectedSID, ip, userAgent string) (*A
 	}
 	rotated.IP = truncateAuthMetadata(ip, 64)
 	rotated.UserAgent = truncateAuthMetadata(userAgent, 512)
-	bundle, err := issueAuthBundle(rotated, sid+"."+nextSecret, true)
+	bundle, err := issueAuthBundle(tenantCtx, rotated, sid+"."+nextSecret, true)
 	if err != nil {
 		return nil, nil, err
 	}
 	return bundle, currentUser, nil
 }
 
-func RevokeByRefreshToken(rawRefreshToken, expectedSID, reason string) error {
+func RevokeByRefreshToken(tenantCtx context.Context, rawRefreshToken, expectedSID, reason string) error {
 	sid, secret, ok := splitRefreshToken(rawRefreshToken)
 	if !ok {
 		return nil
@@ -284,7 +287,7 @@ func RevokeByRefreshToken(rawRefreshToken, expectedSID, reason string) error {
 	if expectedSID = strings.TrimSpace(expectedSID); expectedSID != "" && expectedSID != sid {
 		return ErrLoginSessionMismatch
 	}
-	_, err := model.RevokeUserSessionByRefreshHash(sid, hashRefreshSecret(secret), reason)
+	_, err := model.RevokeUserSessionByRefreshHash(tenantCtx, sid, hashRefreshSecret(tenantCtx, secret), reason)
 	return err
 }
 
@@ -293,8 +296,8 @@ func RefreshTokenSID(rawRefreshToken string) (string, bool) {
 	return sid, ok
 }
 
-func ListLoginSessions(userID int, currentSID string) ([]LoginSessionView, error) {
-	sessions, err := model.ListActiveUserSessions(userID, currentSID, time.Now().Unix())
+func ListLoginSessions(tenantCtx context.Context, userID int, currentSID string) ([]LoginSessionView, error) {
+	sessions, err := model.ListActiveUserSessions(tenantCtx, userID, currentSID, time.Now().Unix())
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +311,7 @@ func ListLoginSessions(userID int, currentSID string) ([]LoginSessionView, error
 func WriteRefreshCookie(c *gin.Context, rawToken string) {
 	expiresAt := time.Now().Add(LoginSessionTTL)
 	if sid, _, ok := splitRefreshToken(rawToken); ok {
-		if session, err := model.GetUserSessionCached(sid); err == nil && session.ExpiresAt > time.Now().Unix() {
+		if session, err := model.GetUserSessionCached(c.Request.Context(), sid); err == nil && session.ExpiresAt > time.Now().Unix() {
 			expiresAt = time.Unix(session.ExpiresAt, 0)
 		}
 	}
@@ -316,7 +319,7 @@ func WriteRefreshCookie(c *gin.Context, rawToken string) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     RefreshCookieName,
 		Value:    rawToken,
-		Path:     "/api/user/auth",
+		Path:     tenant.Path(c.Request.Context(), "/api/user/auth"),
 		MaxAge:   maxAge,
 		Expires:  expiresAt,
 		HttpOnly: true,
@@ -330,7 +333,7 @@ func ClearRefreshCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     RefreshCookieName,
 		Value:    "",
-		Path:     "/api/user/auth",
+		Path:     tenant.Path(c.Request.Context(), "/api/user/auth"),
 		MaxAge:   -1,
 		Expires:  time.Unix(1, 0),
 		HttpOnly: true,
@@ -361,7 +364,7 @@ func writeSessionHintCookie(c *gin.Context, maxAge int, expiresAt time.Time) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     SessionHintCookieName,
 		Value:    SessionHintCookieValue,
-		Path:     "/",
+		Path:     tenant.Path(c.Request.Context(), "/"),
 		MaxAge:   maxAge,
 		Expires:  expiresAt,
 		HttpOnly: false,
@@ -374,7 +377,7 @@ func clearSessionHintCookie(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     SessionHintCookieName,
 		Value:    "",
-		Path:     "/",
+		Path:     tenant.Path(c.Request.Context(), "/"),
 		MaxAge:   -1,
 		Expires:  time.Unix(1, 0),
 		HttpOnly: false,
@@ -383,14 +386,14 @@ func clearSessionHintCookie(c *gin.Context) {
 	})
 }
 
-func issueAuthBundle(session *model.UserSession, rawRefreshToken string, current bool) (*AuthBundle, error) {
+func issueAuthBundle(tenantCtx context.Context, session *model.UserSession, rawRefreshToken string, current bool) (*AuthBundle, error) {
 	identity := AuthIdentity{
 		UserID:          session.UserID,
 		SessionID:       session.SID,
 		UserAuthVersion: session.UserAuthVersion,
 		SessionVersion:  session.Version,
 	}
-	accessToken, accessExpiresAt, err := IssueAccessToken(identity)
+	accessToken, accessExpiresAt, err := IssueAccessToken(tenantCtx, identity)
 	if err != nil {
 		return nil, err
 	}
@@ -427,12 +430,12 @@ func splitRefreshToken(raw string) (string, string, bool) {
 	return sid, secret, true
 }
 
-func hashRefreshSecret(secret string) string {
-	return common.GenerateHMACWithKey(authSigningKey("refresh"), secret)
+func hashRefreshSecret(tenantCtx context.Context, secret string) string {
+	return common.GenerateHMACWithKey(authSigningKey(tenantCtx, "refresh"), secret)
 }
 
-func deriveNextRefreshSecret(sid, currentSecret string) string {
-	return common.GenerateHMACWithKey(authSigningKey("refresh-rotate"), sid+"."+currentSecret)
+func deriveNextRefreshSecret(tenantCtx context.Context, sid, currentSecret string) string {
+	return common.GenerateHMACWithKey(authSigningKey(tenantCtx, "refresh-rotate"), sid+"."+currentSecret)
 }
 
 func truncateAuthMetadata(value string, max int) string {

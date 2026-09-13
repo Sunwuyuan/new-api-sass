@@ -4,9 +4,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
-	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
+	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -51,7 +52,7 @@ func TestDispatchAdaptorInit(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{
 				ChannelType:    constant.ChannelTypeTencent,
 				ApiKey:         tt.apiKey,
 				ChannelBaseUrl: tt.baseURL,

@@ -1,7 +1,8 @@
 package common
 
+import context "context"
+
 import (
-	"encoding/json"
 	"sync"
 )
 
@@ -12,27 +13,27 @@ var topupGroupRatio = map[string]float64{
 }
 var topupGroupRatioMutex sync.RWMutex
 
-func TopupGroupRatio2JSONString() string {
-	topupGroupRatioMutex.RLock()
-	defer topupGroupRatioMutex.RUnlock()
-	jsonBytes, err := json.Marshal(topupGroupRatio)
+func TopupGroupRatio2JSONString(tenantCtx context.Context) string {
+	TenantState(tenantCtx).topupGroupRatioMutex.RLock()
+	defer TenantState(tenantCtx).topupGroupRatioMutex.RUnlock()
+	jsonBytes, err := Marshal(TenantState(tenantCtx).topupGroupRatio)
 	if err != nil {
 		SysError("error marshalling topup group ratio: " + err.Error())
 	}
 	return string(jsonBytes)
 }
 
-func UpdateTopupGroupRatioByJSONString(jsonStr string) error {
-	topupGroupRatioMutex.Lock()
-	defer topupGroupRatioMutex.Unlock()
-	topupGroupRatio = make(map[string]float64)
-	return json.Unmarshal([]byte(jsonStr), &topupGroupRatio)
+func UpdateTopupGroupRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	TenantState(tenantCtx).topupGroupRatioMutex.Lock()
+	defer TenantState(tenantCtx).topupGroupRatioMutex.Unlock()
+	TenantState(tenantCtx).topupGroupRatio = make(map[string]float64)
+	return Unmarshal([]byte(jsonStr), &TenantState(tenantCtx).topupGroupRatio)
 }
 
-func GetTopupGroupRatio(name string) float64 {
-	topupGroupRatioMutex.RLock()
-	defer topupGroupRatioMutex.RUnlock()
-	ratio, ok := topupGroupRatio[name]
+func GetTopupGroupRatio(tenantCtx context.Context, name string) float64 {
+	TenantState(tenantCtx).topupGroupRatioMutex.RLock()
+	defer TenantState(tenantCtx).topupGroupRatioMutex.RUnlock()
+	ratio, ok := TenantState(tenantCtx).topupGroupRatio[name]
 	if !ok {
 		SysError("topup group ratio not found: " + name)
 		return 1

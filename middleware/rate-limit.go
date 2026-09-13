@@ -9,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 )
 
@@ -125,7 +126,7 @@ func redisRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark st
 }
 
 func memoryRateLimiter(c *gin.Context, maxRequestNum int, duration int64, mark string) {
-	key := mark + c.ClientIP()
+	key := tenant.MustKey(c.Request.Context(), mark+c.ClientIP())
 	if !inMemoryRateLimiter.Request(key, maxRequestNum, duration) {
 		writeRateLimited(c, duration)
 		return
@@ -221,7 +222,7 @@ func userRateLimitFactory(maxRequestNum int, duration int64, mark string) func(c
 			c.Abort()
 			return
 		}
-		key := fmt.Sprintf("%s:user:%d", mark, userID)
+		key := tenant.MustKey(c.Request.Context(), fmt.Sprintf("%s:user:%d", mark, userID))
 		if !inMemoryRateLimiter.Request(key, maxRequestNum, duration) {
 			writeRateLimited(c, duration)
 			return

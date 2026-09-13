@@ -1,5 +1,7 @@
 package middleware
 
+import context "context"
+
 import (
 	"fmt"
 	"net/http"
@@ -14,15 +16,15 @@ type headerNavAccess struct {
 	RequireAuth bool
 }
 
-func getHeaderNavAccess(module string) headerNavAccess {
+func getHeaderNavAccess(tenantCtx context.Context, module string) headerNavAccess {
 	fallback := headerNavAccess{
 		Enabled:     true,
 		RequireAuth: false,
 	}
 
-	common.OptionMapRWMutex.RLock()
-	raw := common.OptionMap["HeaderNavModules"]
-	common.OptionMapRWMutex.RUnlock()
+	common.TenantState(tenantCtx).OptionMapRWMutex.RLock()
+	raw := common.TenantState(tenantCtx).OptionMap["HeaderNavModules"]
+	common.TenantState(tenantCtx).OptionMapRWMutex.RUnlock()
 
 	if strings.TrimSpace(raw) == "" {
 		return fallback
@@ -103,7 +105,7 @@ func parseHeaderNavBool(value any, fallback bool) bool {
 
 func HeaderNavModuleAuth(module string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		access := getHeaderNavAccess(module)
+		access := getHeaderNavAccess(c.Request.Context(), module)
 		if !access.Enabled {
 			c.JSON(http.StatusForbidden, gin.H{
 				"success": false,
@@ -124,7 +126,7 @@ func HeaderNavModuleAuth(module string) gin.HandlerFunc {
 
 func HeaderNavModulePublicOrUserAuth(module string) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		access := getHeaderNavAccess(module)
+		access := getHeaderNavAccess(c.Request.Context(), module)
 		if !access.Enabled || access.RequireAuth {
 			UserAuth()(c)
 			return

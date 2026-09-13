@@ -19,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 )
 
@@ -53,16 +54,25 @@ type pluginRouteDispatcher struct {
 
 func SetPluginRouter(outer *gin.Engine) gin.HandlerFunc {
 	trustedProxies, _, err := common.ResolveTrustedProxies(os.Getenv("TRUSTED_PROXIES"))
-	dispatcher := &pluginRouteDispatcher{registry: jsplugin.DefaultRegistry}
 	if err != nil {
-		common.SysError("configure plugin router trusted proxies: " + err.Error())
-		return dispatcher.dispatch
+		panic(err)
 	}
 	builder := newPluginGenerationBuilder(outer.Routes(), trustedProxies, productionPluginRouteHandlers)
-	if err = jsplugin.DefaultRegistry.SetGenerationPreparer(builder.prepare); err != nil {
-		common.SysError("build initial plugin router: " + err.Error())
+	var dispatchers tenant.Registry[*pluginRouteDispatcher]
+	return func(c *gin.Context) {
+		dispatcher, err := dispatchers.Get(c.Request.Context(), func() *pluginRouteDispatcher {
+			registry := jsplugin.TenantState(c.Request.Context()).DefaultRegistry
+			if err := registry.SetGenerationPreparer(builder.prepare); err != nil {
+				panic(err)
+			}
+			return &pluginRouteDispatcher{registry: registry}
+		})
+		if err != nil {
+			c.AbortWithStatus(http.StatusBadRequest)
+			return
+		}
+		dispatcher.dispatch(c)
 	}
-	return dispatcher.dispatch
 }
 
 func newPluginGenerationBuilder(staticRoutes []gin.RouteInfo, trustedProxies []string, handlers pluginRouteHandlers) *pluginGenerationBuilder {

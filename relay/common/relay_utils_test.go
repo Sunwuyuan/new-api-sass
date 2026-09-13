@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,12 +60,12 @@ func TestSanitizeURLForLogKeepsURLWithoutSensitiveQuery(t *testing.T) {
 func TestValidateMultipartDirectNormalizesImageField(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := strings.NewReader(`{"model":"wan2.7-i2v","prompt":"animate","image":" https://example.com/first.png "}`)
-	request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", body)
+	request := testtenant.NewRequest(http.MethodPost, "/v1/video/generations", body)
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Request = request
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		TaskRelayInfo: &TaskRelayInfo{},
 	}
 
@@ -84,11 +85,11 @@ func TestTaskDurationBounds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	newContext := func(t *testing.T, body string) (*gin.Context, *RelayInfo) {
-		request := httptest.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(body))
+		request := testtenant.NewRequest(http.MethodPost, "/v1/video/generations", strings.NewReader(body))
 		request.Header.Set("Content-Type", "application/json")
-		context, _ := gin.CreateTestContext(httptest.NewRecorder())
+		context, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 		context.Request = request
-		return context, &RelayInfo{TaskRelayInfo: &TaskRelayInfo{}}
+		return context, &RelayInfo{Context: testtenant.Context(), TaskRelayInfo: &TaskRelayInfo{}}
 	}
 
 	tests := []struct {

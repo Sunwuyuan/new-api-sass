@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -37,7 +38,7 @@ func createReserveTestToken(t *testing.T, remainQuota int) Token {
 		ExpiredTime: -1,
 		RemainQuota: remainQuota,
 	}
-	require.NoError(t, token.Insert())
+	require.NoError(t, token.Insert(testtenant.Context()))
 	return token
 }
 
@@ -60,16 +61,16 @@ func resetBatchUpdateTestState(t *testing.T) {
 	oldBatchEnabled := common.BatchUpdateEnabled
 	common.BatchUpdateEnabled = false
 	for i := range BatchUpdateTypeCount {
-		batchUpdateLocks[i].Lock()
-		batchUpdateStores[i] = make(map[int]int)
-		batchUpdateLocks[i].Unlock()
+		TenantState(testtenant.Context()).batchUpdateLocks[i].Lock()
+		TenantState(testtenant.Context()).batchUpdateStores[i] = make(map[int]int)
+		TenantState(testtenant.Context()).batchUpdateLocks[i].Unlock()
 	}
 	t.Cleanup(func() {
 		common.BatchUpdateEnabled = oldBatchEnabled
 		for i := range BatchUpdateTypeCount {
-			batchUpdateLocks[i].Lock()
-			batchUpdateStores[i] = make(map[int]int)
-			batchUpdateLocks[i].Unlock()
+			TenantState(testtenant.Context()).batchUpdateLocks[i].Lock()
+			TenantState(testtenant.Context()).batchUpdateStores[i] = make(map[int]int)
+			TenantState(testtenant.Context()).batchUpdateLocks[i].Unlock()
 		}
 	})
 }
@@ -79,25 +80,25 @@ func TestTryReserveQuotaWithoutRedis(t *testing.T) {
 	resetBatchUpdateTestState(t)
 
 	user := createReserveTestUser(t, 100)
-	reserved, err := TryReserveUserQuota(user.Id, 60)
+	reserved, err := TryReserveUserQuota(testtenant.Context(), user.Id, 60)
 	require.NoError(t, err)
 	assert.True(t, reserved)
 	assert.Equal(t, 40, getUserQuotaFromDB(t, user.Id))
 
-	reserved, err = TryReserveUserQuota(user.Id, 41)
+	reserved, err = TryReserveUserQuota(testtenant.Context(), user.Id, 41)
 	require.NoError(t, err)
 	assert.False(t, reserved)
 	assert.Equal(t, 40, getUserQuotaFromDB(t, user.Id))
 
 	token := createReserveTestToken(t, 80)
-	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 25, false)
+	reserved, err = TryReserveTokenQuota(testtenant.Context(), token.Id, token.Key, 25, false)
 	require.NoError(t, err)
 	assert.True(t, reserved)
 	reloaded := getTokenFromDB(t, token.Id)
 	assert.Equal(t, 55, reloaded.RemainQuota)
 	assert.Equal(t, 25, reloaded.UsedQuota)
 
-	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 56, false)
+	reserved, err = TryReserveTokenQuota(testtenant.Context(), token.Id, token.Key, 56, false)
 	require.NoError(t, err)
 	assert.False(t, reserved)
 	assert.Equal(t, 55, getTokenFromDB(t, token.Id).RemainQuota)
@@ -110,28 +111,28 @@ func TestRedisBatchReserveNeverFallsBackToStaleDatabaseBalance(t *testing.T) {
 	common.BatchUpdateEnabled = true
 
 	user := createReserveTestUser(t, 10)
-	reserved, err := TryReserveUserQuota(user.Id, 8)
+	reserved, err := TryReserveUserQuota(testtenant.Context(), user.Id, 8)
 	require.NoError(t, err)
 	assert.True(t, reserved)
 	assert.Equal(t, 10, getUserQuotaFromDB(t, user.Id), "batch delta is not flushed yet")
 
-	reserved, err = TryReserveUserQuota(user.Id, 3)
+	reserved, err = TryReserveUserQuota(testtenant.Context(), user.Id, 3)
 	require.NoError(t, err)
 	assert.False(t, reserved, "stale DB balance must not authorize a second spend")
-	cachedUser, err := GetUserCache(user.Id)
+	cachedUser, err := GetUserCache(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	assert.Equal(t, 2, cachedUser.Quota)
 
 	token := createReserveTestToken(t, 9)
-	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 7, false)
+	reserved, err = TryReserveTokenQuota(testtenant.Context(), token.Id, token.Key, 7, false)
 	require.NoError(t, err)
 	assert.True(t, reserved)
-	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 3, false)
+	reserved, err = TryReserveTokenQuota(testtenant.Context(), token.Id, token.Key, 3, false)
 	require.NoError(t, err)
 	assert.False(t, reserved)
 	assert.Equal(t, 9, getTokenFromDB(t, token.Id).RemainQuota)
 
-	batchUpdate()
+	batchUpdate(testtenant.Context())
 	assert.Equal(t, 2, getUserQuotaFromDB(t, user.Id))
 	reloadedToken := getTokenFromDB(t, token.Id)
 	assert.Equal(t, 2, reloadedToken.RemainQuota)
@@ -144,30 +145,30 @@ func TestBatchUpdateAccumulatesTwoMaximumRequestCharges(t *testing.T) {
 	common.BatchUpdateEnabled = true
 
 	user := createReserveTestUser(t, common.MaxQuota*2+100)
-	require.NoError(t, DecreaseUserQuota(user.Id, common.MaxQuota, false))
-	require.NoError(t, DecreaseUserQuota(user.Id, common.MaxQuota, false))
+	require.NoError(t, DecreaseUserQuota(testtenant.Context(), user.Id, common.MaxQuota, false))
+	require.NoError(t, DecreaseUserQuota(testtenant.Context(), user.Id, common.MaxQuota, false))
 
-	batchUpdate()
+	batchUpdate(testtenant.Context())
 	assert.Equal(t, 100, getUserQuotaFromDB(t, user.Id))
 }
 
 func TestBatchUpdateAccumulatorSaturatesOverflow(t *testing.T) {
 	resetBatchUpdateTestState(t)
 
-	addNewRecord(BatchUpdateTypeUserQuota, 1, math.MaxInt)
-	addNewRecord(BatchUpdateTypeUserQuota, 1, 1)
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	assert.Equal(t, math.MaxInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
+	addNewRecord(testtenant.Context(), BatchUpdateTypeUserQuota, 1, math.MaxInt)
+	addNewRecord(testtenant.Context(), BatchUpdateTypeUserQuota, 1, 1)
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
+	assert.Equal(t, math.MaxInt, TenantState(testtenant.Context()).batchUpdateStores[BatchUpdateTypeUserQuota][1])
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
 
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	batchUpdateStores[BatchUpdateTypeUserQuota] = make(map[int]int)
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
-	addNewRecord(BatchUpdateTypeUserQuota, 1, math.MinInt)
-	addNewRecord(BatchUpdateTypeUserQuota, 1, -1)
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
-	assert.Equal(t, math.MinInt, batchUpdateStores[BatchUpdateTypeUserQuota][1])
-	batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
+	TenantState(testtenant.Context()).batchUpdateStores[BatchUpdateTypeUserQuota] = make(map[int]int)
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
+	addNewRecord(testtenant.Context(), BatchUpdateTypeUserQuota, 1, math.MinInt)
+	addNewRecord(testtenant.Context(), BatchUpdateTypeUserQuota, 1, -1)
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Lock()
+	assert.Equal(t, math.MinInt, TenantState(testtenant.Context()).batchUpdateStores[BatchUpdateTypeUserQuota][1])
+	TenantState(testtenant.Context()).batchUpdateLocks[BatchUpdateTypeUserQuota].Unlock()
 }
 
 func TestReserveFallsBackToDatabaseWhenRedisIsUnavailable(t *testing.T) {
@@ -176,16 +177,16 @@ func TestReserveFallsBackToDatabaseWhenRedisIsUnavailable(t *testing.T) {
 	server := useUserCacheMiniRedis(t)
 
 	user := createReserveTestUser(t, 20)
-	require.NoError(t, populateUserCache(user))
+	require.NoError(t, populateUserCache(testtenant.Context(), user))
 	server.Close()
 
 	// Redis 故障时降级为数据库条件更新：服务保持可用且不会超扣。
-	reserved, err := TryReserveUserQuota(user.Id, 5)
+	reserved, err := TryReserveUserQuota(testtenant.Context(), user.Id, 5)
 	require.NoError(t, err)
 	assert.True(t, reserved)
 	assert.Equal(t, 15, getUserQuotaFromDB(t, user.Id))
 
-	reserved, err = TryReserveUserQuota(user.Id, 16)
+	reserved, err = TryReserveUserQuota(testtenant.Context(), user.Id, 16)
 	require.NoError(t, err)
 	assert.False(t, reserved)
 	assert.Equal(t, 15, getUserQuotaFromDB(t, user.Id))
@@ -197,24 +198,24 @@ func TestSynchronousReserveCompensatesCacheWhenPersistenceFails(t *testing.T) {
 	useUserCacheMiniRedis(t)
 
 	user := createReserveTestUser(t, 10)
-	require.NoError(t, populateUserCache(user))
+	require.NoError(t, populateUserCache(testtenant.Context(), user))
 	require.NoError(t, DB.Delete(&user).Error)
 
-	reserved, err := TryReserveUserQuota(user.Id, 6)
+	reserved, err := TryReserveUserQuota(testtenant.Context(), user.Id, 6)
 	assert.False(t, reserved)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	cached, cacheErr := cacheGetUserBase(user.Id)
+	cached, cacheErr := cacheGetUserBase(testtenant.Context(), user.Id)
 	require.NoError(t, cacheErr)
 	assert.Equal(t, 10, cached.Quota)
 
 	token := createReserveTestToken(t, 12)
-	_, err = GetTokenByKey(token.Key, true)
+	_, err = GetTokenByKey(testtenant.Context(), token.Key, true)
 	require.NoError(t, err)
 	require.NoError(t, DB.Delete(&token).Error)
-	reserved, err = TryReserveTokenQuota(token.Id, token.Key, 7, false)
+	reserved, err = TryReserveTokenQuota(testtenant.Context(), token.Id, token.Key, 7, false)
 	assert.False(t, reserved)
 	assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-	cachedToken, cacheErr := cacheGetTokenByKey(token.Key)
+	cachedToken, cacheErr := cacheGetTokenByKey(testtenant.Context(), token.Key)
 	require.NoError(t, cacheErr)
 	assert.Equal(t, 12, cachedToken.RemainQuota)
 	assert.Zero(t, cachedToken.UsedQuota)
@@ -226,36 +227,36 @@ func TestTokenCacheInitPreservesLiveQuotaAndFenceBlocksStaleSnapshot(t *testing.
 	server := useUserCacheMiniRedis(t)
 
 	token := createReserveTestToken(t, 100)
-	loaded, err := GetTokenByKey(token.Key, true)
+	loaded, err := GetTokenByKey(testtenant.Context(), token.Key, true)
 	require.NoError(t, err)
 	stale := *loaded
 
-	result, err := cacheApplyTokenQuotaDelta(token.Id, token.Key, -70)
+	result, err := cacheApplyTokenQuotaDelta(testtenant.Context(), token.Id, token.Key, -70)
 	require.NoError(t, err)
 	require.Equal(t, cacheQuotaOK, result)
 
 	// 已存在的哈希只刷新 TTL：数据库快照不得覆盖已被原子预扣的余额。
-	code, err := cacheInitToken(stale)
+	code, err := cacheInitToken(testtenant.Context(), stale)
 	require.NoError(t, err)
 	assert.Equal(t, 2, code)
-	cached, err := cacheGetTokenByKey(token.Key)
+	cached, err := cacheGetTokenByKey(testtenant.Context(), token.Key)
 	require.NoError(t, err)
 	assert.Equal(t, 30, cached.RemainQuota)
 
 	// 变更期间：fence 删除缓存并拦截并发读者手中的过期快照。
-	require.NoError(t, invalidateTokenCacheForMutation(token.Key))
-	code, err = cacheInitToken(stale)
+	require.NoError(t, invalidateTokenCacheForMutation(testtenant.Context(), token.Key))
+	code, err = cacheInitToken(testtenant.Context(), stale)
 	require.NoError(t, err)
 	assert.Zero(t, code, "the pre-mutation snapshot must not be published while fenced")
-	_, err = cacheGetTokenByKey(token.Key)
+	_, err = cacheGetTokenByKey(testtenant.Context(), token.Key)
 	assert.Error(t, err)
 
 	// fence 过期后可重新从数据库水合。
 	server.FastForward(time.Duration(tokenCacheFenceSeconds+1) * time.Second)
-	fresh, err := GetTokenByKey(token.Key, false)
+	fresh, err := GetTokenByKey(testtenant.Context(), token.Key, false)
 	require.NoError(t, err)
 	assert.Equal(t, 100, fresh.RemainQuota)
-	cached, err = cacheGetTokenByKey(token.Key)
+	cached, err = cacheGetTokenByKey(testtenant.Context(), token.Key)
 	require.NoError(t, err)
 	assert.Equal(t, 100, cached.RemainQuota)
 }

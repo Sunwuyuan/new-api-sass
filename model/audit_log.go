@@ -10,6 +10,7 @@ import (
 	"github.com/ClickHouse/clickhouse-go/v2"
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/logger"
+	"github.com/QuantumNous/new-api/tenant"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -24,8 +25,9 @@ const (
 // AuditLog is retained independently of usage logs and their cleanup/TTL policy.
 // TokenRef identifies a PAT generation without storing its bearer credential.
 type AuditLog struct {
+	TenantID   int64      `json:"-" gorm:"not null;index;uniqueIndex:tenant_audit_log_event_id,priority:1"`
 	Id         int        `json:"id"`
-	EventId    string     `json:"event_id" gorm:"type:varchar(64);uniqueIndex"`
+	EventId    string     `json:"event_id" gorm:"type:varchar(64);uniqueIndex:tenant_audit_log_event_id"`
 	UserId     int        `json:"user_id" gorm:"index:idx_audit_user_time,priority:1"`
 	Username   string     `json:"username" gorm:"type:varchar(64);index"`
 	ActorRole  int        `json:"actor_role"` // Immutable role of the actor when the event began, not the log owner.
@@ -72,7 +74,20 @@ func AccessTokenFingerprint(token string) string {
 // RecordAuditLog captures safe request metadata only; raw URLs, query strings,
 // credentials and response/request bodies must never enter this table.
 func RecordAuditLog(c *gin.Context, entry AuditLog) {
-	ctx := context.Background()
+	if c == nil || c.Request == nil {
+		common.SysError("audit event rejected: tenant request context is required")
+		return
+	}
+	RecordAuditLogContext(c.Request.Context(), c, entry)
+}
+
+// RecordAuditLogContext also serves jobs that have a workspace but no browser
+// request. The explicit context is required even when request metadata is absent.
+func RecordAuditLogContext(ctx context.Context, c *gin.Context, entry AuditLog) {
+	if _, err := tenant.FromContext(ctx); err != nil {
+		common.SysError("audit event rejected: tenant context is required")
+		return
+	}
 	if c != nil && c.Request != nil {
 		ctx = c.Request.Context()
 		entry.RequestId = c.GetString(common.RequestIdKey)
@@ -106,7 +121,7 @@ func RecordAuditLog(c *gin.Context, entry AuditLog) {
 		entry.ActorRole = 0 // Unknown actors remain visible to root only.
 	}
 	if entry.Username == "" {
-		entry.Username, _ = GetUsernameById(entry.UserId, false)
+		entry.Username, _ = GetUsernameById(ctx, entry.UserId, false)
 	}
 	ua := []rune(entry.UserAgent)
 	if len(ua) > 512 {
@@ -131,13 +146,13 @@ func RecordAuditLog(c *gin.Context, entry AuditLog) {
 			EncodedOther string `gorm:"column:other;type:json"`
 		}{AuditLog: entry, EncodedOther: string(encoded)}
 	}
-	if err := LOG_DB.Table("audit_logs").Create(row).Error; err != nil {
+	if err := LOG_DB.WithContext(ctx).Table("audit_logs").Create(row).Error; err != nil {
 		logger.LogError(ctx, fmt.Sprintf("audit log write failed (request_id=%s): %v", entry.RequestId, err))
 	}
 }
 
-func GetAuditLogs(filter AuditLogFilter, start, limit, viewerRole int) ([]*AuditLog, int64, error) {
-	query := LOG_DB.Model(&AuditLog{})
+func GetAuditLogs(tenantCtx context.Context, filter AuditLogFilter, start, limit, viewerRole int) ([]*AuditLog, int64, error) {
+	query := LOG_DB.WithContext(tenantCtx).Model(&AuditLog{})
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
 		// Decode native JSON through database/sql as text for AuditOther.Scan.
 		// Preserve numeric metadata instead of returning quoted Int64 values.
@@ -210,9 +225,9 @@ type UserAccessTokenStatus struct {
 	LastUsedIp string `json:"last_used_ip"`
 }
 
-func GetUserAccessTokenStatus(userId int) (*UserAccessTokenStatus, error) {
+func GetUserAccessTokenStatus(tenantCtx context.Context, userId int) (*UserAccessTokenStatus, error) {
 	var user User
-	if err := DB.Select("id", "role", "access_token", "access_token_created_at").First(&user, userId).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Select("id", "role", "access_token", "access_token_created_at").First(&user, userId).Error; err != nil {
 		return nil, err
 	}
 	status := &UserAccessTokenStatus{Exists: user.GetAccessToken() != ""}
@@ -222,7 +237,7 @@ func GetUserAccessTokenStatus(userId int) (*UserAccessTokenStatus, error) {
 	status.TokenRef = AccessTokenFingerprint(user.GetAccessToken())
 	status.CreatedAt = user.AccessTokenCreatedAt
 	var latest AuditLog
-	query := LOG_DB.Select("created_at", "ip").Where("user_id = ? AND token_ref = ? AND category = ?", userId, status.TokenRef, AuditCategoryAccessToken)
+	query := LOG_DB.WithContext(tenantCtx).Select("created_at", "ip").Where("user_id = ? AND token_ref = ? AND category = ?", userId, status.TokenRef, AuditCategoryAccessToken)
 	if user.Role < common.RoleRootUser {
 		query = query.Where("actor_role IN ?", []int{common.RoleCommonUser, common.RoleAdminUser})
 	}
@@ -240,18 +255,22 @@ func GetUserAccessTokenStatus(userId int) (*UserAccessTokenStatus, error) {
 
 // MigrateAuditLogs also supports independently configured ClickHouse log stores.
 // No TTL clause or usage-log cleanup integration is intentional.
-func MigrateAuditLogs() error {
+func MigrateAuditLogs(tenantCtx context.Context) error {
 	if !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
-		return LOG_DB.AutoMigrate(&AuditLog{})
+		return LOG_DB.WithContext(tenantCtx).AutoMigrate(&AuditLog{})
 	}
-	return LOG_DB.Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+	if err := LOG_DB.WithContext(tenantCtx).Exec(`CREATE TABLE IF NOT EXISTS audit_logs (
+		tenant_id Int64,
 		id Int64 DEFAULT 0, event_id String, user_id Int64, username String, actor_role Int32,
 		created_at Int64, category String, action String, token_ref String,
 		auth_method String, ip String, user_agent String, method String, route String,
 		status Int32, success UInt8, request_id String, content String, other JSON
 	) ENGINE = MergeTree()
 	PARTITION BY toYYYYMM(toDateTime(created_at))
-	ORDER BY (created_at, event_id)`).Error
+	ORDER BY (tenant_id, created_at, event_id)`).Error; err != nil {
+		return err
+	}
+	return LOG_DB.WithContext(tenantCtx).Exec("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS tenant_id Int64 DEFAULT 1").Error
 }
 
 func ValidAuditCategory(category string) bool {

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -33,7 +34,7 @@ func TestListModelsSupportsOpenAIAndGeminiAuthentication(t *testing.T) {
 		UnlimitedQuota: true,
 	}).Error)
 
-	engine := gin.New()
+	engine := testtenant.NewRouter()
 	SetRelayRouter(engine)
 
 	tests := []struct {
@@ -66,7 +67,7 @@ func TestListModelsSupportsOpenAIAndGeminiAuthentication(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodGet, test.path, nil)
+			request := testtenant.NewRequest(http.MethodGet, test.path, nil)
 			if test.headerName != "" {
 				value := "modelstestkey"
 				if test.headerName == "Authorization" {

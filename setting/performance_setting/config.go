@@ -1,5 +1,7 @@
 package performance_setting
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
@@ -64,14 +66,14 @@ func syncToCommon() {
 }
 
 // GetPerformanceSetting 获取性能设置
-func GetPerformanceSetting() *PerformanceSetting {
-	return &performanceSetting
+func GetPerformanceSetting(tenantCtx context.Context) *PerformanceSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("performance_setting").(*PerformanceSetting)
 }
 
 // UpdateAndSync 更新配置并同步到 common 包
 // 当配置从数据库加载后，需要调用此函数同步
-func UpdateAndSync() {
-	syncToCommon()
+func UpdateAndSync(tenantCtx context.Context) {
+	// Process resource limits are configured only at startup.
 }
 
 // GetCacheStats 获取缓存统计信息（代理到 common 包）

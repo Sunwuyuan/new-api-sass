@@ -1,7 +1,8 @@
 package ratio_setting
 
+import context "context"
+
 import (
-	"encoding/json"
 	"errors"
 
 	"github.com/QuantumNous/new-api/common"
@@ -51,33 +52,29 @@ func init() {
 	config.GlobalConfig.Register("group_ratio_setting", &groupRatioSetting)
 }
 
-func GetGroupRatioSetting() *GroupRatioSetting {
-	if groupRatioSetting.GroupSpecialUsableGroup == nil {
-		groupRatioSetting.GroupSpecialUsableGroup = types.NewRWMap[string, map[string]string]()
-		groupRatioSetting.GroupSpecialUsableGroup.AddAll(defaultGroupSpecialUsableGroup)
-	}
-	return &groupRatioSetting
+func GetGroupRatioSetting(tenantCtx context.Context) *GroupRatioSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("group_ratio_setting").(*GroupRatioSetting)
 }
 
-func GetGroupRatioCopy() map[string]float64 {
-	return groupRatioMap.ReadAll()
+func GetGroupRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return GetGroupRatioSetting(tenantCtx).GroupRatio.ReadAll()
 }
 
-func ContainsGroupRatio(name string) bool {
-	_, ok := groupRatioMap.Get(name)
+func ContainsGroupRatio(tenantCtx context.Context, name string) bool {
+	_, ok := GetGroupRatioSetting(tenantCtx).GroupRatio.Get(name)
 	return ok
 }
 
-func GroupRatio2JSONString() string {
-	return groupRatioMap.MarshalJSONString()
+func GroupRatio2JSONString(tenantCtx context.Context) string {
+	return GetGroupRatioSetting(tenantCtx).GroupRatio.MarshalJSONString()
 }
 
-func UpdateGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupRatioMap, jsonStr)
+func UpdateGroupRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonString(GetGroupRatioSetting(tenantCtx).GroupRatio, jsonStr)
 }
 
-func GetGroupRatio(name string) float64 {
-	ratio, ok := groupRatioMap.Get(name)
+func GetGroupRatio(tenantCtx context.Context, name string) float64 {
+	ratio, ok := GetGroupRatioSetting(tenantCtx).GroupRatio.Get(name)
 	if !ok {
 		common.SysLog("group ratio not found: " + name)
 		return 1
@@ -85,8 +82,8 @@ func GetGroupRatio(name string) float64 {
 	return ratio
 }
 
-func GetGroupGroupRatio(userGroup, usingGroup string) (float64, bool) {
-	gp, ok := groupGroupRatioMap.Get(userGroup)
+func GetGroupGroupRatio(tenantCtx context.Context, userGroup, usingGroup string) (float64, bool) {
+	gp, ok := GetGroupRatioSetting(tenantCtx).GroupGroupRatio.Get(userGroup)
 	if !ok {
 		return -1, false
 	}
@@ -97,17 +94,17 @@ func GetGroupGroupRatio(userGroup, usingGroup string) (float64, bool) {
 	return ratio, true
 }
 
-func GroupGroupRatio2JSONString() string {
-	return groupGroupRatioMap.MarshalJSONString()
+func GroupGroupRatio2JSONString(tenantCtx context.Context) string {
+	return GetGroupRatioSetting(tenantCtx).GroupGroupRatio.MarshalJSONString()
 }
 
-func UpdateGroupGroupRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonString(groupGroupRatioMap, jsonStr)
+func UpdateGroupGroupRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonString(GetGroupRatioSetting(tenantCtx).GroupGroupRatio, jsonStr)
 }
 
 func CheckGroupRatio(jsonStr string) error {
 	checkGroupRatio := make(map[string]float64)
-	err := json.Unmarshal([]byte(jsonStr), &checkGroupRatio)
+	err := common.Unmarshal([]byte(jsonStr), &checkGroupRatio)
 	if err != nil {
 		return err
 	}

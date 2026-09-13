@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
@@ -42,7 +44,7 @@ func TestMain(m *testing.M) {
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
-	common.LogConsumeEnabled = true
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = true
 
 	if err := db.AutoMigrate(
 		&model.Task{},
@@ -288,8 +290,8 @@ func TestTaskBillingOtherOmitsEmptyUsageFacts(t *testing.T) {
 func callLogTaskConsumption(t *testing.T, info *relaycommon.RelayInfo, task *model.Task) *model.Log {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/videos", nil)
 	ctx.Set("token_name", "test_token")
 	LogTaskConsumption(ctx, info, task)
 	log := getLastLog(t)
@@ -305,7 +307,7 @@ func TestLogTaskConsumptionIncludesTieredSnapshotUsageFacts(t *testing.T) {
 
 	expression := `tier("720P", u("seconds") * 5)`
 	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          userID,
 		TokenId:         0,
 		OriginModelName: "wan2.5-i2v-preview",
@@ -358,7 +360,7 @@ func TestLogTaskConsumptionWithoutSnapshotKeepsRatioMode(t *testing.T) {
 	}
 	priceData.AddOtherRatio("size", 2)
 	task := makeTask(userID, channelID, 100, 0, BillingSourceWallet, 0)
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          userID,
 		TokenId:         0,
 		OriginModelName: "test-model",
@@ -531,7 +533,7 @@ func countLogs(t *testing.T) int64 {
 func TestPrepareMidjourneyTaskBillingKeepsUnbilledMarkerClear(t *testing.T) {
 	task := &model.Midjourney{Quota: 900, TokenId: 7, BillingChannelId: 8}
 
-	prepared, err := PrepareMidjourneyTaskBilling(&relaycommon.RelayInfo{}, task, 900, false)
+	prepared, err := PrepareMidjourneyTaskBilling(&relaycommon.RelayInfo{Context: testtenant.Context()}, task, 900, false)
 
 	require.NoError(t, err)
 	assert.False(t, prepared)
@@ -549,7 +551,7 @@ func TestSettleMidjourneyTaskBillingRequiresPersistedTask(t *testing.T) {
 	seedToken(t, tokenID, userID, "sk-midjourney-unpersisted", initialTokenQuota)
 	seedChannel(t, channelID)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:    userID,
 		TokenId:   tokenID,
 		TokenKey:  "sk-midjourney-unpersisted",
@@ -573,7 +575,7 @@ func TestSettleMidjourneyTaskBillingRequiresPersistedTask(t *testing.T) {
 
 func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, billingChannelID, executionChannelID = 50, 50, 50, 51
 	const initialUserQuota, initialTokenQuota, chargedQuota = 10000, 5000, 3000
@@ -582,7 +584,7 @@ func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testi
 	seedChannel(t, billingChannelID)
 	seedChannel(t, executionChannelID)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:     userID,
 		TokenId:    tokenID,
 		TokenKey:   "sk-midjourney",
@@ -606,7 +608,7 @@ func TestMidjourneyRefundRestoresEveryAccountingElementOnBillingChannel(t *testi
 	assert.Equal(t, chargedQuota, task.Quota)
 	assert.Zero(t, task.TokenId)
 	assert.Equal(t, billingChannelID, task.BillingChannelId)
-	require.NoError(t, task.Insert())
+	require.NoError(t, task.Insert(testtenant.Context()))
 
 	billed, err := SettleMidjourneyTaskBilling(relayInfo, task, prepared)
 	require.NoError(t, err)
@@ -654,7 +656,7 @@ func TestSettleMidjourneyTaskBillingFundingFailureClearsMarkers(t *testing.T) {
 	seedToken(t, tokenID, userID, "sk-midjourney-funding-failure", initialTokenQuota)
 	seedChannel(t, channelID)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:    userID,
 		TokenId:   tokenID,
 		TokenKey:  "sk-midjourney-funding-failure",
@@ -667,7 +669,7 @@ func TestSettleMidjourneyTaskBillingFundingFailureClearsMarkers(t *testing.T) {
 	prepared, err := PrepareMidjourneyTaskBilling(relayInfo, task, chargedQuota, true)
 	require.NoError(t, err)
 	require.True(t, prepared)
-	require.NoError(t, task.Insert())
+	require.NoError(t, task.Insert(testtenant.Context()))
 
 	require.NoError(t, model.DB.Exec(`
 		CREATE TRIGGER fail_midjourney_user_update
@@ -700,7 +702,7 @@ func TestSettleMidjourneyTaskBillingFundingFailureClearsMarkers(t *testing.T) {
 
 func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 53, 53, 53
 	const initialUserQuota, initialTokenQuota, chargedQuota = 10000, 5000, 3000
@@ -708,7 +710,7 @@ func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testin
 	seedToken(t, tokenID, userID, "sk-midjourney-token-failure", initialTokenQuota)
 	seedChannel(t, channelID)
 
-	relayInfo := &relaycommon.RelayInfo{
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:    userID,
 		TokenId:   tokenID,
 		TokenKey:  "sk-midjourney-token-failure",
@@ -721,7 +723,7 @@ func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testin
 	prepared, err := PrepareMidjourneyTaskBilling(relayInfo, task, chargedQuota, true)
 	require.NoError(t, err)
 	require.True(t, prepared)
-	require.NoError(t, task.Insert())
+	require.NoError(t, task.Insert(testtenant.Context()))
 
 	require.NoError(t, model.DB.Exec(`
 		CREATE TRIGGER fail_midjourney_token_update
@@ -762,7 +764,7 @@ func TestSettleMidjourneyTaskBillingTokenFailureKeepsFundingRefundable(t *testin
 
 func TestPrepareMidjourneyTaskBillingRejectsSubscriptionBeforeCharge(t *testing.T) {
 	task := &model.Midjourney{Quota: 900, TokenId: 7, BillingChannelId: 8}
-	relayInfo := &relaycommon.RelayInfo{BillingSource: BillingSourceSubscription, SubscriptionId: 1}
+	relayInfo := &relaycommon.RelayInfo{Context: testtenant.Context(), BillingSource: BillingSourceSubscription, SubscriptionId: 1}
 
 	prepared, err := PrepareMidjourneyTaskBilling(relayInfo, task, 900, true)
 
@@ -775,7 +777,7 @@ func TestPrepareMidjourneyTaskBillingRejectsSubscriptionBeforeCharge(t *testing.
 
 func TestRefundMidjourneyQuotaUsesLegacyChannelFallbackWithoutTokenAdjustment(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 54, 54, 54
 	const walletAfterCharge, tokenQuota, chargedQuota = 7000, 5000, 3000
@@ -792,7 +794,7 @@ func TestRefundMidjourneyQuotaUsesLegacyChannelFallbackWithoutTokenAdjustment(t 
 		TokenId:   0,
 		Progress:  "0%",
 	}
-	require.NoError(t, task.Insert())
+	require.NoError(t, task.Insert(testtenant.Context()))
 
 	assert.True(t, RefundMidjourneyQuota(ctx, task, "legacy failure"))
 
@@ -815,7 +817,7 @@ func TestRefundMidjourneyQuotaUsesLegacyChannelFallbackWithoutTokenAdjustment(t 
 
 func TestRefundTaskQuota_Wallet(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 1, 1, 1
 	const initQuota, preConsumed = 10000, 3000
@@ -854,7 +856,7 @@ func TestRefundTaskQuota_Wallet(t *testing.T) {
 
 func TestRefundTaskQuota_Subscription(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID, subID = 2, 2, 2, 1
 	const preConsumed = 2000
@@ -891,7 +893,7 @@ func TestRefundTaskQuota_Subscription(t *testing.T) {
 
 func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID = 3
 	seedUser(t, userID, 5000)
@@ -909,7 +911,7 @@ func TestRefundTaskQuota_ZeroQuota(t *testing.T) {
 
 func TestRefundTaskQuota_NoToken(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, channelID = 4, 4
 	const initQuota, preConsumed = 10000, 1500
@@ -939,7 +941,7 @@ func TestRefundTaskQuota_NoToken(t *testing.T) {
 
 func TestRefundTaskQuota_FundingFailureKeepsAccountingAndPendingMarker(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, channelID, preConsumed = 5, 5, 1200
 	seedUser(t, userID, 5000)
@@ -966,7 +968,7 @@ func TestRefundTaskQuota_FundingFailureKeepsAccountingAndPendingMarker(t *testin
 
 func TestRecalculate_PositiveDelta(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 10, 10, 10
 	const initQuota, preConsumed = 10000, 2000
@@ -1005,7 +1007,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 func TestRecalculate_NegativeDelta(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 11, 11, 11
 	const initQuota, preConsumed = 10000, 5000
@@ -1044,7 +1046,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 func TestRecalculate_ZeroDelta(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID = 12
 	const initQuota, preConsumed = 10000, 3000
@@ -1064,7 +1066,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 func TestRecalculate_ActualQuotaZero(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, preConsumed = 13, 5000
 	const initQuota = 10000
@@ -1086,7 +1088,7 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 
 func TestRecalculate_RejectsNegativeActualQuota(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, preConsumed = 34, 5000
 	const initQuota = 10000
@@ -1102,7 +1104,7 @@ func TestRecalculate_RejectsNegativeActualQuota(t *testing.T) {
 
 func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID, subID = 14, 14, 14, 2
 	const preConsumed = 5000
@@ -1172,7 +1174,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 
 	isDone := task.Status == model.TaskStatus(model.TaskStatusSuccess) || task.Status == model.TaskStatus(model.TaskStatusFailure)
 	if isDone && snap.Status != task.Status {
-		won, err := task.UpdateWithStatus(snap.Status)
+		won, err := task.UpdateWithStatus(testtenant.Context(), snap.Status)
 		if err != nil {
 			shouldRefund = false
 			shouldSettle = false
@@ -1181,7 +1183,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 			shouldSettle = false
 		}
 	} else if !snap.Equal(task.Snapshot()) {
-		_, _ = task.UpdateWithStatus(snap.Status)
+		_, _ = task.UpdateWithStatus(testtenant.Context(), snap.Status)
 	}
 
 	if shouldSettle && actualQuota > 0 {
@@ -1194,7 +1196,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 
 func TestCASGuardedRefund_Win(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 20, 20, 20
 	const initQuota, preConsumed = 10000, 4000
@@ -1232,7 +1234,7 @@ func TestCASGuardedRefund_Win(t *testing.T) {
 
 func TestCASGuardedRefund_Lose(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 21, 21, 21
 	const initQuota, preConsumed = 10000, 4000
@@ -1269,7 +1271,7 @@ func TestCASGuardedRefund_Lose(t *testing.T) {
 
 func TestCASGuardedSettle_Win(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 22, 22, 22
 	const initQuota, preConsumed = 10000, 5000
@@ -1306,7 +1308,7 @@ func TestCASGuardedSettle_Win(t *testing.T) {
 
 func TestNonTerminalUpdate_NoBilling(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, channelID = 23, 23
 	const initQuota, preConsumed = 10000, 3000
@@ -1343,7 +1345,7 @@ type mockAdaptor struct {
 }
 
 func (m *mockAdaptor) Init(_ *relaycommon.RelayInfo) {}
-func (m *mockAdaptor) FetchTask(string, string, *model.Task, string) (*http.Response, error) {
+func (m *mockAdaptor) FetchTask(context.Context, string, string, *model.Task, string) (*http.Response, error) {
 	return nil, nil
 }
 func (m *mockAdaptor) ParseTaskResult(*model.Task, *http.Response, []byte) (*relaycommon.TaskInfo, error) {
@@ -1359,7 +1361,7 @@ func (m *mockAdaptor) AdjustBillingOnComplete(_ *model.Task, _ *relaycommon.Task
 
 func TestSettle_PerCallBilling_SkipsAdaptorAdjust(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 30, 30, 30
 	const initQuota, preConsumed = 10000, 5000
@@ -1387,7 +1389,7 @@ func TestSettle_PerCallBilling_SkipsAdaptorAdjust(t *testing.T) {
 
 func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 31, 31, 31
 	const initQuota, preConsumed = 10000, 4000
@@ -1415,7 +1417,7 @@ func TestSettle_PerCallBilling_SkipsTotalTokens(t *testing.T) {
 
 func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, tokenID, channelID = 32, 32, 32
 	const initQuota, preConsumed = 10000, 5000
@@ -1447,7 +1449,7 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 
 func TestSettle_TieredEvaluationFailureKeepsPreConsumedCharge(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID, preConsumed = 33, 5_000
 	const initialQuota = 10_000
@@ -1473,7 +1475,7 @@ func TestSettle_TieredEvaluationFailureKeepsPreConsumedCharge(t *testing.T) {
 
 func TestSettle_TieredFailureReturnsFalseForCallerRefund(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID = 37
 	const initialQuota, preConsumed = 10_000, 25
@@ -1510,7 +1512,7 @@ func TestSettle_TieredFailureReturnsFalseForCallerRefund(t *testing.T) {
 
 func TestSettle_TieredSuccessStillRecomputes(t *testing.T) {
 	truncate(t)
-	ctx := context.Background()
+	ctx := testtenant.Context()
 
 	const userID = 38
 	const initialQuota, preConsumed = 10_000, 50
@@ -1604,7 +1606,7 @@ func TestSettle_TieredUsageFactsMergeCompletionOverSubmission(t *testing.T) {
 			}
 
 			settled := settleTaskBillingOnComplete(
-				context.Background(),
+				testtenant.Context(),
 				&mockAdaptor{},
 				task,
 				&relaycommon.TaskInfo{Status: model.TaskStatusSuccess, UsageFacts: testCase.completionFacts},
@@ -1653,7 +1655,7 @@ func TestSettle_TieredSnapshotWriteBackUsesSettledFactsAndMatchedTier(t *testing
 	}
 
 	settled := settleTaskBillingOnComplete(
-		context.Background(),
+		testtenant.Context(),
 		&mockAdaptor{},
 		task,
 		&relaycommon.TaskInfo{
@@ -1684,10 +1686,10 @@ func TestSettle_TieredSnapshotWriteBackUsesSettledFactsAndMatchedTier(t *testing
 }
 
 func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
-	previousRatios := ratio_setting.ModelRatio2JSONString()
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{"test-model":1}`))
+	previousRatios := ratio_setting.ModelRatio2JSONString(testtenant.Context())
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{"test-model":1}`))
 	t.Cleanup(func() {
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(previousRatios))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), previousRatios))
 	})
 
 	tests := []struct {
@@ -1729,7 +1731,7 @@ func TestSettle_TokenRecalcFallsBackToCompletionTokens(t *testing.T) {
 
 			task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 			settled := settleTaskBillingOnComplete(
-				context.Background(),
+				testtenant.Context(),
 				&mockAdaptor{},
 				task,
 				&relaycommon.TaskInfo{

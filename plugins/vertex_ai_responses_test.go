@@ -4,7 +4,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
 	"github.com/QuantumNous/new-api/relay"
 	"github.com/stretchr/testify/assert"
@@ -28,7 +30,7 @@ func TestVertexAIResponsesProtocol(t *testing.T) {
 	})
 
 	t.Run("shares models with Gemini without losing either provider", func(t *testing.T) {
-		candidates := jsplugin.DefaultRegistry.Generation().LookupEndpointCandidates("POST", "/v1/responses", "veo-3.0-generate-001")
+		candidates := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation().LookupEndpointCandidates("POST", "/v1/responses", "veo-3.0-generate-001")
 		require.Len(t, candidates, 2)
 		assert.Equal(t, "google", candidates[0].Plugin.Meta.Key)
 		assert.Equal(t, "vertex-ai", candidates[1].Plugin.Meta.Key)

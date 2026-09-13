@@ -28,6 +28,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+import { tenantStorage } from '@/lib/tenant'
 import { useAuthStore } from '@/stores/auth-store'
 import { useSystemConfigStore } from '@/stores/system-config-store'
 
@@ -208,7 +209,7 @@ describe('overview setup guide', () => {
       role: 1,
       quota: 1000000,
     })
-    window.localStorage.setItem(storageKey, 'collapsed')
+    tenantStorage.setItem(storageKey, 'collapsed')
     await renderOverview()
     expect(await screen.findByText('Setup progress: 2/3')).toBeVisible()
 
@@ -231,9 +232,11 @@ describe('overview setup guide', () => {
     keyLookupError = new Error('Key lookup unavailable')
     await renderOverview()
 
-    expect(
-      await screen.findByRole('button', { name: 'Hide setup guide' })
-    ).toBeVisible()
+    await waitFor(() => {
+      expect(
+        screen.getByRole('button', { name: 'Hide setup guide' })
+      ).toBeVisible()
+    })
     expect(
       screen.queryByRole('button', { name: 'Setup guide' })
     ).not.toBeInTheDocument()

@@ -1,9 +1,12 @@
 package common
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +19,7 @@ import (
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
+	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	hosttypes "github.com/QuantumNous/new-api/types"
 
@@ -82,6 +86,7 @@ type TokenCountMeta struct {
 }
 
 type RelayInfo struct {
+	Context           context.Context `json:"-"`
 	TokenId           int
 	TokenKey          string
 	TokenGroup        string
@@ -294,7 +299,7 @@ func (info *RelayInfo) InitChannelMeta(c *gin.Context) {
 	// Channel identity feeds the converter options snapshot (e.g.
 	// OpenRouterDialect); drop the cache so a cross-channel retry rebuilds it.
 	info.convOptions = nil
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
+	if model_setting.GetGlobalSettings(c.Request.Context()).PassThroughRequestEnabled || channelMeta.ChannelSetting.PassThroughBodyEnabled {
 		info.ReasoningEffort = ""
 		info.ReasoningConversion = nil
 	} else {
@@ -572,6 +577,7 @@ func genBaseRelayInfo(c *gin.Context, request dto.Request) *RelayInfo {
 	reasoningEffort := reasoningEffortFromRequest(request)
 	originModelName := common.GetContextKeyString(c, constant.ContextKeyOriginalModel)
 	info := &RelayInfo{
+		Context:         context.WithoutCancel(c.Request.Context()),
 		Request:         request,
 		ReasoningEffort: reasoningEffort,
 
@@ -900,12 +906,62 @@ func (info *RelayInfo) IncrSendResponseCount() {
 // ConvOptions snapshots host settings for the converters. Rebuilt on each
 // call site's first use; cached so one relay session sees one snapshot.
 func (info *RelayInfo) ConvOptions() *convmeta.Options {
+	if info == nil {
+		// Pure conversion callers may omit RelayInfo. Use immutable startup
+		// defaults; this path never selects a tenant or accesses its state.
+		claude := config.GlobalConfig.Get("claude").(*model_setting.ClaudeSettings)
+		gemini := config.GlobalConfig.Get("gemini").(*model_setting.GeminiSettings)
+		global := config.GlobalConfig.Get("global").(*model_setting.GlobalSettings)
+		return &convmeta.Options{
+			Claude: convmeta.ClaudeOptions{ThinkingAdapterEnabled: claude.ThinkingAdapterEnabled, ThinkingAdapterBudgetTokensPercentage: claude.ThinkingAdapterBudgetTokensPercentage, DefaultMaxTokens: claude.GetDefaultMaxTokens},
+			Gemini: convmeta.GeminiOptions{
+				ThinkingAdapterEnabled:                gemini.ThinkingAdapterEnabled,
+				ThinkingAdapterBudgetTokensPercentage: gemini.ThinkingAdapterBudgetTokensPercentage,
+				FunctionCallThoughtSignatureEnabled:   gemini.FunctionCallThoughtSignatureEnabled,
+				SupportsImagine:                       func(name string) bool { return slices.Contains(gemini.SupportedImagineModels, name) },
+				SafetySetting: func(key string) string {
+					if value := gemini.SafetySettings[key]; value != "" {
+						return value
+					}
+					if value := gemini.SafetySettings["default"]; value != "" {
+						return value
+					}
+					return "OFF"
+				},
+			},
+			PreserveThinkingSuffix: func(name string) bool {
+				name = strings.TrimSpace(name)
+				for _, entry := range global.ThinkingModelBlacklist {
+					entry = strings.TrimSpace(entry)
+					if pattern, ok := strings.CutPrefix(entry, "re:"); ok {
+						if matched, _ := regexp.MatchString(pattern, name); matched {
+							return true
+						}
+					} else if entry != "" && entry == name {
+						return true
+					}
+				}
+				return false
+			},
+			PreserveEffortTail: func(name string) bool {
+				name = strings.TrimSpace(name)
+				bare := name[strings.LastIndex(name, "/")+1:]
+				for _, entry := range global.EffortTailModelIDs {
+					entry = strings.TrimSpace(entry)
+					if entry != "" && (entry == name || entry == bare) {
+						return true
+					}
+				}
+				return false
+			},
+		}
+	}
 	if info != nil && info.convOptions != nil {
 		return info.convOptions
 	}
 
-	claudeSettings := model_setting.GetClaudeSettings()
-	geminiSettings := model_setting.GetGeminiSettings()
+	claudeSettings := model_setting.GetClaudeSettings(info.Context)
+	geminiSettings := model_setting.GetGeminiSettings(info.Context)
 	options := &convmeta.Options{
 		Claude: convmeta.ClaudeOptions{
 			ThinkingAdapterEnabled:                claudeSettings.ThinkingAdapterEnabled,
@@ -916,12 +972,12 @@ func (info *RelayInfo) ConvOptions() *convmeta.Options {
 			ThinkingAdapterEnabled:                geminiSettings.ThinkingAdapterEnabled,
 			ThinkingAdapterBudgetTokensPercentage: geminiSettings.ThinkingAdapterBudgetTokensPercentage,
 			FunctionCallThoughtSignatureEnabled:   geminiSettings.FunctionCallThoughtSignatureEnabled,
-			SupportsImagine:                       model_setting.IsGeminiModelSupportImagine,
-			SafetySetting:                         model_setting.GetGeminiSafetySetting,
+			SupportsImagine:                       func(arg0 string) bool { return model_setting.IsGeminiModelSupportImagine(info.Context, arg0) },
+			SafetySetting:                         func(arg0 string) string { return model_setting.GetGeminiSafetySetting(info.Context, arg0) },
 		},
 		OpenRouterDialect:      info != nil && info.GetChannelType() == constant.ChannelTypeOpenRouter,
-		PreserveThinkingSuffix: model_setting.ShouldPreserveThinkingSuffix,
-		PreserveEffortTail:     model_setting.ShouldPreserveEffortTail,
+		PreserveThinkingSuffix: func(arg0 string) bool { return model_setting.ShouldPreserveThinkingSuffix(info.Context, arg0) },
+		PreserveEffortTail:     func(arg0 string) bool { return model_setting.ShouldPreserveEffortTail(info.Context, arg0) },
 	}
 	if info != nil {
 		if info.ChannelMeta != nil {
@@ -1080,8 +1136,8 @@ func FailTaskInfo(reason string) *TaskInfo {
 // store: 数据存储授权字段，涉及用户隐私（仅 OpenAI、Responses API 支持，默认允许透传，禁用后可能导致 Codex 无法使用）
 // safety_identifier: 安全标识符，用于向 OpenAI 报告违规用户（仅 OpenAI 支持，涉及用户隐私）
 // stream_options.include_obfuscation: 响应流混淆控制字段（仅 OpenAI Responses API 支持）
-func RemoveDisabledFields(jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
-	if model_setting.GetGlobalSettings().PassThroughRequestEnabled || channelPassThroughEnabled {
+func RemoveDisabledFields(tenantCtx context.Context, jsonData []byte, channelOtherSettings dto.ChannelOtherSettings, channelPassThroughEnabled bool) ([]byte, error) {
+	if model_setting.GetGlobalSettings(tenantCtx).PassThroughRequestEnabled || channelPassThroughEnabled {
 		return jsonData, nil
 	}
 	if !hasRemovableDisabledField(jsonData, channelOtherSettings) {
@@ -1174,8 +1230,8 @@ func hasRemovableDisabledField(jsonData []byte, channelOtherSettings dto.Channel
 
 // RemoveGeminiDisabledFields removes disabled fields from Gemini request JSON data
 // Currently supports removing functionResponse.id field which Vertex AI does not support
-func RemoveGeminiDisabledFields(jsonData []byte) ([]byte, error) {
-	if !model_setting.GetGeminiSettings().RemoveFunctionResponseIdEnabled {
+func RemoveGeminiDisabledFields(tenantCtx context.Context, jsonData []byte) ([]byte, error) {
+	if !model_setting.GetGeminiSettings(tenantCtx).RemoveFunctionResponseIdEnabled {
 		return jsonData, nil
 	}
 

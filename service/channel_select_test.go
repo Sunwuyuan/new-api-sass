@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,7 +16,7 @@ func TestPinnedTaskPluginChannelTypesUsesPinnedGenerationIndex(t *testing.T) {
 	plugin, err := registry.Register(channelSelectTaskPluginSource("legacy-select", constant.ChannelTypeKling), jsplugin.Options{})
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: registry.Generation(),
 		Plugin:     plugin,
@@ -38,7 +38,7 @@ func TestPinnedTaskPluginChannelTypesLeavesGenericChannelsKeyed(t *testing.T) {
 	plugin, err := registry.Register(channelSelectTaskPluginSource("generic-select", constant.ChannelTypeTaskPlugin), jsplugin.Options{})
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: registry.Generation(),
 		Plugin:     plugin,
@@ -58,7 +58,7 @@ func TestPinnedTaskPluginChannelTypesIncludesSharedEndpointProviders(t *testing.
 	candidates := registry.Generation().LookupEndpointCandidates("POST", "/v1/responses", "task-model")
 	require.Len(t, candidates, 2)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: registry.Generation(),
 		Plugin:     candidates[0].Plugin,
@@ -135,7 +135,7 @@ func TestPinnedTaskPluginChannelTypesIncludesCompatibleTypes(t *testing.T) {
 	plugin, err := registry.Register(channelSelectCompatiblePluginSource("sora-select", constant.ChannelTypeSora, constant.ChannelTypeOpenAI), jsplugin.Options{})
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: registry.Generation(),
 		Plugin:     plugin,
@@ -174,7 +174,7 @@ func TestSharedType61IdentityFilterContainsAllCandidateKeys(t *testing.T) {
 	generation := registry.Generation()
 	candidates := generation.LookupEndpointCandidates("POST", "/v1/responses", "task-model")
 	require.Len(t, candidates, 2)
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Generation: generation, Plugin: candidates[0].Plugin, Candidates: candidates})
 	AppendTaskPluginIdentityFilter(c, "alpha")
 	filters := GetChannelConstraints(c).Filters

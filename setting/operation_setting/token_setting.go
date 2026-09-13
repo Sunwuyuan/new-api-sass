@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 // TokenSetting 令牌相关配置
@@ -18,11 +20,11 @@ func init() {
 }
 
 // GetTokenSetting 获取令牌配置
-func GetTokenSetting() *TokenSetting {
-	return &tokenSetting
+func GetTokenSetting(tenantCtx context.Context) *TokenSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("token_setting").(*TokenSetting)
 }
 
 // GetMaxUserTokens 获取每用户最大令牌数量
-func GetMaxUserTokens() int {
-	return GetTokenSetting().MaxUserTokens
+func GetMaxUserTokens(tenantCtx context.Context) int {
+	return GetTokenSetting(tenantCtx).MaxUserTokens
 }

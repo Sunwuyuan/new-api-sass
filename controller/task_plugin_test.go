@@ -14,6 +14,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/plugins"
@@ -66,30 +67,32 @@ export function parseTaskResult() { return {}; }
 func cleanupTaskPluginControllerRuntime(t *testing.T, key string) {
 	t.Helper()
 	t.Cleanup(func() {
-		jsplugin.DefaultRegistry.Unregister(key)
-		taskPluginSyncState.Lock()
-		delete(taskPluginSyncState.hashes, key)
-		delete(taskPluginSyncState.errors, key)
-		taskPluginSyncState.Unlock()
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key)
+		tenantTaskPluginSyncState(testtenant.Context()).Lock()
+		delete(tenantTaskPluginSyncState(testtenant.Context()).hashes, key)
+		delete(tenantTaskPluginSyncState(testtenant.Context()).errors, key)
+		tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	})
 }
 
 func TestDeleteThirdPartyPluginReportsAssociatedChannelsAndInFlightTasks(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	loaded, err := jsplugin.DefaultRegistry.Register(lifecyclePluginSource, jsplugin.Options{})
+	loaded, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(lifecyclePluginSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("lifecycle-only") })
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: loaded.Meta.Key, APIVersion: 1, Version: "1", Source: lifecyclePluginSource, SourceHash: "hash", Enabled: true}))
+	t.Cleanup(func() {
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("lifecycle-only")
+	})
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: loaded.Meta.Key, APIVersion: 1, Version: "1", Source: lifecyclePluginSource, SourceHash: "hash", Enabled: true}))
 	baseURL := "https://example.com"
 	setting := `{"task_plugin_key":"lifecycle-only"}`
 	channel := model.Channel{Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: "linked", Models: "doc", Group: "default", BaseURL: &baseURL, Setting: &setting}
-	require.NoError(t, channel.Insert())
+	require.NoError(t, channel.Insert(testtenant.Context()))
 	require.NoError(t, model.DB.Create(&model.Task{Platform: "lifecycle-only", Status: model.TaskStatusInProgress}).Error)
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: "lifecycle-only"}, {Key: "version", Value: "1"}}
-	context.Request = httptest.NewRequest(http.MethodDelete, "/api/plugin/task/lifecycle-only/versions/1", nil)
+	context.Request = testtenant.NewRequest(http.MethodDelete, "/api/plugin/task/lifecycle-only/versions/1", nil)
 	DeleteTaskPluginVersion(context)
 
 	assert.Contains(t, recorder.Body.String(), `"name":"linked"`)
@@ -98,25 +101,27 @@ func TestDeleteThirdPartyPluginReportsAssociatedChannelsAndInFlightTasks(t *test
 
 func TestDisableThirdPartyPluginSupportsCascadeAndForce(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	loaded, err := jsplugin.DefaultRegistry.Register(lifecyclePluginSource, jsplugin.Options{})
+	loaded, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(lifecyclePluginSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("lifecycle-only") })
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: loaded.Meta.Key, APIVersion: 1, Version: "1", Source: lifecyclePluginSource, SourceHash: "hash", Enabled: true}))
+	t.Cleanup(func() {
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("lifecycle-only")
+	})
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: loaded.Meta.Key, APIVersion: 1, Version: "1", Source: lifecyclePluginSource, SourceHash: "hash", Enabled: true}))
 	baseURL := "https://example.com"
 	setting := `{"task_plugin_key":"lifecycle-only"}`
 	channel := model.Channel{Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: "linked", Models: "doc", Group: "default", BaseURL: &baseURL, Setting: &setting}
-	require.NoError(t, channel.Insert())
+	require.NoError(t, channel.Insert(testtenant.Context()))
 	require.NoError(t, model.DB.Create(&model.Task{Platform: "lifecycle-only", Status: model.TaskStatusSubmitted}).Error)
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: "lifecycle-only"}}
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task/lifecycle-only/status?cascade=true&force=true", strings.NewReader(`{"enabled":false}`))
+	context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task/lifecycle-only/status?cascade=true&force=true", strings.NewReader(`{"enabled":false}`))
 	context.Request.Header.Set("Content-Type", "application/json")
 	SetTaskPluginStatus(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	updated, err := model.GetChannelById(channel.Id, true)
+	updated, err := model.GetChannelById(testtenant.Context(), channel.Id, true)
 	require.NoError(t, err)
 	assert.Equal(t, common.ChannelStatusManuallyDisabled, updated.Status)
 }
@@ -135,28 +140,28 @@ func klingFactoryVersion(t *testing.T) string {
 func setupTaskPluginFactoryDisableTest(t *testing.T) {
 	t.Helper()
 	setupTaskPluginControllerTest(t)
-	originalMap := common.OptionMap
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap = map[string]string{}
-	common.OptionMapRWMutex.Unlock()
+	originalMap := common.TenantState(testtenant.Context()).OptionMap
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
-		jsplugin.DefaultRegistry.SetDisabledFactoryKeys(nil)
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = originalMap
-		common.OptionMapRWMutex.Unlock()
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.SetDisabledFactoryKeys(nil)
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		common.TenantState(testtenant.Context()).OptionMap = originalMap
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	})
 }
 
 func postTaskPluginStatus(t *testing.T, key, query, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: key}}
 	path := "/api/plugin/task/" + key + "/status"
 	if query != "" {
 		path += "?" + query
 	}
-	context.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	context.Request = testtenant.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	context.Request.Header.Set("Content-Type", "application/json")
 	SetTaskPluginStatus(context)
 	return recorder
@@ -165,8 +170,8 @@ func postTaskPluginStatus(t *testing.T, key, query, body string) *httptest.Respo
 func listTaskPluginItem(t *testing.T, key string) taskPluginListItem {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task", nil)
 	ListTaskPlugins(context)
 	var response struct {
 		Success bool                 `json:"success"`
@@ -186,8 +191,8 @@ func listTaskPluginItem(t *testing.T, key string) taskPluginListItem {
 func taskPluginOptionsHasKey(t *testing.T, key string) bool {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
 	GetTaskPluginOptions(context)
 	var response struct {
 		Success bool `json:"success"`
@@ -211,7 +216,7 @@ func TestDisableFactoryPluginPersistsOptionAndHidesFromBindOptions(t *testing.T)
 
 	recorder := postTaskPluginStatus(t, key, "", `{"enabled":false}`)
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	assert.Equal(t, []string{key}, setting.GetTaskPluginDisabledFactoryKeys())
+	assert.Equal(t, []string{key}, setting.GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
 	var stored model.Option
 	require.NoError(t, model.DB.Where("key = ?", setting.TaskPluginDisabledFactoryKeysKey).First(&stored).Error)
 	assert.Equal(t, `["kling"]`, stored.Value)
@@ -221,17 +226,17 @@ func TestDisableFactoryPluginPersistsOptionAndHidesFromBindOptions(t *testing.T)
 	assert.False(t, item.Enabled)
 	assert.Equal(t, "disabled", item.RuntimeStatus)
 	assert.False(t, taskPluginOptionsHasKey(t, key))
-	_, ok := jsplugin.DefaultRegistry.Get(key)
+	_, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	assert.False(t, ok)
 
 	recorder = postTaskPluginStatus(t, key, "", `{"enabled":true}`)
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys())
+	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
 	item = listTaskPluginItem(t, key)
 	assert.True(t, item.Enabled)
 	assert.Equal(t, "registered", item.RuntimeStatus)
 	assert.True(t, taskPluginOptionsHasKey(t, key))
-	_, ok = jsplugin.DefaultRegistry.Get(key)
+	_, ok = jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	assert.True(t, ok)
 }
 
@@ -241,13 +246,13 @@ func TestDisableFactoryPluginRespectsInUseGuard(t *testing.T) {
 	baseURL := "https://example.com"
 	channelSetting := `{"task_plugin_key":"kling"}`
 	channel := model.Channel{Type: constant.ChannelTypeTaskPlugin, Status: common.ChannelStatusEnabled, Name: "linked-factory", Models: "doc", Group: "default", BaseURL: &baseURL, Setting: &channelSetting}
-	require.NoError(t, channel.Insert())
+	require.NoError(t, channel.Insert(testtenant.Context()))
 
 	recorder := postTaskPluginStatus(t, key, "", `{"enabled":false}`)
 	assert.Contains(t, recorder.Body.String(), `"success":false`)
 	assert.Contains(t, recorder.Body.String(), "task plugin is still in use")
-	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys())
-	_, ok := jsplugin.DefaultRegistry.Get(key)
+	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+	_, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	assert.True(t, ok)
 }
 
@@ -258,20 +263,20 @@ func TestDisableFactoryOverrideRowSuppressesBothLayers(t *testing.T) {
 	factoryVersion := klingFactoryVersion(t)
 	overrideSource := strings.Replace(factorySource, `version: "`+factoryVersion+`"`, `version: "`+factoryVersion+`-test-factory-status"`, 1)
 	require.NotEqual(t, factorySource, overrideSource, "factory version marker must be found in kling source")
-	loaded, err := jsplugin.DefaultRegistry.Register(overrideSource, jsplugin.Options{})
+	loaded, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(overrideSource, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("kling") })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("kling") })
 	plugin := model.TaskPlugin{
 		Key: "kling", APIVersion: loaded.Meta.APIVersion, Version: loaded.Meta.Version,
 		Source: overrideSource, SourceHash: "test-hash", Enabled: true,
 	}
-	require.NoError(t, model.SaveTaskPlugin(&plugin))
-	require.NoError(t, syncTaskPluginsOnce())
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &plugin))
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
 
 	recorder := postTaskPluginStatus(t, "kling", "", `{"enabled":false}`)
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	assert.Equal(t, []string{"kling"}, setting.GetTaskPluginDisabledFactoryKeys())
-	row, err := model.GetTaskPluginVersion("kling", "")
+	assert.Equal(t, []string{"kling"}, setting.GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+	row, err := model.GetTaskPluginVersion(testtenant.Context(), "kling", "")
 	require.NoError(t, err)
 	assert.False(t, row.Enabled)
 	item := listTaskPluginItem(t, "kling")
@@ -279,16 +284,16 @@ func TestDisableFactoryOverrideRowSuppressesBothLayers(t *testing.T) {
 	assert.False(t, item.Enabled)
 	assert.Equal(t, "disabled", item.RuntimeStatus)
 	assert.False(t, taskPluginOptionsHasKey(t, "kling"))
-	_, ok := jsplugin.DefaultRegistry.Get("kling")
+	_, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling")
 	assert.False(t, ok, "factory built-in must not keep serving after the plugin is switched off")
 
 	recorder = postTaskPluginStatus(t, "kling", "", `{"enabled":true}`)
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys())
-	row, err = model.GetTaskPluginVersion("kling", "")
+	assert.Empty(t, setting.GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+	row, err = model.GetTaskPluginVersion(testtenant.Context(), "kling", "")
 	require.NoError(t, err)
 	assert.True(t, row.Enabled)
-	got, ok := jsplugin.DefaultRegistry.Get("kling")
+	got, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling")
 	require.True(t, ok)
 	assert.Equal(t, loaded.Meta.Version, got.Meta.Version)
 	assert.Equal(t, "registered", listTaskPluginItem(t, "kling").RuntimeStatus)
@@ -308,20 +313,20 @@ export function parseTaskResult() { return {}; }
 	body, err := common.Marshal(map[string]any{"source": shadowSource})
 	require.NoError(t, err)
 	uploadRecorder := httptest.NewRecorder()
-	uploadContext, _ := gin.CreateTestContext(uploadRecorder)
-	uploadContext.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
+	uploadContext, _ := testtenant.CreateTestContext(uploadRecorder)
+	uploadContext.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
 	uploadContext.Request.Header.Set("Content-Type", "application/json")
 	UploadTaskPlugin(uploadContext)
 	assert.Contains(t, uploadRecorder.Body.String(), `"success":true`)
-	_, ok = jsplugin.DefaultRegistry.Get("kling-shadow")
+	_, ok = jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling-shadow")
 	assert.True(t, ok)
 }
 
 func TestListTaskPluginsIncludesFactoryWithoutDatabaseRows(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task", nil)
 
 	ListTaskPlugins(context)
 
@@ -346,11 +351,11 @@ func TestListTaskPluginsIncludesFactoryWithoutDatabaseRows(t *testing.T) {
 
 func TestMasterSwitchEmptiesOptionsAndKeepsList(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	originalEnabled := constant.TaskPluginEnabled
-	jsplugin.DefaultRegistry.SetEnabled(false)
+	originalEnabled := constant.TenantRuntime(testtenant.Context()).TaskPluginEnabled
+	jsplugin.TenantState(testtenant.Context()).DefaultRegistry.SetEnabled(false)
 	t.Cleanup(func() {
-		constant.TaskPluginEnabled = originalEnabled
-		jsplugin.DefaultRegistry.SetEnabled(originalEnabled)
+		constant.TenantRuntime(testtenant.Context()).TaskPluginEnabled = originalEnabled
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.SetEnabled(originalEnabled)
 	})
 
 	assert.False(t, taskPluginOptionsHasKey(t, "kling"))
@@ -377,13 +382,13 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/task_plugin_options", nil)
 
 	GetTaskPluginOptions(context)
 
@@ -426,26 +431,26 @@ func TestDeleteActiveOverrideFallsBackToFactoryAndDeletesRecord(t *testing.T) {
 	factoryVersion := klingFactoryVersion(t)
 	overrideSource := strings.Replace(factorySource, `version: "`+factoryVersion+`"`, `version: "`+factoryVersion+`-test-override"`, 1)
 	require.NotEqual(t, factorySource, overrideSource, "factory version marker must be found in kling source")
-	loaded, err := jsplugin.DefaultRegistry.Register(overrideSource, jsplugin.Options{Key: "kling", Version: "test-override"})
+	loaded, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(overrideSource, jsplugin.Options{Key: "kling", Version: "test-override"})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("kling") })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("kling") })
 	plugin := model.TaskPlugin{
 		Key: "kling", APIVersion: loaded.Meta.APIVersion, Version: loaded.Meta.Version,
 		Source: overrideSource, SourceHash: "test-hash", Enabled: true,
 	}
-	require.NoError(t, model.SaveTaskPlugin(&plugin))
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &plugin))
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: "kling"}, {Key: "version", Value: loaded.Meta.Version}}
-	context.Request = httptest.NewRequest(http.MethodDelete, "/api/plugin/task/kling/versions/"+loaded.Meta.Version, nil)
+	context.Request = testtenant.NewRequest(http.MethodDelete, "/api/plugin/task/kling/versions/"+loaded.Meta.Version, nil)
 
 	DeleteTaskPluginVersion(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	versions, err := model.ListTaskPluginVersions("kling")
+	versions, err := model.ListTaskPluginVersions(testtenant.Context(), "kling")
 	require.NoError(t, err)
 	assert.Empty(t, versions)
-	runtimePlugin, ok := jsplugin.DefaultRegistry.Get("kling")
+	runtimePlugin, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling")
 	require.True(t, ok)
 	assert.NotEqual(t, loaded.Meta.Version, runtimePlugin.Meta.Version)
 }
@@ -456,36 +461,36 @@ func TestDeleteActiveTaskPluginPromotesEnabledVersionInRuntime(t *testing.T) {
 	cleanupTaskPluginControllerRuntime(t, key)
 	v1Source := taskPluginControllerTestSource(key, "1.0.0")
 	v2Source := taskPluginControllerTestSource(key, "2.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "1.0.0", Source: v1Source, SourceHash: "hash-v1", Enabled: true,
 	}))
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "2.0.0", Source: v2Source, SourceHash: "hash-v2", Enabled: true,
 	}))
-	_, err := jsplugin.DefaultRegistry.Register(v1Source, jsplugin.Options{Key: key, Version: "1.0.0"})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(v1Source, jsplugin.Options{Key: key, Version: "1.0.0"})
 	require.NoError(t, err)
-	taskPluginSyncState.Lock()
-	taskPluginSyncState.hashes[key] = "hash-v1"
-	taskPluginSyncState.errors[key] = "stale compile error"
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	tenantTaskPluginSyncState(testtenant.Context()).hashes[key] = "hash-v1"
+	tenantTaskPluginSyncState(testtenant.Context()).errors[key] = "stale compile error"
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: key}, {Key: "version", Value: "1.0.0"}}
-	context.Request = httptest.NewRequest(http.MethodDelete, "/api/plugin/task/"+key+"/versions/1.0.0", nil)
+	context.Request = testtenant.NewRequest(http.MethodDelete, "/api/plugin/task/"+key+"/versions/1.0.0", nil)
 	DeleteTaskPluginVersion(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	active, err := model.GetTaskPluginVersion(key, "")
+	active, err := model.GetTaskPluginVersion(testtenant.Context(), key, "")
 	require.NoError(t, err)
 	assert.Equal(t, "2.0.0", active.Version)
-	runtimePlugin, ok := jsplugin.DefaultRegistry.Get(key)
+	runtimePlugin, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	require.True(t, ok)
 	assert.Equal(t, "2.0.0", runtimePlugin.Meta.Version)
-	taskPluginSyncState.Lock()
-	syncedHash := taskPluginSyncState.hashes[key]
-	_, hasSyncError := taskPluginSyncState.errors[key]
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	syncedHash := tenantTaskPluginSyncState(testtenant.Context()).hashes[key]
+	_, hasSyncError := tenantTaskPluginSyncState(testtenant.Context()).errors[key]
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	assert.Equal(t, "hash-v2", syncedHash)
 	assert.False(t, hasSyncError)
 }
@@ -495,26 +500,26 @@ func TestUploadTaskPluginRefreshesRuntimeSyncState(t *testing.T) {
 	key := "upload-sync-probe"
 	cleanupTaskPluginControllerRuntime(t, key)
 	source := taskPluginControllerTestSource(key, "1.0.0")
-	taskPluginSyncState.Lock()
-	taskPluginSyncState.hashes[key] = "stale-hash"
-	taskPluginSyncState.errors[key] = "stale compile error"
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	tenantTaskPluginSyncState(testtenant.Context()).hashes[key] = "stale-hash"
+	tenantTaskPluginSyncState(testtenant.Context()).errors[key] = "stale compile error"
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	body, err := common.Marshal(map[string]any{"source": source})
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
 	context.Request.Header.Set("Content-Type", "application/json")
 	UploadTaskPlugin(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	stored, err := model.GetTaskPluginVersion(key, "")
+	stored, err := model.GetTaskPluginVersion(testtenant.Context(), key, "")
 	require.NoError(t, err)
-	taskPluginSyncState.Lock()
-	syncedHash := taskPluginSyncState.hashes[key]
-	_, hasSyncError := taskPluginSyncState.errors[key]
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	syncedHash := tenantTaskPluginSyncState(testtenant.Context()).hashes[key]
+	_, hasSyncError := tenantTaskPluginSyncState(testtenant.Context()).errors[key]
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	assert.Equal(t, stored.SourceHash, syncedHash)
 	assert.False(t, hasSyncError)
 }
@@ -525,34 +530,34 @@ func TestActivateTaskPluginRefreshesRuntimeSyncState(t *testing.T) {
 	cleanupTaskPluginControllerRuntime(t, key)
 	v1Source := taskPluginControllerTestSource(key, "1.0.0")
 	v2Source := taskPluginControllerTestSource(key, "2.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "1.0.0", Source: v1Source, SourceHash: "hash-v1", Enabled: true,
 	}))
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "2.0.0", Source: v2Source, SourceHash: "hash-v2", Enabled: true,
 	}))
-	_, err := jsplugin.DefaultRegistry.Register(v1Source, jsplugin.Options{Key: key, Version: "1.0.0"})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(v1Source, jsplugin.Options{Key: key, Version: "1.0.0"})
 	require.NoError(t, err)
-	taskPluginSyncState.Lock()
-	taskPluginSyncState.hashes[key] = "hash-v1"
-	taskPluginSyncState.errors[key] = "stale compile error"
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	tenantTaskPluginSyncState(testtenant.Context()).hashes[key] = "hash-v1"
+	tenantTaskPluginSyncState(testtenant.Context()).errors[key] = "stale compile error"
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: key}}
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task/"+key+"/activate", strings.NewReader(`{"version":"2.0.0"}`))
+	context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task/"+key+"/activate", strings.NewReader(`{"version":"2.0.0"}`))
 	context.Request.Header.Set("Content-Type", "application/json")
 	ActivateTaskPlugin(context)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	runtimePlugin, ok := jsplugin.DefaultRegistry.Get(key)
+	runtimePlugin, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	require.True(t, ok)
 	assert.Equal(t, "2.0.0", runtimePlugin.Meta.Version)
-	taskPluginSyncState.Lock()
-	syncedHash := taskPluginSyncState.hashes[key]
-	_, hasSyncError := taskPluginSyncState.errors[key]
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	syncedHash := tenantTaskPluginSyncState(testtenant.Context()).hashes[key]
+	_, hasSyncError := tenantTaskPluginSyncState(testtenant.Context()).errors[key]
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	assert.Equal(t, "hash-v2", syncedHash)
 	assert.False(t, hasSyncError)
 }
@@ -565,61 +570,61 @@ func TestSyncTaskPluginsPublishesOneGenerationForWholeBatch(t *testing.T) {
 	cleanupTaskPluginControllerRuntime(t, secondKey)
 	firstSource := taskPluginControllerTestSource(firstKey, "1.0.0")
 	secondSource := taskPluginControllerTestSource(secondKey, "1.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: firstKey, APIVersion: 1, Version: "1.0.0", Source: firstSource, SourceHash: "first-hash", Enabled: true,
 	}))
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: secondKey, APIVersion: 1, Version: "1.0.0", Source: secondSource, SourceHash: "second-hash", Enabled: true,
 	}))
-	before := jsplugin.DefaultRegistry.Generation().Number
+	before := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation().Number
 
-	SyncTaskPluginsOnce()
+	SyncTaskPluginsOnce(testtenant.Context())
 
-	assert.Equal(t, before+1, jsplugin.DefaultRegistry.Generation().Number)
-	_, firstRegistered := jsplugin.DefaultRegistry.Get(firstKey)
-	_, secondRegistered := jsplugin.DefaultRegistry.Get(secondKey)
+	assert.Equal(t, before+1, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation().Number)
+	_, firstRegistered := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(firstKey)
+	_, secondRegistered := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(secondKey)
 	assert.True(t, firstRegistered)
 	assert.True(t, secondRegistered)
 
-	published := jsplugin.DefaultRegistry.Generation()
-	SyncTaskPluginsOnce()
-	assert.Same(t, published, jsplugin.DefaultRegistry.Generation())
+	published := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation()
+	SyncTaskPluginsOnce(testtenant.Context())
+	assert.Same(t, published, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation())
 }
 
 func TestTaskPluginRuntimeExposesDatabaseRevisionAheadOfLocalGeneration(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	key := "runtime-revision-probe"
 	cleanupTaskPluginControllerRuntime(t, key)
-	taskPluginSyncState.Lock()
-	previousRebuild := taskPluginSyncState.lastRebuild
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	previousRebuild := tenantTaskPluginSyncState(testtenant.Context()).lastRebuild
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	t.Cleanup(func() {
-		taskPluginSyncState.Lock()
-		taskPluginSyncState.lastRebuild = previousRebuild
-		taskPluginSyncState.Unlock()
+		tenantTaskPluginSyncState(testtenant.Context()).Lock()
+		tenantTaskPluginSyncState(testtenant.Context()).lastRebuild = previousRebuild
+		tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	})
 
 	v1Source := taskPluginControllerTestSource(key, "1.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "1.0.0",
 		Source: v1Source, SourceHash: "runtime-v1", Enabled: true,
 	}))
-	require.NoError(t, syncTaskPluginsOnce())
-	localGeneration := jsplugin.DefaultRegistry.Generation().Number
-	taskPluginSyncState.Lock()
-	syncedRevision := taskPluginSyncState.lastRebuild.DatabaseRevision
-	taskPluginSyncState.Unlock()
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
+	localGeneration := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation().Number
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	syncedRevision := tenantTaskPluginSyncState(testtenant.Context()).lastRebuild.DatabaseRevision
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 
 	v2Source := taskPluginControllerTestSource(key, "2.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "2.0.0",
 		Source: v2Source, SourceHash: "runtime-v2", Enabled: true,
 	}))
-	require.NoError(t, model.ActivateTaskPlugin(key, "2.0.0"))
+	require.NoError(t, model.ActivateTaskPlugin(testtenant.Context(), key, "2.0.0"))
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
 	GetTaskPluginRuntime(context)
 
 	var response struct {
@@ -635,7 +640,7 @@ func TestTaskPluginRuntimeExposesDatabaseRevisionAheadOfLocalGeneration(t *testi
 	assert.Equal(t, syncedRevision, response.Data.LastRebuild.DatabaseRevision)
 	assert.Empty(t, response.Data.PluginErrors)
 
-	active, ok := jsplugin.DefaultRegistry.Get(key)
+	active, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	require.True(t, ok)
 	assert.Equal(t, "1.0.0", active.Meta.Version)
 }
@@ -644,23 +649,23 @@ func TestTaskPluginRuntimeReportsPluginLevelCompileErrors(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	key := "runtime-error-probe"
 	cleanupTaskPluginControllerRuntime(t, key)
-	taskPluginSyncState.Lock()
-	previousRebuild := taskPluginSyncState.lastRebuild
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	previousRebuild := tenantTaskPluginSyncState(testtenant.Context()).lastRebuild
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	t.Cleanup(func() {
-		taskPluginSyncState.Lock()
-		taskPluginSyncState.lastRebuild = previousRebuild
-		taskPluginSyncState.Unlock()
+		tenantTaskPluginSyncState(testtenant.Context()).Lock()
+		tenantTaskPluginSyncState(testtenant.Context()).lastRebuild = previousRebuild
+		tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	})
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "1.0.0",
 		Source: "export const meta = {", SourceHash: "broken-source", Enabled: true,
 	}))
-	require.NoError(t, syncTaskPluginsOnce())
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
 	GetTaskPluginRuntime(context)
 
 	var response struct {
@@ -673,7 +678,7 @@ func TestTaskPluginRuntimeReportsPluginLevelCompileErrors(t *testing.T) {
 	assert.Equal(t, response.Data.DatabaseRevision, response.Data.LastRebuild.DatabaseRevision)
 	assert.GreaterOrEqual(t, response.Data.LastRebuild.PluginErrorCount, 1)
 	assert.NotEmpty(t, response.Data.PluginErrors[key])
-	_, registered := jsplugin.DefaultRegistry.Get(key)
+	_, registered := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(key)
 	assert.False(t, registered)
 }
 
@@ -681,34 +686,34 @@ func TestTaskPluginRuntimeSurvivesDatabaseSyncFailure(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	key := "runtime-database-failure"
 	cleanupTaskPluginControllerRuntime(t, key)
-	taskPluginSyncState.Lock()
-	previousRebuild := taskPluginSyncState.lastRebuild
-	taskPluginSyncState.Unlock()
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	previousRebuild := tenantTaskPluginSyncState(testtenant.Context()).lastRebuild
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	t.Cleanup(func() {
-		taskPluginSyncState.Lock()
-		taskPluginSyncState.lastRebuild = previousRebuild
-		taskPluginSyncState.Unlock()
+		tenantTaskPluginSyncState(testtenant.Context()).Lock()
+		tenantTaskPluginSyncState(testtenant.Context()).lastRebuild = previousRebuild
+		tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 	})
 
 	source := taskPluginControllerTestSource(key, "1.0.0")
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: key, APIVersion: 1, Version: "1.0.0",
 		Source: source, SourceHash: "runtime-database-v1", Enabled: true,
 	}))
-	require.NoError(t, syncTaskPluginsOnce())
-	generation := jsplugin.DefaultRegistry.Generation().Number
-	taskPluginSyncState.Lock()
-	syncedRevision := taskPluginSyncState.lastRebuild.DatabaseRevision
-	taskPluginSyncState.Unlock()
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
+	generation := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation().Number
+	tenantTaskPluginSyncState(testtenant.Context()).Lock()
+	syncedRevision := tenantTaskPluginSyncState(testtenant.Context()).lastRebuild.DatabaseRevision
+	tenantTaskPluginSyncState(testtenant.Context()).Unlock()
 
 	sqlDatabase, err := model.DB.DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDatabase.Close())
-	require.Error(t, syncTaskPluginsOnce())
+	require.Error(t, syncTaskPluginsOnce(testtenant.Context()))
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/runtime/status", nil)
 	GetTaskPluginRuntime(context)
 
 	var response struct {
@@ -734,47 +739,47 @@ func TestSyncTaskPluginsCachesRejectedDesiredSourceWithoutLosingIncumbent(t *tes
 	v1Source := taskPluginControllerChannelSource(pluginKey, "1.0.0", 9001)
 	v2Source := taskPluginControllerChannelSource(pluginKey, "2.0.0", 9002)
 	ownerSource := taskPluginControllerChannelSource(ownerKey, "1.0.0", 9002)
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: pluginKey, APIVersion: 1, Version: "1.0.0", Source: v1Source, SourceHash: "retained-v1", Enabled: true,
 	}))
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: ownerKey, APIVersion: 1, Version: "1.0.0", Source: ownerSource, SourceHash: "owner-v1", Enabled: true,
 	}))
-	require.NoError(t, syncTaskPluginsOnce())
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
 
-	incumbent, ok := jsplugin.DefaultRegistry.Get(pluginKey)
+	incumbent, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(pluginKey)
 	require.True(t, ok)
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: pluginKey, APIVersion: 1, Version: "2.0.0", Source: v2Source, SourceHash: "retained-v2", Enabled: true,
 	}))
-	require.NoError(t, model.ActivateTaskPlugin(pluginKey, "2.0.0"))
+	require.NoError(t, model.ActivateTaskPlugin(testtenant.Context(), pluginKey, "2.0.0"))
 
-	require.NoError(t, syncTaskPluginsOnce())
-	rejectedGeneration := jsplugin.DefaultRegistry.Generation()
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
+	rejectedGeneration := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation()
 	for range 2 {
-		require.NoError(t, syncTaskPluginsOnce())
-		active, found := jsplugin.DefaultRegistry.Get(pluginKey)
+		require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
+		active, found := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(pluginKey)
 		require.True(t, found)
 		assert.Same(t, incumbent, active)
-		assert.Equal(t, "2.0.0", jsplugin.DefaultRegistry.OverridePlugins()[pluginKey].Meta.Version)
-		assert.Same(t, incumbent, jsplugin.DefaultRegistry.ActiveOverridePlugins()[pluginKey])
-		assert.Contains(t, jsplugin.DefaultRegistry.RoutingErrors()[pluginKey], "channelType 9002 conflicts")
-		taskPluginSyncState.Lock()
-		assert.Equal(t, "retained-v2", taskPluginSyncState.hashes[pluginKey])
-		taskPluginSyncState.Unlock()
-		assert.Same(t, rejectedGeneration, jsplugin.DefaultRegistry.Generation())
+		assert.Equal(t, "2.0.0", jsplugin.TenantState(testtenant.Context()).DefaultRegistry.OverridePlugins()[pluginKey].Meta.Version)
+		assert.Same(t, incumbent, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.ActiveOverridePlugins()[pluginKey])
+		assert.Contains(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.RoutingErrors()[pluginKey], "channelType 9002 conflicts")
+		tenantTaskPluginSyncState(testtenant.Context()).Lock()
+		assert.Equal(t, "retained-v2", tenantTaskPluginSyncState(testtenant.Context()).hashes[pluginKey])
+		tenantTaskPluginSyncState(testtenant.Context()).Unlock()
+		assert.Same(t, rejectedGeneration, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation())
 	}
 
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{
 		Key: ownerKey, APIVersion: 1, Version: "2.0.0",
 		Source: taskPluginControllerChannelSource(ownerKey, "2.0.0", 9003), SourceHash: "owner-v2", Enabled: true,
 	}))
-	require.NoError(t, model.ActivateTaskPlugin(ownerKey, "2.0.0"))
-	require.NoError(t, syncTaskPluginsOnce())
-	active, ok := jsplugin.DefaultRegistry.Get(pluginKey)
+	require.NoError(t, model.ActivateTaskPlugin(testtenant.Context(), ownerKey, "2.0.0"))
+	require.NoError(t, syncTaskPluginsOnce(testtenant.Context()))
+	active, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get(pluginKey)
 	require.True(t, ok)
 	assert.Equal(t, "2.0.0", active.Meta.Version)
-	assert.NotContains(t, jsplugin.DefaultRegistry.RoutingErrors(), pluginKey)
+	assert.NotContains(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.RoutingErrors(), pluginKey)
 }
 
 const dryRunPluginSource = `
@@ -792,9 +797,9 @@ export const native = { info: function(ctx, task) { return "task:" + task.id; } 
 func runTaskPluginDryRun(t *testing.T, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: "dryrun-probe"}}
-	context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task/dryrun-probe/dryrun", strings.NewReader(body))
+	context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task/dryrun-probe/dryrun", strings.NewReader(body))
 	context.Request.Header.Set("Content-Type", "application/json")
 	DryRunTaskPlugin(context)
 	return recorder
@@ -802,7 +807,7 @@ func runTaskPluginDryRun(t *testing.T, body string) *httptest.ResponseRecorder {
 
 func TestDryRunTaskPluginExecutesHookAndRendererMember(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
 
 	hookRecorder := runTaskPluginDryRun(t, `{"hook":"buildSubmitRequest","args":[{"model":"doc-1"}]}`)
 	assert.Contains(t, hookRecorder.Body.String(), `"success":true`)
@@ -815,7 +820,7 @@ func TestDryRunTaskPluginExecutesHookAndRendererMember(t *testing.T) {
 
 func TestDryRunTaskPluginReportsUnknownHook(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
 
 	recorder := runTaskPluginDryRun(t, `{"hook":"missingHook"}`)
 
@@ -825,7 +830,7 @@ func TestDryRunTaskPluginReportsUnknownHook(t *testing.T) {
 
 func TestDryRunTaskPluginSurfacesBadArgumentErrors(t *testing.T) {
 	setupTaskPluginControllerTest(t)
-	require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
+	require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: "dryrun-probe", APIVersion: 1, Version: "1.0.0", Source: dryRunPluginSource, SourceHash: "hash", Enabled: true}))
 
 	malformedRecorder := runTaskPluginDryRun(t, `{"hook":"buildSubmitRequest","args":[{`)
 	assert.Contains(t, malformedRecorder.Body.String(), `"success":false`)
@@ -878,15 +883,15 @@ func TestUploadTaskPluginPreflightConflict(t *testing.T) {
 			body, err := common.Marshal(payload)
 			require.NoError(t, err)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
 			context.Request.Header.Set("Content-Type", "application/json")
 
 			UploadTaskPlugin(context)
 
 			if testCase.wantSuccess {
 				assert.Contains(t, recorder.Body.String(), `"success":true`)
-				_, err = model.GetTaskPluginVersion(testCase.key, "")
+				_, err = model.GetTaskPluginVersion(testtenant.Context(), testCase.key, "")
 				require.NoError(t, err)
 				return
 			}
@@ -916,8 +921,8 @@ func TestUploadTaskPluginLocalizesUnknownMetaField(t *testing.T) {
 	} {
 		t.Run(tc.language, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", bytes.NewReader(body))
+			c, _ := testtenant.CreateTestContext(recorder)
+			c.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", bytes.NewReader(body))
 			c.Request.Header.Set("Content-Type", "application/json")
 			c.Request.Header.Set("Accept-Language", tc.language)
 			UploadTaskPlugin(c)
@@ -972,8 +977,8 @@ export function parseTaskResult() { return {}; }
 			body, err := common.Marshal(map[string]any{"source": source})
 			require.NoError(t, err)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
 			context.Request.Header.Set("Content-Type", "application/json")
 
 			UploadTaskPlugin(context)
@@ -992,15 +997,15 @@ func TestDeletePureFactoryPluginIsRejected(t *testing.T) {
 		t.Run(query, func(t *testing.T) {
 			setupTaskPluginControllerTest(t)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
+			context, _ := testtenant.CreateTestContext(recorder)
 			context.Params = gin.Params{{Key: "key", Value: "kling"}, {Key: "version", Value: "1.0.0"}}
-			context.Request = httptest.NewRequest(http.MethodDelete, "/api/plugin/task/kling/versions/1.0.0"+query, nil)
+			context.Request = testtenant.NewRequest(http.MethodDelete, "/api/plugin/task/kling/versions/1.0.0"+query, nil)
 
 			DeleteTaskPluginVersion(context)
 
 			assert.Contains(t, recorder.Body.String(), `"success":false`)
 			assert.Contains(t, recorder.Body.String(), "factory plugins cannot be deleted")
-			_, ok := jsplugin.DefaultRegistry.Get("kling")
+			_, ok := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Get("kling")
 			assert.True(t, ok)
 		})
 	}
@@ -1050,15 +1055,15 @@ func TestUploadTaskPluginSourceSha256(t *testing.T) {
 			body, err := common.Marshal(payload)
 			require.NoError(t, err)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", strings.NewReader(string(body)))
 			context.Request.Header.Set("Content-Type", "application/json")
 
 			UploadTaskPlugin(context)
 
 			if testCase.wantSuccess {
 				assert.Contains(t, recorder.Body.String(), `"success":true`)
-				_, err = model.GetTaskPluginVersion(testCase.key, "")
+				_, err = model.GetTaskPluginVersion(testtenant.Context(), testCase.key, "")
 				require.NoError(t, err)
 				return
 			}
@@ -1074,22 +1079,22 @@ func TestUploadTaskPluginSourceSha256(t *testing.T) {
 func setupTaskPluginMarketplaceSourcesTest(t *testing.T) {
 	t.Helper()
 	setupTaskPluginControllerTest(t)
-	originalMap := common.OptionMap
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap = map[string]string{}
-	common.OptionMapRWMutex.Unlock()
+	originalMap := common.TenantState(testtenant.Context()).OptionMap
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = originalMap
-		common.OptionMapRWMutex.Unlock()
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		common.TenantState(testtenant.Context()).OptionMap = originalMap
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	})
 }
 
 func TestGetTaskPluginMarketplaceSourcesDefaultWhenUnset(t *testing.T) {
 	setupTaskPluginMarketplaceSourcesTest(t)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/marketplace/sources", nil)
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/marketplace/sources", nil)
 
 	GetTaskPluginMarketplaceSources(context)
 
@@ -1117,8 +1122,8 @@ func TestUpdateTaskPluginMarketplaceSourcesRoundTrip(t *testing.T) {
 	body, err := common.Marshal(payload)
 	require.NoError(t, err)
 	putRecorder := httptest.NewRecorder()
-	putContext, _ := gin.CreateTestContext(putRecorder)
-	putContext.Request = httptest.NewRequest(http.MethodPut, "/api/plugin/task/marketplace/sources", strings.NewReader(string(body)))
+	putContext, _ := testtenant.CreateTestContext(putRecorder)
+	putContext.Request = testtenant.NewRequest(http.MethodPut, "/api/plugin/task/marketplace/sources", strings.NewReader(string(body)))
 	putContext.Request.Header.Set("Content-Type", "application/json")
 
 	UpdateTaskPluginMarketplaceSources(putContext)
@@ -1126,8 +1131,8 @@ func TestUpdateTaskPluginMarketplaceSourcesRoundTrip(t *testing.T) {
 	assert.Contains(t, putRecorder.Body.String(), `"success":true`)
 
 	getRecorder := httptest.NewRecorder()
-	getContext, _ := gin.CreateTestContext(getRecorder)
-	getContext.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/marketplace/sources", nil)
+	getContext, _ := testtenant.CreateTestContext(getRecorder)
+	getContext.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/marketplace/sources", nil)
 	GetTaskPluginMarketplaceSources(getContext)
 
 	var response struct {
@@ -1160,15 +1165,15 @@ func TestUpdateTaskPluginMarketplaceSourcesValidation(t *testing.T) {
 	for _, testCase := range tests {
 		t.Run(testCase.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPut, "/api/plugin/task/marketplace/sources", strings.NewReader(testCase.body))
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodPut, "/api/plugin/task/marketplace/sources", strings.NewReader(testCase.body))
 			context.Request.Header.Set("Content-Type", "application/json")
 
 			UpdateTaskPluginMarketplaceSources(context)
 
 			assert.Contains(t, recorder.Body.String(), `"success":false`)
 			assert.Contains(t, recorder.Body.String(), testCase.wantErr)
-			assert.Empty(t, common.OptionMap[setting.TaskPluginMarketplaceSourcesKey])
+			assert.Empty(t, common.TenantState(testtenant.Context()).OptionMap[setting.TaskPluginMarketplaceSourcesKey])
 			var count int64
 			require.NoError(t, model.DB.Model(&model.Option{}).Where("key = ?", setting.TaskPluginMarketplaceSourcesKey).Count(&count).Error)
 			assert.Zero(t, count)
@@ -1183,16 +1188,16 @@ func TestTaskPluginDisplayOrderAndMetadata(t *testing.T) {
 	priorities := []int{-10, 0, 50, 50}
 	for i, key := range keys {
 		source := strings.Replace(taskPluginControllerTestSource(key, "1.0.0"), "apiVersion: 1,", fmt.Sprintf("apiVersion: 1, sortPriority: %d, website: %q,", priorities[i], website), 1)
-		_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+		_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 		require.NoError(t, err)
 		cleanupTaskPluginControllerRuntime(t, key)
-		require.NoError(t, model.SaveTaskPlugin(&model.TaskPlugin{Key: key, Version: "1.0.0", APIVersion: 1, Source: source, Enabled: true}))
+		require.NoError(t, model.SaveTaskPlugin(testtenant.Context(), &model.TaskPlugin{Key: key, Version: "1.0.0", APIVersion: 1, Source: source, Enabled: true}))
 	}
 	for _, endpoint := range []string{"list", "options"} {
 		t.Run(endpoint, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodGet, "/", nil)
 			var metas []jsplugin.Meta
 			if endpoint == "list" {
 				ListTaskPlugins(context)
@@ -1231,14 +1236,14 @@ func TestUploadTaskPluginStoresSidecarIconAndServesIt(t *testing.T) {
 	setupTaskPluginControllerTest(t)
 	const key = "icon-sidecar"
 	source := taskPluginControllerTestSource(key, "1.0.0")
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(key) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(key) })
 	svgIcon := "data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><circle cx="4" cy="4" r="4"/></svg>`))
 	upload := func(icon string) *httptest.ResponseRecorder {
 		body, err := common.Marshal(map[string]any{"source": source, "icon": icon})
 		require.NoError(t, err)
 		recorder := httptest.NewRecorder()
-		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodPost, "/api/plugin/task", bytes.NewReader(body))
+		context, _ := testtenant.CreateTestContext(recorder)
+		context.Request = testtenant.NewRequest(http.MethodPost, "/api/plugin/task", bytes.NewReader(body))
 		context.Request.Header.Set("Content-Type", "application/json")
 		UploadTaskPlugin(context)
 		return recorder
@@ -1247,14 +1252,14 @@ func TestUploadTaskPluginStoresSidecarIconAndServesIt(t *testing.T) {
 	rejected := upload("data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>1</script></svg>`)))
 	assert.Contains(t, rejected.Body.String(), `"success":false`)
 	assert.Contains(t, rejected.Body.String(), "script")
-	_, err := model.GetTaskPluginVersion(key, "1.0.0")
+	_, err := model.GetTaskPluginVersion(testtenant.Context(), key, "1.0.0")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "a rejected icon must not store the plugin")
 
 	accepted := upload(svgIcon)
 	require.Contains(t, accepted.Body.String(), `"success":true`)
 	assert.Contains(t, accepted.Body.String(), `"has_icon":true`)
 	assert.NotContains(t, accepted.Body.String(), "base64,", "icon bytes never travel inside detail JSON")
-	stored, err := model.GetTaskPluginVersion(key, "1.0.0")
+	stored, err := model.GetTaskPluginVersion(testtenant.Context(), key, "1.0.0")
 	require.NoError(t, err)
 	assert.Equal(t, svgIcon, stored.Icon)
 
@@ -1262,9 +1267,9 @@ func TestUploadTaskPluginStoresSidecarIconAndServesIt(t *testing.T) {
 	assert.True(t, item.HasIcon)
 
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
+	context, _ := testtenant.CreateTestContext(recorder)
 	context.Params = gin.Params{{Key: "key", Value: key}}
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/"+key+"/icon", nil)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/"+key+"/icon", nil)
 	GetTaskPluginIcon(context)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	assert.Equal(t, "image/svg+xml", recorder.Header().Get("Content-Type"))
@@ -1272,9 +1277,9 @@ func TestUploadTaskPluginStoresSidecarIconAndServesIt(t *testing.T) {
 	assert.Contains(t, recorder.Body.String(), "<circle")
 
 	missing := httptest.NewRecorder()
-	context, _ = gin.CreateTestContext(missing)
+	context, _ = testtenant.CreateTestContext(missing)
 	context.Params = gin.Params{{Key: "key", Value: "no-such-plugin"}}
-	context.Request = httptest.NewRequest(http.MethodGet, "/api/plugin/task/no-such-plugin/icon", nil)
+	context.Request = testtenant.NewRequest(http.MethodGet, "/api/plugin/task/no-such-plugin/icon", nil)
 	GetTaskPluginIcon(context)
 	assert.Equal(t, http.StatusNotFound, missing.Code)
 }

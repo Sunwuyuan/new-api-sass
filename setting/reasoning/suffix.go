@@ -3,6 +3,8 @@
 // of the relaykit extraction. Host code keeps importing this path unchanged.
 package reasoning
 
+import context "context"
+
 import (
 	"strings"
 
@@ -25,14 +27,14 @@ var (
 // ParseOpenAIReasoningEffortFromModelSuffix applies RelayKit's positive family
 // whitelist and the host EffortTailModelIDs escape hatch so real model IDs
 // such as gpt-5.1-codex-max remain opaque.
-func ParseOpenAIReasoningEffortFromModelSuffix(modelName string) (string, string) {
-	return kitreasoning.ParseOpenAIReasoningEffortFromModelSuffix(modelName, model_setting.ShouldPreserveEffortTail)
+func ParseOpenAIReasoningEffortFromModelSuffix(tenantCtx context.Context, modelName string) (string, string) {
+	return kitreasoning.ParseOpenAIReasoningEffortFromModelSuffix(modelName, func(arg0 string) bool { return model_setting.ShouldPreserveEffortTail(tenantCtx, arg0) })
 }
 
 // ParseLegacyModelSuffix parses the old naked aliases only for positively
 // matched GPT/o-series, Claude, and Gemini model families. The provider prefix
 // before the final path segment is kept opaque.
-func ParseLegacyModelSuffix(modelName string, allowClaudeThinkingAlias bool, allowGeminiThinkingAlias bool) (string, kitreasoning.Intent, bool, error) {
+func ParseLegacyModelSuffix(tenantCtx context.Context, modelName string, allowClaudeThinkingAlias bool, allowGeminiThinkingAlias bool) (string, kitreasoning.Intent, bool, error) {
 	prefix, bare := splitModelNamespace(modelName)
 
 	var (
@@ -47,7 +49,7 @@ func ParseLegacyModelSuffix(modelName string, allowClaudeThinkingAlias bool, all
 	case strings.HasPrefix(bare, "gemini-"):
 		base, intent, found, err = kitreasoning.ParseGeminiModelSuffix(bare, allowGeminiThinkingAlias)
 	default:
-		effort, openAIBase := ParseOpenAIReasoningEffortFromModelSuffix(bare)
+		effort, openAIBase := ParseOpenAIReasoningEffortFromModelSuffix(tenantCtx, bare)
 		if effort == "" {
 			return modelName, kitreasoning.Intent{}, false, nil
 		}
@@ -73,18 +75,18 @@ func ParseLegacyModelSuffix(modelName string, allowClaudeThinkingAlias bool, all
 // Names on the thinking-suffix blacklist stay verbatim, including @ tails.
 // Malformed legacy aliases stay intact so request conversion can report the
 // precise validation error later.
-func BaseModelName(modelName string) string {
-	if model_setting.ShouldPreserveThinkingSuffix(modelName) {
+func BaseModelName(tenantCtx context.Context, modelName string) string {
+	if model_setting.ShouldPreserveThinkingSuffix(tenantCtx, modelName) {
 		return modelName
 	}
 	base := kitreasoning.ParseModelModifiers(modelName).Base
-	if model_setting.ShouldPreserveThinkingSuffix(base) {
+	if model_setting.ShouldPreserveThinkingSuffix(tenantCtx, base) {
 		return base
 	}
-	legacyBase, _, found, err := ParseLegacyModelSuffix(
+	legacyBase, _, found, err := ParseLegacyModelSuffix(tenantCtx,
 		base,
-		model_setting.GetClaudeSettings().ThinkingAdapterEnabled,
-		model_setting.GetGeminiSettings().ThinkingAdapterEnabled,
+		model_setting.GetClaudeSettings(tenantCtx).ThinkingAdapterEnabled,
+		model_setting.GetGeminiSettings(tenantCtx).ThinkingAdapterEnabled,
 	)
 	if err != nil {
 		return base
@@ -106,19 +108,19 @@ func splitModelNamespace(modelName string) (string, string) {
 // name candidates (without the raw request name or the bare base). Explicit
 // @ modifiers and legacy aliases normalize through the same Intent, so order,
 // duplicates, and case do not matter. Temperature and topp never appear.
-func CanonicalBillingModelNames(modelName string) []string {
-	if model_setting.ShouldPreserveThinkingSuffix(modelName) {
+func CanonicalBillingModelNames(tenantCtx context.Context, modelName string) []string {
+	if model_setting.ShouldPreserveThinkingSuffix(tenantCtx, modelName) {
 		return nil
 	}
 	spec := kitreasoning.ParseModelModifiers(modelName)
 	base := spec.Base
 	intent, hasThinking := billingIntentFromModifiers(spec)
 
-	if !model_setting.ShouldPreserveThinkingSuffix(base) {
-		legacyBase, legacyIntent, found, err := ParseLegacyModelSuffix(
+	if !model_setting.ShouldPreserveThinkingSuffix(tenantCtx, base) {
+		legacyBase, legacyIntent, found, err := ParseLegacyModelSuffix(tenantCtx,
 			base,
-			model_setting.GetClaudeSettings().ThinkingAdapterEnabled,
-			model_setting.GetGeminiSettings().ThinkingAdapterEnabled,
+			model_setting.GetClaudeSettings(tenantCtx).ThinkingAdapterEnabled,
+			model_setting.GetGeminiSettings(tenantCtx).ThinkingAdapterEnabled,
 		)
 		if err == nil && found {
 			base = legacyBase

@@ -10,6 +10,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +28,7 @@ func TestMain(m *testing.M) {
 	common.SetDatabaseTypes(common.DatabaseTypeSQLite, common.DatabaseTypeSQLite)
 	common.RedisEnabled = false
 	common.BatchUpdateEnabled = false
-	common.LogConsumeEnabled = true
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = true
 	initCol()
 
 	sqlDB, err := db.DB()
@@ -111,7 +112,7 @@ func TestGetTaskForProtocolObservationScopesOwnerAndPlatform(t *testing.T) {
 	}
 	insertTask(t, task)
 
-	got, exists, err := GetTaskForProtocolObservation(context.Background(), 7, "plugin-a", task.TaskID)
+	got, exists, err := GetTaskForProtocolObservation(testtenant.Context(), 7, "plugin-a", task.TaskID)
 	require.NoError(t, err)
 	require.True(t, exists)
 	assert.Equal(t, task.ID, got.ID)
@@ -123,13 +124,13 @@ func TestGetTaskForProtocolObservationScopesOwnerAndPlatform(t *testing.T) {
 		{userID: 8, platform: "plugin-a"},
 		{userID: 7, platform: "plugin-b"},
 	} {
-		got, exists, err = GetTaskForProtocolObservation(context.Background(), query.userID, constant.TaskPlatform(query.platform), task.TaskID)
+		got, exists, err = GetTaskForProtocolObservation(testtenant.Context(), query.userID, constant.TaskPlatform(query.platform), task.TaskID)
 		require.NoError(t, err)
 		assert.False(t, exists)
 		assert.Nil(t, got)
 	}
 
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(testtenant.Context())
 	cancel()
 	_, _, err = GetTaskForProtocolObservation(cancelled, 7, "plugin-a", task.TaskID)
 	require.ErrorIs(t, err, context.Canceled)
@@ -243,7 +244,7 @@ func TestUpdateWithStatus_Win(t *testing.T) {
 
 	task.Status = TaskStatusSuccess
 	task.Progress = "100%"
-	won, err := task.UpdateWithStatus(TaskStatusInProgress)
+	won, err := task.UpdateWithStatus(testtenant.Context(), TaskStatusInProgress)
 	require.NoError(t, err)
 	assert.True(t, won)
 
@@ -264,7 +265,7 @@ func TestUpdateWithStatus_Lose(t *testing.T) {
 	insertTask(t, task)
 
 	task.Status = TaskStatusSuccess
-	won, err := task.UpdateWithStatus(TaskStatusInProgress) // wrong fromStatus
+	won, err := task.UpdateWithStatus(testtenant.Context(), TaskStatusInProgress) // wrong fromStatus
 	require.NoError(t, err)
 	assert.False(t, won)
 
@@ -303,7 +304,7 @@ func TestUpdateWithStatus_ConcurrentWinner(t *testing.T) {
 			}
 			t.CreatedAt = task.CreatedAt
 			t.UpdatedAt = time.Now().Unix()
-			won, err := t.UpdateWithStatus(TaskStatusInProgress)
+			won, err := t.UpdateWithStatus(testtenant.Context(), TaskStatusInProgress)
 			if err == nil {
 				wins[idx] = won
 			}
@@ -336,7 +337,7 @@ func TestUpdateWithStatus_PersistsPluginStateAndPollFailures(t *testing.T) {
 
 	task.PrivateData.PluginState = json.RawMessage(`{"req_key":"new"}`)
 	task.PrivateData.PollFailures = 4
-	won, err := task.UpdateWithStatus(TaskStatusInProgress)
+	won, err := task.UpdateWithStatus(testtenant.Context(), TaskStatusInProgress)
 	require.NoError(t, err)
 	require.True(t, won)
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -37,15 +38,15 @@ func TestAuthLogoutRejectsRefreshCookieSessionMismatch(t *testing.T) {
 		Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1,
 	}
 	require.NoError(t, db.Create(user).Error)
-	sessionA, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "agent-a")
+	sessionA, err := service.CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "agent-a")
 	require.NoError(t, err)
-	sessionB, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "agent-b")
+	sessionB, err := service.CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "agent-b")
 	require.NoError(t, err)
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/auth/logout", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/api/user/auth/logout", nil)
 	c.Request.Header.Set("Authorization", "Bearer "+sessionA.AccessToken)
 	c.Request.Header.Set("X-Auth-Session", sessionA.Session.SID)
 	c.Request.AddCookie(&http.Cookie{Name: service.RefreshCookieName, Value: sessionB.RefreshToken})
@@ -61,7 +62,7 @@ func TestAuthLogoutRejectsRefreshCookieSessionMismatch(t *testing.T) {
 	assert.False(t, response.Success)
 	assert.Equal(t, "AUTH_SESSION_MISMATCH", response.Code)
 	for _, sid := range []string{sessionA.Session.SID, sessionB.Session.SID} {
-		stored, err := model.GetUserSessionBySID(sid)
+		stored, err := model.GetUserSessionBySID(testtenant.Context(), sid)
 		require.NoError(t, err)
 		assert.Equal(t, model.UserSessionStatusActive, stored.Status)
 	}
@@ -92,7 +93,7 @@ func TestWriteAuthSessionErrorMapsSessionGrowthLimits(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
+			c, _ := testtenant.CreateTestContext(recorder)
 			writeAuthSessionError(c, test.err)
 
 			assert.Equal(t, test.expectedStatus, recorder.Code)
@@ -144,8 +145,8 @@ func TestSessionLimitDoesNotRecordRejectedLoginAsSuccessful(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/api/user/login", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/api/user/login", nil)
 	setupLogin(user, c)
 
 	assert.Equal(t, http.StatusConflict, recorder.Code)

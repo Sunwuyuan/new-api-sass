@@ -16,7 +16,7 @@ import (
 // update, and async task polling (Midjourney / Suno / video) jobs into the
 // system task framework so a DB lease dedups execution across multiple master
 // instances and each run is recorded as one task row. Call this before
-// service.StartSystemTaskRunner.
+// service.RunTenantJobs.
 func RegisterScheduledSystemTasks() {
 	service.RegisterSystemTaskHandler(channelTestHandler{})
 	service.RegisterSystemTaskHandler(modelUpdateHandler{})
@@ -31,12 +31,12 @@ type channelTestHandler struct{}
 
 func (channelTestHandler) Type() string { return model.SystemTaskTypeChannelTest }
 
-func (channelTestHandler) Enabled() bool {
-	return operation_setting.GetMonitorSetting().AutoTestChannelEnabled
+func (channelTestHandler) Enabled(tenantCtx context.Context) bool {
+	return operation_setting.GetMonitorSetting(tenantCtx).AutoTestChannelEnabled
 }
 
-func (channelTestHandler) Interval() time.Duration {
-	minutes := operation_setting.GetMonitorSetting().AutoTestChannelMinutes
+func (channelTestHandler) Interval(tenantCtx context.Context) time.Duration {
+	minutes := operation_setting.GetMonitorSetting(tenantCtx).AutoTestChannelMinutes
 	if minutes <= 0 {
 		minutes = 10
 	}
@@ -58,15 +58,15 @@ type channelTestTaskPayload struct {
 func (channelTestHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	payload := channelTestTaskPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
-		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
-	summary, err := runChannelTestTask(ctx, payload.Mode, payload.Notify, service.NewSystemTaskProgressReporter(task, runnerID))
+	summary, err := runChannelTestTask(ctx, payload.Mode, payload.Notify, service.NewSystemTaskProgressReporter(ctx, task, runnerID))
 	if err != nil {
-		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+	finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // modelUpdateHandler runs the scheduled upstream model update detection job.
@@ -74,11 +74,11 @@ type modelUpdateHandler struct{}
 
 func (modelUpdateHandler) Type() string { return model.SystemTaskTypeModelUpdate }
 
-func (modelUpdateHandler) Enabled() bool {
+func (modelUpdateHandler) Enabled(ctx context.Context) bool {
 	return common.GetEnvOrDefaultBool("CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_ENABLED", true)
 }
 
-func (modelUpdateHandler) Interval() time.Duration {
+func (modelUpdateHandler) Interval(ctx context.Context) time.Duration {
 	intervalMinutes := common.GetEnvOrDefault(
 		"CHANNEL_UPSTREAM_MODEL_UPDATE_TASK_INTERVAL_MINUTES",
 		channelUpstreamModelUpdateTaskDefaultIntervalMinutes,
@@ -104,11 +104,11 @@ type modelUpdateTaskPayload struct {
 func (modelUpdateHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
 	payload := modelUpdateTaskPayload{}
 	if err := task.DecodePayload(&payload); err != nil {
-		finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusFailed, nil, err)
+		finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusFailed, nil, err)
 		return
 	}
-	summary := runChannelUpstreamModelUpdateTaskOnce(ctx, payload.Manual, !payload.Manual, service.NewSystemTaskProgressReporter(task, runnerID))
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+	summary := runChannelUpstreamModelUpdateTaskOnce(ctx, payload.Manual, !payload.Manual, service.NewSystemTaskProgressReporter(ctx, task, runnerID))
+	finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // midjourneyPollHandler runs one Midjourney polling pass per scheduled run.
@@ -119,17 +119,17 @@ type midjourneyPollHandler struct{}
 
 func (midjourneyPollHandler) Type() string { return model.SystemTaskTypeMidjourneyPoll }
 
-func (midjourneyPollHandler) Enabled() bool {
-	return constant.UpdateTask && model.HasUnfinishedMidjourneyTasks()
+func (midjourneyPollHandler) Enabled(tenantCtx context.Context) bool {
+	return constant.UpdateTask && model.HasUnfinishedMidjourneyTasks(tenantCtx)
 }
 
-func (midjourneyPollHandler) Interval() time.Duration { return 15 * time.Second }
+func (midjourneyPollHandler) Interval(ctx context.Context) time.Duration { return 15 * time.Second }
 
 func (midjourneyPollHandler) NewPayload() any { return nil }
 
 func (midjourneyPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	summary := runMidjourneyTaskUpdateOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+	summary := runMidjourneyTaskUpdateOnce(ctx, service.NewSystemTaskProgressReporter(ctx, task, runnerID))
+	finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
 // asyncTaskPollHandler runs one async-task (Suno/video) polling pass per
@@ -139,25 +139,25 @@ type asyncTaskPollHandler struct{}
 
 func (asyncTaskPollHandler) Type() string { return model.SystemTaskTypeAsyncTaskPoll }
 
-func (asyncTaskPollHandler) Enabled() bool {
-	return constant.UpdateTask && model.HasUnfinishedSyncTasks()
+func (asyncTaskPollHandler) Enabled(tenantCtx context.Context) bool {
+	return constant.UpdateTask && model.HasUnfinishedSyncTasks(tenantCtx)
 }
 
-func (asyncTaskPollHandler) Interval() time.Duration { return 15 * time.Second }
+func (asyncTaskPollHandler) Interval(ctx context.Context) time.Duration { return 15 * time.Second }
 
 func (asyncTaskPollHandler) NewPayload() any { return nil }
 
 func (asyncTaskPollHandler) Run(ctx context.Context, task *model.SystemTask, runnerID string) {
-	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(task, runnerID))
-	finishSystemTaskHandler(task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
+	summary := service.RunTaskPollingOnce(ctx, service.NewSystemTaskProgressReporter(ctx, task, runnerID))
+	finishSystemTaskHandler(ctx, task, runnerID, model.SystemTaskStatusSucceeded, summary, nil)
 }
 
-func finishSystemTaskHandler(task *model.SystemTask, runnerID string, status model.SystemTaskStatus, result any, runErr error) {
+func finishSystemTaskHandler(tenantCtx context.Context, task *model.SystemTask, runnerID string, status model.SystemTaskStatus, result any, runErr error) {
 	errorMessage := ""
 	if runErr != nil {
 		errorMessage = runErr.Error()
 	}
-	if err := model.FinishSystemTask(task.TaskID, runnerID, status, result, errorMessage); err != nil {
+	if err := model.FinishSystemTask(tenantCtx, task.TaskID, runnerID, status, result, errorMessage); err != nil {
 		common.SysLog(fmt.Sprintf("system task %s failed to persist result: %v", task.TaskID, err))
 	}
 }

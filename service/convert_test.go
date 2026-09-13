@@ -3,6 +3,8 @@ package service
 import (
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -29,17 +31,17 @@ func TestResponseConverterFacades(t *testing.T) {
 		},
 	}
 
-	claudeResp := ResponseOpenAI2Claude(chatResp, &relaycommon.RelayInfo{})
+	claudeResp := ResponseOpenAI2Claude(chatResp, &relaycommon.RelayInfo{Context: testtenant.Context()})
 	require.NotNil(t, claudeResp)
 	assert.Equal(t, "message", claudeResp.Type)
 
-	geminiResp := ResponseOpenAI2Gemini(chatResp, &relaycommon.RelayInfo{})
+	geminiResp := ResponseOpenAI2Gemini(chatResp, &relaycommon.RelayInfo{Context: testtenant.Context()})
 	require.NotNil(t, geminiResp)
 	require.Len(t, geminiResp.Candidates, 1)
 }
 
 func TestStreamResponseConverterFacades(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		SendResponseCount: 1,
 		ClaudeConvertInfo: &relaycommon.ClaudeConvertInfo{
 			LastMessagesType: relaycommon.LastMessageTypeNone,
@@ -60,7 +62,7 @@ func TestStreamResponseConverterFacades(t *testing.T) {
 	claudeResponses := StreamResponseOpenAI2Claude(streamResp, info)
 	require.NotEmpty(t, claudeResponses)
 
-	geminiResp := StreamResponseOpenAI2Gemini(streamResp, &relaycommon.RelayInfo{})
+	geminiResp := StreamResponseOpenAI2Gemini(streamResp, &relaycommon.RelayInfo{Context: testtenant.Context()})
 	require.NotNil(t, geminiResp)
 	require.Len(t, geminiResp.Candidates, 1)
 }

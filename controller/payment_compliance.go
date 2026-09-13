@@ -20,7 +20,7 @@ type PaymentComplianceRequest struct {
 }
 
 func requirePaymentCompliance(c *gin.Context) bool {
-	if !operation_setting.IsPaymentComplianceConfirmed() {
+	if !operation_setting.IsPaymentComplianceConfirmed(c.Request.Context()) {
 		common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 		return false
 	}
@@ -59,7 +59,7 @@ func ConfirmPaymentCompliance(c *gin.Context) {
 	}
 
 	for key, value := range updates {
-		if err := model.UpdateOption(key, value); err != nil {
+		if err := model.UpdateOption(c.Request.Context(), key, value); err != nil {
 			common.ApiError(c, err)
 			return
 		}

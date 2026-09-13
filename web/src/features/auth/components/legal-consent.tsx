@@ -20,15 +20,21 @@ import { useTranslation } from 'react-i18next'
 
 import { Checkbox } from '@/components/ui/checkbox'
 import { Label } from '@/components/ui/label'
+import { tenantPath } from '@/lib/tenant'
 import { cn } from '@/lib/utils'
 
 import type { SystemStatus } from '../types'
 
 interface LegalConsentProps {
-  status: SystemStatus | null
+  status: Pick<
+    SystemStatus,
+    'user_agreement_enabled' | 'privacy_policy_enabled'
+  > | null
   checked: boolean
   onCheckedChange: (nextValue: boolean) => void
   className?: string
+  agreementUrl?: string
+  privacyUrl?: string
 }
 
 export function LegalConsent({
@@ -36,6 +42,8 @@ export function LegalConsent({
   checked,
   onCheckedChange,
   className,
+  agreementUrl,
+  privacyUrl,
 }: LegalConsentProps) {
   const { t } = useTranslation()
   const hasUserAgreement = Boolean(status?.user_agreement_enabled)
@@ -70,7 +78,7 @@ export function LegalConsent({
           {t('I have read and agree to the')}{' '}
           {hasUserAgreement && (
             <a
-              href='/user-agreement'
+              href={agreementUrl || tenantPath('/user-agreement')}
               target='_blank'
               rel='noopener noreferrer'
               className='text-primary hover:underline'
@@ -78,10 +86,10 @@ export function LegalConsent({
               {t('User Agreement')}
             </a>
           )}
-          {hasUserAgreement && hasPrivacyPolicy && ' and the '}
+          {hasUserAgreement && hasPrivacyPolicy && <> {t('and')} </>}
           {hasPrivacyPolicy && (
             <a
-              href='/privacy-policy'
+              href={privacyUrl || tenantPath('/privacy-policy')}
               target='_blank'
               rel='noopener noreferrer'
               className='text-primary hover:underline'

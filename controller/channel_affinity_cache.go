@@ -9,7 +9,7 @@ import (
 )
 
 func GetChannelAffinityCacheStats(c *gin.Context) {
-	stats := service.GetChannelAffinityCacheStats()
+	stats := service.GetChannelAffinityCacheStats(c.Request.Context())
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",
@@ -22,7 +22,7 @@ func ClearChannelAffinityCache(c *gin.Context) {
 	ruleName := strings.TrimSpace(c.Query("rule_name"))
 
 	if all == "true" {
-		deleted := service.ClearChannelAffinityCacheAll()
+		deleted := service.ClearChannelAffinityCacheAll(c.Request.Context())
 		c.JSON(http.StatusOK, gin.H{
 			"success": true,
 			"message": "",
@@ -41,7 +41,7 @@ func ClearChannelAffinityCache(c *gin.Context) {
 		return
 	}
 
-	deleted, err := service.ClearChannelAffinityCacheByRuleName(ruleName)
+	deleted, err := service.ClearChannelAffinityCacheByRuleName(c.Request.Context(), ruleName)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
@@ -79,7 +79,7 @@ func GetChannelAffinityUsageCacheStats(c *gin.Context) {
 		return
 	}
 
-	stats := service.GetChannelAffinityUsageCacheStats(ruleName, usingGroup, keyFp)
+	stats := service.GetChannelAffinityUsageCacheStats(c.Request.Context(), ruleName, usingGroup, keyFp)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "",

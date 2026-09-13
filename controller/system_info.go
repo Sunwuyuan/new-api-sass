@@ -11,7 +11,7 @@ import (
 )
 
 func ListSystemInstances(c *gin.Context) {
-	instances, err := model.ListSystemInstances()
+	instances, err := model.ListSystemInstances(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -31,7 +31,7 @@ func ListSystemInstances(c *gin.Context) {
 }
 
 func DeleteStaleSystemInstances(c *gin.Context) {
-	deletedCount, err := model.DeleteStaleSystemInstances(common.GetTimestamp())
+	deletedCount, err := model.DeleteStaleSystemInstances(c.Request.Context(), common.GetTimestamp())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -49,7 +49,7 @@ func DeleteStaleSystemInstance(c *gin.Context) {
 		return
 	}
 
-	deleted, err := model.DeleteStaleSystemInstance(nodeName, common.GetTimestamp())
+	deleted, err := model.DeleteStaleSystemInstance(c.Request.Context(), nodeName, common.GetTimestamp())
 	if err != nil {
 		common.ApiError(c, err)
 		return

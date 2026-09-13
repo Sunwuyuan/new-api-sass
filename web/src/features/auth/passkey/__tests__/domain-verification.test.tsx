@@ -16,13 +16,14 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-// @vitest-environment-options {"url":"https://www.example.com"}
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { api } from '@/lib/api'
+// @vitest-environment-options {"url":"https://www.example.com"}
+import { tenantStorage } from '@/lib/tenant'
 import type { AuthBundle } from '@/stores/auth-store'
 
 import { verify, verifyLogin } from '../../secure-verification/api'
@@ -192,12 +193,12 @@ describe('Passkey domain compatibility', () => {
       }),
       expect.anything()
     )
-    expect(localStorage.getItem(storageKey)).toBe('www.example.com')
+    expect(tenantStorage.getItem(storageKey)).toBe('www.example.com')
   })
 
   it('uses the last successful domain without storing flows or credentials', async () => {
     const { get, post } = setupPasskeyNetwork()
-    localStorage.setItem(storageKey, 'www.example.com')
+    tenantStorage.setItem(storageKey, 'www.example.com')
     await expect(
       verify(
         { method: 'passkey' },
@@ -214,13 +215,13 @@ describe('Passkey domain compatibility', () => {
     )
     expect(get).toHaveBeenCalledOnce()
     expect(get.mock.calls[0][0].publicKey.rpId).toBe('www.example.com')
-    expect(localStorage.getItem(storageKey)).toBe('www.example.com')
+    expect(tenantStorage.getItem(storageKey)).toBe('www.example.com')
     expect(localStorage.length).toBe(1)
   })
 
   it('accepts the credential domain chosen by the server over a remembered hint', async () => {
     const { get, post } = setupPasskeyNetwork()
-    localStorage.setItem(storageKey, 'example.com')
+    tenantStorage.setItem(storageKey, 'example.com')
     post.mockResolvedValueOnce({
       data: {
         success: true,
@@ -240,12 +241,12 @@ describe('Passkey domain compatibility', () => {
       new AbortController().signal
     )
     expect(get.mock.calls[0][0].publicKey.rpId).toBe('www.example.com')
-    expect(localStorage.getItem(storageKey)).toBe('www.example.com')
+    expect(tenantStorage.getItem(storageKey)).toBe('www.example.com')
   })
 
   it('discards a removed remembered domain before opening a single browser prompt', async () => {
     const { get, post } = setupPasskeyNetwork()
-    localStorage.setItem(storageKey, 'removed.example.com')
+    tenantStorage.setItem(storageKey, 'removed.example.com')
     post.mockResolvedValueOnce({
       data: { success: false, code: 'PASSKEY_RP_ID_UNAVAILABLE' },
     })
@@ -262,12 +263,12 @@ describe('Passkey domain compatibility', () => {
       expect.anything()
     )
     expect(get).toHaveBeenCalledOnce()
-    expect(localStorage.getItem(storageKey)).toBe('example.com')
+    expect(tenantStorage.getItem(storageKey)).toBe('example.com')
   })
 
   it('does not remember or replay a failed finish request', async () => {
     const { get, post } = setupPasskeyNetwork()
-    localStorage.setItem(storageKey, 'example.com')
+    tenantStorage.setItem(storageKey, 'example.com')
     post
       .mockResolvedValueOnce({
         data: {
@@ -294,7 +295,7 @@ describe('Passkey domain compatibility', () => {
     ).rejects.toThrow()
     expect(get).toHaveBeenCalledOnce()
     expect(post).toHaveBeenCalledTimes(2)
-    expect(localStorage.getItem(storageKey)).toBe('example.com')
+    expect(tenantStorage.getItem(storageKey)).toBe('example.com')
   })
 
   it('allows a manual domain switch after cancellation with a fresh challenge', async () => {
@@ -375,7 +376,7 @@ describe('Passkey domain compatibility', () => {
       verify({ method: 'passkey' }, operation, false, controller.signal)
     ).rejects.toThrow()
     expect(post).toHaveBeenCalledTimes(1)
-    expect(localStorage.getItem(storageKey)).toBeNull()
+    expect(tenantStorage.getItem(storageKey)).toBeNull()
   })
 })
 

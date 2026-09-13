@@ -32,7 +32,7 @@ func EmailBindStart(c *gin.Context) {
 		writeSecurityOperationError(c, service.ErrVerificationContextInvalid)
 		return
 	}
-	email, err := service.ValidateAccountEmail(request.Email)
+	email, err := service.ValidateAccountEmail(c.Request.Context(), request.Email)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -46,7 +46,7 @@ func EmailBindStart(c *gin.Context) {
 	if authorization == nil {
 		return
 	}
-	data, err := service.StartEmailBinding(identity, authorization, email)
+	data, err := service.StartEmailBinding(c.Request.Context(), identity, authorization, email)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -70,7 +70,7 @@ func EmailBindResend(c *gin.Context) {
 		writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
 		return
 	}
-	data, err := service.ResendAccountEmailBinding(identity, request.FlowToken)
+	data, err := service.ResendAccountEmailBinding(c.Request.Context(), identity, request.FlowToken)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -94,17 +94,17 @@ func EmailBind(c *gin.Context) {
 		writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
 		return
 	}
-	state, err := service.FinishEmailBinding(identity, request.FlowToken, request.NewCode, request.OldCode)
+	state, err := service.FinishEmailBinding(c.Request.Context(), identity, request.FlowToken, request.NewCode, request.OldCode)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
 	succeeded = true
-	notificationFailed = service.NotifyAccountSecurityChange(state.CurrentEmail, "Email address changed") != nil
-	if err := service.NotifyAccountSecurityChange(state.Email, "Email address confirmed"); err != nil {
+	notificationFailed = service.NotifyAccountSecurityChange(c.Request.Context(), state.CurrentEmail, "Email address changed") != nil
+	if err := service.NotifyAccountSecurityChange(c.Request.Context(), state.Email, "Email address confirmed"); err != nil {
 		notificationFailed = true
 	}
-	if err := model.PublishUserAuthCache(identity.UserID); err != nil {
+	if err := model.PublishUserAuthCache(c.Request.Context(), identity.UserID); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}

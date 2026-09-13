@@ -1,5 +1,7 @@
 package billing_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"maps"
@@ -49,17 +51,17 @@ func init() {
 // Read accessors (hot path, must be fast)
 // ---------------------------------------------------------------------------
 
-func GetBillingMode(model string) string {
-	if mode, ok := billingSetting.BillingMode[model]; ok {
+func GetBillingMode(tenantCtx context.Context, model string) string {
+	if mode, ok := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).BillingMode[model]; ok {
 		return mode
 	}
 	if _, ok := builtinBillingExpr[model]; ok {
 		// Existing administrator-configured legacy prices take precedence over
 		// a newly introduced built-in expression unless a mode was explicit.
-		if ratio_setting.HasConfiguredModelRatio(model) {
+		if ratio_setting.HasConfiguredModelRatio(tenantCtx, model) {
 			return BillingModeRatio
 		}
-		if _, configured := ratio_setting.GetModelPrice(model, false); configured {
+		if _, configured := ratio_setting.GetModelPrice(tenantCtx, model, false); configured {
 			return BillingModeRatio
 		}
 		return BillingModeTieredExpr
@@ -67,11 +69,11 @@ func GetBillingMode(model string) string {
 	return BillingModeRatio
 }
 
-func GetBillingExpr(model string) (string, bool) {
-	if expr, ok := billingSetting.BillingExpr[model]; ok {
+func GetBillingExpr(tenantCtx context.Context, model string) (string, bool) {
+	if expr, ok := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).BillingExpr[model]; ok {
 		return expr, true
 	}
-	if GetBillingMode(model) == BillingModeTieredExpr {
+	if GetBillingMode(tenantCtx, model) == BillingModeTieredExpr {
 		expr, ok := builtinBillingExpr[model]
 		return expr, ok
 	}
@@ -95,33 +97,33 @@ func SplitPluginBillingExprKey(key string) (plugin, model string, ok bool) {
 	return plugin, model, true
 }
 
-func GetPluginBillingExprCopy() map[string]string {
-	return maps.Clone(billingSetting.PluginBillingExpr)
+func GetPluginBillingExprCopy(tenantCtx context.Context) map[string]string {
+	return maps.Clone((*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).PluginBillingExpr)
 }
 
-func GetPluginBillingExpr(pluginKey, model string) (string, bool) {
-	expression, ok := billingSetting.PluginBillingExpr[PluginBillingExprKey(pluginKey, model)]
+func GetPluginBillingExpr(tenantCtx context.Context, pluginKey, model string) (string, bool) {
+	expression, ok := (*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).PluginBillingExpr[PluginBillingExprKey(pluginKey, model)]
 	return expression, ok
 }
 
 // ResolveTaskBillingExpr selects the executing plugin's override before the
 // model expression, retaining the model alias fallback and explicit modes.
-func ResolveTaskBillingExpr(pluginKey, model, mappedModel string) (string, bool) {
+func ResolveTaskBillingExpr(tenantCtx context.Context, pluginKey, model, mappedModel string) (string, bool) {
 	if pluginKey != "" {
-		if expr, ok := GetPluginBillingExpr(pluginKey, model); ok {
+		if expr, ok := GetPluginBillingExpr(tenantCtx, pluginKey, model); ok {
 			return expr, true
 		}
 		if mappedModel != "" && mappedModel != model {
-			if expr, ok := GetPluginBillingExpr(pluginKey, mappedModel); ok {
+			if expr, ok := GetPluginBillingExpr(tenantCtx, pluginKey, mappedModel); ok {
 				return expr, true
 			}
 		}
 	}
-	if GetBillingMode(model) == BillingModeTieredExpr {
-		return GetBillingExpr(model)
+	if GetBillingMode(tenantCtx, model) == BillingModeTieredExpr {
+		return GetBillingExpr(tenantCtx, model)
 	}
-	if mappedModel != "" && mappedModel != model && GetBillingMode(mappedModel) == BillingModeTieredExpr {
-		expression, ok := GetBillingExpr(mappedModel)
+	if mappedModel != "" && mappedModel != model && GetBillingMode(tenantCtx, mappedModel) == BillingModeTieredExpr {
+		expression, ok := GetBillingExpr(tenantCtx, mappedModel)
 		return expression, ok && strings.TrimSpace(expression) != ""
 	}
 	return "", false
@@ -148,35 +150,35 @@ func GetBuiltinBillingExprCopy() map[string]string {
 	return lo.Assign(builtinBillingExpr)
 }
 
-func GetBillingModeCopy() map[string]string {
-	modes := lo.Assign(billingSetting.BillingMode)
+func GetBillingModeCopy(tenantCtx context.Context) map[string]string {
+	modes := lo.Assign((*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).BillingMode)
 	for model := range builtinBillingExpr {
-		if _, configured := modes[model]; !configured && GetBillingMode(model) == BillingModeTieredExpr {
+		if _, configured := modes[model]; !configured && GetBillingMode(tenantCtx, model) == BillingModeTieredExpr {
 			modes[model] = BillingModeTieredExpr
 		}
 	}
 	return modes
 }
 
-func GetBillingExprCopy() map[string]string {
-	expressions := lo.Assign(billingSetting.BillingExpr)
+func GetBillingExprCopy(tenantCtx context.Context) map[string]string {
+	expressions := lo.Assign((*(config.GlobalConfig.ForTenant(tenantCtx).Get("billing_setting").(*BillingSetting))).BillingExpr)
 	for model := range builtinBillingExpr {
 		if _, configured := expressions[model]; configured {
 			continue
 		}
-		if expression, ok := GetBillingExpr(model); ok {
+		if expression, ok := GetBillingExpr(tenantCtx, model); ok {
 			expressions[model] = expression
 		}
 	}
 	return expressions
 }
 
-func GetPricingSyncData(base map[string]any) map[string]any {
+func GetPricingSyncData(tenantCtx context.Context, base map[string]any) map[string]any {
 	extra := make(map[string]any, 2)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
+	if modes := GetBillingModeCopy(tenantCtx); len(modes) > 0 {
 		extra[BillingModeField] = modes
 	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
+	if exprs := GetBillingExprCopy(tenantCtx); len(exprs) > 0 {
 		extra[BillingExprField] = exprs
 	}
 	return lo.Assign(base, extra)

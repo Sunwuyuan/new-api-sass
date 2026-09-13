@@ -38,7 +38,7 @@ func Playground(c *gin.Context) {
 	userId := c.GetInt("id")
 
 	// Write user context to ensure acceptUnsetRatio is available
-	userCache, err := model.GetUserCache(userId)
+	userCache, err := model.GetUserCache(c.Request.Context(), userId)
 	if err != nil {
 		newAPIError = types.NewError(err, types.ErrorCodeQueryDataError, types.ErrOptionWithSkipRetry())
 		return

@@ -1,16 +1,18 @@
 package model
 
-func GetModelEnableGroups(modelName string) []string {
+import context "context"
+
+func GetModelEnableGroups(tenantCtx context.Context, modelName string) []string {
 	// 确保缓存最新
-	GetPricing()
+	GetPricing(tenantCtx)
 
 	if modelName == "" {
 		return make([]string, 0)
 	}
 
-	modelEnableGroupsLock.RLock()
-	groups, ok := modelEnableGroups[modelName]
-	modelEnableGroupsLock.RUnlock()
+	TenantState(tenantCtx).modelEnableGroupsLock.RLock()
+	groups, ok := TenantState(tenantCtx).modelEnableGroups[modelName]
+	TenantState(tenantCtx).modelEnableGroupsLock.RUnlock()
 	if !ok {
 		return make([]string, 0)
 	}
@@ -18,12 +20,12 @@ func GetModelEnableGroups(modelName string) []string {
 }
 
 // GetModelQuotaTypes 返回指定模型的计费类型集合（来自缓存）
-func GetModelQuotaTypes(modelName string) []int {
-	GetPricing()
+func GetModelQuotaTypes(tenantCtx context.Context, modelName string) []int {
+	GetPricing(tenantCtx)
 
-	modelEnableGroupsLock.RLock()
-	quota, ok := modelQuotaTypeMap[modelName]
-	modelEnableGroupsLock.RUnlock()
+	TenantState(tenantCtx).modelEnableGroupsLock.RLock()
+	quota, ok := TenantState(tenantCtx).modelQuotaTypeMap[modelName]
+	TenantState(tenantCtx).modelEnableGroupsLock.RUnlock()
 	if !ok {
 		return []int{}
 	}

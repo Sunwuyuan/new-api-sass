@@ -21,7 +21,7 @@ func CreateLogCleanupSystemTask(c *gin.Context) {
 		return
 	}
 
-	task, err := service.StartLogCleanupTask(targetTimestamp)
+	task, err := service.StartLogCleanupTask(c.Request.Context(), targetTimestamp)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -44,7 +44,7 @@ func GetCurrentSystemTask(c *gin.Context) {
 		return
 	}
 
-	task, err := model.GetActiveSystemTask(taskType)
+	task, err := model.GetActiveSystemTask(c.Request.Context(), taskType)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -68,7 +68,7 @@ func GetCurrentSystemTask(c *gin.Context) {
 func ListSystemTasks(c *gin.Context) {
 	limit, _ := strconv.Atoi(c.Query("limit"))
 
-	tasks, err := model.ListSystemTasks(limit)
+	tasks, err := model.ListSystemTasks(c.Request.Context(), limit)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -96,7 +96,7 @@ func GetSystemTask(c *gin.Context) {
 		return
 	}
 
-	task, err := model.GetSystemTaskByTaskID(taskID)
+	task, err := model.GetSystemTaskByTaskID(c.Request.Context(), taskID)
 	if err != nil {
 		common.ApiError(c, err)
 		return

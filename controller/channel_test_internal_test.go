@@ -11,8 +11,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -47,7 +49,7 @@ func TestValidateChannelProxy(t *testing.T) {
 				Setting: common.GetPointer(string(setting)),
 			}
 
-			err = validateChannel(channel, false)
+			err = validateChannel(testtenant.Context(), channel, false)
 
 			if test.wantErr {
 				require.ErrorContains(t, err, "invalid channel proxy")
@@ -76,7 +78,7 @@ func TestValidateChannelRequiresNewAPIBaseURL(t *testing.T) {
 				BaseURL: test.baseURL,
 			}
 
-			err := validateChannel(channel, false)
+			err := validateChannel(testtenant.Context(), channel, false)
 
 			if test.wantErr {
 				require.ErrorContains(t, err, "New API channel base URL cannot be empty")
@@ -152,9 +154,9 @@ func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
 	require.NoError(t, db.Create(origin).Error)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: fmt.Sprintf("%d", origin.Id)}}
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/copy", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/copy", nil)
 
 	CopyChannel(ctx)
 
@@ -167,22 +169,22 @@ func TestCopyChannelRejectsInvalidLegacyProxySettings(t *testing.T) {
 func TestDeleteChannelResetsProxyCacheWhenPreReadFails(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.Log{}, &model.AuditLog{}))
-	service.ResetProxyClientCache()
-	t.Cleanup(service.ResetProxyClientCache)
+	service.ResetProxyClientCache(testtenant.Context())
+	t.Cleanup(func() { service.ResetProxyClientCache(testtenant.Context()) })
 
 	proxyURL := "http://proxy.example:8080"
-	beforeDelete, err := service.GetHttpClientWithProxy(proxyURL)
+	beforeDelete, err := service.GetHttpClientWithProxy(testtenant.Context(), proxyURL)
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
+	ctx, _ := testtenant.CreateTestContext(recorder)
 	ctx.Params = gin.Params{{Key: "id", Value: "999999"}}
-	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/channel/999999", nil)
+	ctx.Request = testtenant.NewRequest(http.MethodDelete, "/api/channel/999999", nil)
 
 	DeleteChannel(ctx)
 
 	assert.Contains(t, recorder.Body.String(), `"success":true`)
-	afterDelete, err := service.GetHttpClientWithProxy(proxyURL)
+	afterDelete, err := service.GetHttpClientWithProxy(testtenant.Context(), proxyURL)
 	require.NoError(t, err)
 	assert.NotSame(t, beforeDelete, afterDelete)
 }
@@ -196,8 +198,8 @@ func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 	requestBody, err := common.Marshal(ChannelBatch{Ids: []int{channel.Id, 999999}})
 	require.NoError(t, err)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodDelete, "/api/channel/batch", bytes.NewReader(requestBody))
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodDelete, "/api/channel/batch", bytes.NewReader(requestBody))
 	ctx.Request.Header.Set("Content-Type", "application/json")
 
 	DeleteChannelBatch(ctx)
@@ -224,14 +226,14 @@ func TestDeleteChannelBatchReportsAndAuditsActualDeletedCount(t *testing.T) {
 }
 
 func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode:   "tiered_expr",
 			ExprString:    `param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`,
 			ExprHash:      billingexpr.ExprHashString(`param("stream") == true ? tier("stream", p * 3) : tier("base", p * 2)`),
 			GroupRatio:    1,
 			EstimatedTier: "stream",
-			QuotaPerUnit:  common.QuotaPerUnit,
+			QuotaPerUnit:  common.TenantState(testtenant.Context()).QuotaPerUnit,
 			ExprVersion:   1,
 		},
 		BillingRequestInput: &billingexpr.RequestInput{
@@ -253,9 +255,9 @@ func TestSettleTestQuotaUsesTieredBilling(t *testing.T) {
 
 func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		TieredBillingSnapshot: &billingexpr.BillingSnapshot{
 			BillingMode: "tiered_expr",
 			ExprString:  `tier("base", p * 2)`,
@@ -290,7 +292,7 @@ func TestBuildTestLogOtherInjectsTieredInfo(t *testing.T) {
 
 func TestResolveChannelTestUserIDUsesRequestUser(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	ctx.Set("id", 2)
 
 	userID, err := resolveChannelTestUserID(ctx)
@@ -364,7 +366,7 @@ func TestRunChannelTestWorkersHonorsConfiguredConcurrency(t *testing.T) {
 
 	go func() {
 		summaryResult <- runChannelTestWorkers(
-			context.Background(),
+			testtenant.Context(),
 			channels,
 			2,
 			func(_ context.Context, _ *model.Channel) channelTestSummary {
@@ -407,7 +409,7 @@ func TestRunChannelTestWorkersStopsAfterCancellation(t *testing.T) {
 	common.RequestInterval = 0
 	t.Cleanup(func() { common.RequestInterval = originalInterval })
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(testtenant.Context())
 	channels := []*model.Channel{
 		{Id: 1, Status: common.ChannelStatusEnabled},
 		{Id: 2, Status: common.ChannelStatusEnabled},
@@ -453,12 +455,12 @@ func TestTestAllChannelsRejectsExistingActiveTask(t *testing.T) {
 	db := setupModelListControllerTestDB(t)
 	require.NoError(t, db.AutoMigrate(&model.SystemTask{}, &model.SystemTaskLock{}))
 
-	existing, err := model.CreateSystemTask(model.SystemTaskTypeChannelTest, nil, nil)
+	existing, err := model.CreateSystemTask(testtenant.Context(), model.SystemTaskTypeChannelTest, nil, nil)
 	require.NoError(t, err)
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/channel/test", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/api/channel/test", nil)
 
 	TestAllChannels(ctx)
 

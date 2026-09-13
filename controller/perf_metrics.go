@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"net/http"
 	"strconv"
@@ -19,8 +21,8 @@ func GetPerfMetricsSummary(c *gin.Context) {
 		}
 	}
 
-	activeGroups := append(lo.Keys(ratio_setting.GetGroupRatioCopy()), "auto")
-	result, err := perfmetrics.QuerySummaryAll(hours, activeGroups)
+	activeGroups := append(lo.Keys(ratio_setting.GetGroupRatioCopy(c.Request.Context())), "auto")
+	result, err := perfmetrics.QuerySummaryAll(c.Request.Context(), hours, activeGroups)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -52,7 +54,7 @@ func GetPerfMetrics(c *gin.Context) {
 		}
 	}
 
-	result, err := perfmetrics.Query(perfmetrics.QueryParams{
+	result, err := perfmetrics.Query(c.Request.Context(), perfmetrics.QueryParams{
 		Model: modelName,
 		Group: c.Query("group"),
 		Hours: hours,
@@ -65,7 +67,7 @@ func GetPerfMetrics(c *gin.Context) {
 		return
 	}
 
-	result.Groups = filterActiveGroups(result.Groups)
+	result.Groups = filterActiveGroups(c.Request.Context(), result.Groups)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -73,8 +75,8 @@ func GetPerfMetrics(c *gin.Context) {
 	})
 }
 
-func filterActiveGroups(groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {
-	activeRatios := ratio_setting.GetGroupRatioCopy()
+func filterActiveGroups(tenantCtx context.Context, groups []perfmetrics.GroupResult) []perfmetrics.GroupResult {
+	activeRatios := ratio_setting.GetGroupRatioCopy(tenantCtx)
 	return lo.Filter(groups, func(g perfmetrics.GroupResult, _ int) bool {
 		_, ok := activeRatios[g.Group]
 		return ok || g.Group == "auto"

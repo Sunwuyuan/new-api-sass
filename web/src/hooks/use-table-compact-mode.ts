@@ -18,11 +18,13 @@ For commercial licensing, please contact support@quantumnous.com
 */
 import { useState, useEffect, useCallback } from 'react'
 
+import { tenantStorage } from '@/lib/tenant'
+
 const STORAGE_KEY = 'table_compact_modes'
 
 function getCompactMode(tableKey: string): boolean {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = tenantStorage.getItem(STORAGE_KEY)
     if (!raw) return false
     const modes = JSON.parse(raw) as Record<string, boolean>
     return Boolean(modes[tableKey])
@@ -33,17 +35,17 @@ function getCompactMode(tableKey: string): boolean {
 
 function setCompactMode(value: boolean, tableKey: string) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = tenantStorage.getItem(STORAGE_KEY)
     const modes = raw ? (JSON.parse(raw) as Record<string, boolean>) : {}
     modes[tableKey] = value
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(modes))
+    tenantStorage.setItem(STORAGE_KEY, JSON.stringify(modes))
   } catch {
     /* ignore */
   }
 }
 
 /**
- * Manages per-table compact mode toggle persisted in localStorage.
+ * Manages per-table compact mode toggle persisted in tenantStorage.
  * Stays in sync across tabs via the storage event.
  */
 export function useTableCompactMode(

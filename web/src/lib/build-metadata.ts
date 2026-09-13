@@ -16,6 +16,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { tenantStorage } from '@/lib/tenant'
+
 /**
  * Build metadata helper.
  *
@@ -146,7 +148,7 @@ export function installBuildMetadata(): void {
 
   // Persisted revision so other modules can derive cache keys from it.
   try {
-    window.localStorage.setItem(LS_REVISION_KEY, rev)
+    tenantStorage.setItem(LS_REVISION_KEY, rev)
   } catch {
     // Storage can be unavailable (private mode, disabled cookies, …).
   }

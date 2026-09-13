@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
@@ -104,6 +105,7 @@ func openTokenControllerTestDB(t *testing.T) *gorm.DB {
 
 func migrateTokenControllerTestDB(t *testing.T, db *gorm.DB) {
 	t.Helper()
+	require.NoError(t, model.MigrateTenantSchema(db, []any{&model.Token{}}))
 
 	if err := db.AutoMigrate(&model.Token{}); err != nil {
 		t.Fatalf("failed to migrate token table: %v", err)
@@ -202,8 +204,8 @@ func newAuthenticatedContext(t *testing.T, method string, target string, body an
 	}
 
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(method, target, requestBody)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(method, target, requestBody)
 	if body != nil {
 		ctx.Request.Header.Set("Content-Type", "application/json")
 	}
@@ -620,7 +622,7 @@ func TestAPITokenAuditDatabaseMatrix(t *testing.T) {
 				if separateLog {
 					logDB, _ := newAuditTestDatabase(t, database.name, dsn)
 					model.LOG_DB = logDB
-					require.NoError(t, model.MigrateAuditLogs())
+					require.NoError(t, model.MigrateAuditLogs(testtenant.Context()))
 				}
 				versionSQL := "SELECT version()"
 				if database.name == "sqlite" {
@@ -648,10 +650,10 @@ func verifyAPITokenAudit(t *testing.T) {
 	other := &model.User{Username: "other-owner", Password: "placeholder", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1, AffCode: "other-owner"}
 	require.NoError(t, model.DB.Create(other).Error)
 	session := &model.UserSession{SID: "token-audit-session", UserID: user.Id, Version: 1, UserAuthVersion: 1, Status: model.UserSessionStatusActive, RefreshHash: "placeholder", LoginMethod: "password", LastActiveAt: time.Now().Unix(), ExpiresAt: time.Now().Add(time.Hour).Unix()}
-	require.NoError(t, model.CreateUserSession(session))
-	jwt, _, err := service.IssueAccessToken(service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+	require.NoError(t, model.CreateUserSession(testtenant.Context(), session))
+	jwt, _, err := service.IssueAccessToken(testtenant.Context(), service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
 	require.NoError(t, err)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(middleware.RequestId(), middleware.AccessTokenAudit())
 	tokenRoutes := router.Group("/api/token", middleware.UserAuth(), middleware.TokenOperationAudit())
 	tokenRoutes.POST("/", AddToken)
@@ -732,7 +734,7 @@ func verifyAPITokenAudit(t *testing.T) {
 					t.Cleanup(func() { require.NoError(t, model.DB.Callback().Update().Remove("token-audit:fail")) })
 				}
 			}
-			request := httptest.NewRequest(tc.method, "/api/token"+replace.Replace(tc.path), strings.NewReader(replace.Replace(tc.body)))
+			request := testtenant.NewRequest(tc.method, "/api/token"+replace.Replace(tc.path), strings.NewReader(replace.Replace(tc.body)))
 			credential := jwt
 			if tc.usePAT {
 				credential = pat
@@ -772,6 +774,9 @@ func verifyAPITokenAudit(t *testing.T) {
 			assert.Equal(t, response.Code, operation.Status)
 			if tc.rateLimit {
 				assert.Equal(t, 429, response.Code)
+			} else if strings.HasPrefix(tc.name, "foreign ") || tc.name == "missing delete" {
+				assert.Equal(t, http.StatusNotFound, response.Code)
+				assert.False(t, decodeAPIResponse(t, response).Success)
 			} else {
 				assert.Equal(t, 200, response.Code)
 				assert.Equal(t, tc.success, decodeAPIResponse(t, response).Success)
@@ -825,7 +830,7 @@ func verifyAPITokenAudit(t *testing.T) {
 		body, err := common.Marshal(TokenBatch{Ids: ids})
 		require.NoError(t, err)
 		for _, path := range []string{"/api/token/batch", "/api/token/batch/keys"} {
-			request := httptest.NewRequest("POST", path, bytes.NewReader(body))
+			request := testtenant.NewRequest("POST", path, bytes.NewReader(body))
 			request.Header.Set("Authorization", "Bearer "+jwt)
 			request.Header.Set("Content-Type", "application/json")
 			response := httptest.NewRecorder()
@@ -867,7 +872,7 @@ func verifyAPITokenAudit(t *testing.T) {
 	})
 
 	t.Run("self audit excludes other owners", func(t *testing.T) {
-		model.RecordAuditLog(nil, model.AuditLog{UserId: other.Id, Username: other.Username, ActorRole: common.RoleCommonUser, Category: model.AuditCategorySecurity, Action: "token.delete", Content: "other-user-audit", Success: true})
+		model.RecordAuditLogContext(testtenant.Context(), nil, model.AuditLog{UserId: other.Id, Username: other.Username, ActorRole: common.RoleCommonUser, Category: model.AuditCategorySecurity, Action: "token.delete", Content: "other-user-audit", Success: true})
 		response := auditRequest(router, "GET", "/api/audit/self?category=security&page_size=100", jwt)
 		assert.Equal(t, 200, response.Code)
 		assert.Contains(t, response.Body.String(), "token.create")
@@ -881,7 +886,7 @@ func verifyAPITokenAudit(t *testing.T) {
 			}
 		}))
 		t.Cleanup(func() { require.NoError(t, model.LOG_DB.Callback().Create().Remove("token-audit:log-fail")) })
-		request := httptest.NewRequest("POST", "/api/token/", strings.NewReader(`{"name":"audit-down","unlimited_quota":true}`))
+		request := testtenant.NewRequest("POST", "/api/token/", strings.NewReader(`{"name":"audit-down","unlimited_quota":true}`))
 		request.Header.Set("Authorization", "Bearer "+jwt)
 		request.Header.Set("Content-Type", "application/json")
 		response := httptest.NewRecorder()

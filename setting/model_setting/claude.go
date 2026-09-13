@@ -1,5 +1,7 @@
 package model_setting
 
+import context "context"
+
 import (
 	"fmt"
 	"net/http"
@@ -7,6 +9,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/setting/config"
+	"github.com/QuantumNous/new-api/tenant"
 )
 
 //var claudeHeadersSettings = map[string][]string{}
@@ -42,12 +45,17 @@ func init() {
 }
 
 // GetClaudeSettings 获取Claude配置
-func GetClaudeSettings() *ClaudeSettings {
-	// check default max tokens must have default key
-	if _, ok := claudeSettings.DefaultMaxTokens["default"]; !ok {
-		claudeSettings.DefaultMaxTokens["default"] = 8192
+func GetClaudeSettings(tenantCtx context.Context) *ClaudeSettings {
+	current := config.GlobalConfig.ForTenant(tenantCtx).Get("claude").(*ClaudeSettings)
+	if _, ok := current.DefaultMaxTokens["default"]; ok {
+		return current
 	}
-	return &claudeSettings
+	snapshot := tenant.Clone(current)
+	if snapshot.DefaultMaxTokens == nil {
+		snapshot.DefaultMaxTokens = make(map[string]int)
+	}
+	snapshot.DefaultMaxTokens["default"] = 8192
+	return snapshot
 }
 
 func (c *ClaudeSettings) WriteHeaders(originModel string, httpHeader *http.Header) {

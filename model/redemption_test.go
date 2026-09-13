@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -88,7 +89,7 @@ func TestSearchRedemptionsFiltersAndPaginates(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rows, total, err := SearchRedemptions(tt.keyword, tt.status, tt.startIdx, tt.num)
+			rows, total, err := SearchRedemptions(testtenant.Context(), tt.keyword, tt.status, tt.startIdx, tt.num)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantTotal, total)
 			gotIds := make([]int, 0, len(rows))
@@ -128,7 +129,7 @@ func setupRedeemFixture(t *testing.T, quota int) (userId int, key string) {
 func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
 	userId, key := setupRedeemFixture(t, 500)
 
-	quota, err := Redeem(key, userId)
+	quota, err := Redeem(testtenant.Context(), key, userId)
 	require.NoError(t, err)
 	assert.Equal(t, 500, quota)
 
@@ -142,7 +143,7 @@ func TestRedeemCreditsQuotaExactlyOnce(t *testing.T) {
 	assert.Equal(t, userId, redemption.UsedUserId)
 
 	// Redeeming the same code again must fail and must not credit quota.
-	_, err = Redeem(key, userId)
+	_, err = Redeem(testtenant.Context(), key, userId)
 	require.Error(t, err)
 	require.NoError(t, DB.First(&user, "id = ?", userId).Error)
 	assert.Equal(t, 500, user.Quota)
@@ -152,7 +153,7 @@ func TestRedeemRejectsWalletOverflow(t *testing.T) {
 	userId, key := setupRedeemFixture(t, 11)
 	require.NoError(t, DB.Model(&User{}).Where("id = ?", userId).Update("quota", common.MaxWalletQuota-10).Error)
 
-	_, err := Redeem(key, userId)
+	_, err := Redeem(testtenant.Context(), key, userId)
 	require.ErrorIs(t, err, ErrRedeemFailed)
 
 	var user User
@@ -174,7 +175,7 @@ func TestRedemptionQuotaRejectsWalletOverflow(t *testing.T) {
 		Quota:       common.MaxWalletQuota + 1,
 		CreatedTime: common.GetTimestamp(),
 	}
-	require.Error(t, redemption.Insert())
+	require.Error(t, redemption.Insert(testtenant.Context()))
 }
 
 // Exactly one of several concurrent redeems of the same code may win, and
@@ -189,7 +190,7 @@ func TestRedeemConcurrentSingleSuccess(t *testing.T) {
 	for i := range goroutines {
 		go func(idx int) {
 			defer wg.Done()
-			if _, err := Redeem(key, userId); err == nil {
+			if _, err := Redeem(testtenant.Context(), key, userId); err == nil {
 				successes[idx] = true
 			}
 		}(i)

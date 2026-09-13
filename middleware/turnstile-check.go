@@ -14,7 +14,7 @@ type turnstileCheckResponse struct {
 
 func TurnstileCheck() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if common.TurnstileCheckEnabled {
+		if common.TenantState(c.Request.Context()).TurnstileCheckEnabled {
 			response := c.Query("turnstile")
 			if response == "" {
 				c.JSON(http.StatusOK, gin.H{
@@ -25,7 +25,7 @@ func TurnstileCheck() gin.HandlerFunc {
 				return
 			}
 			rawRes, err := http.PostForm("https://challenges.cloudflare.com/turnstile/v0/siteverify", url.Values{
-				"secret":   {common.TurnstileSecretKey},
+				"secret":   {common.TenantState(c.Request.Context()).TurnstileSecretKey},
 				"response": {response},
 				"remoteip": {c.ClientIP()},
 			})

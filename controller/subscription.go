@@ -30,13 +30,13 @@ type SubscriptionBalancePayRequest struct {
 // ---- User APIs ----
 
 func GetSubscriptionPlans(c *gin.Context) {
-	if !operation_setting.IsPaymentComplianceConfirmed() {
+	if !operation_setting.IsPaymentComplianceConfirmed(c.Request.Context()) {
 		common.ApiSuccess(c, []SubscriptionPlanDTO{})
 		return
 	}
 
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).Where("enabled = ?", true).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -52,17 +52,17 @@ func GetSubscriptionPlans(c *gin.Context) {
 
 func GetSubscriptionSelf(c *gin.Context) {
 	userId := c.GetInt("id")
-	settingMap, _ := model.GetUserSetting(userId, false)
+	settingMap, _ := model.GetUserSetting(c.Request.Context(), userId, false)
 	pref := common.NormalizeBillingPreference(settingMap.BillingPreference)
 
 	// Get all subscriptions (including expired)
-	allSubscriptions, err := model.GetAllUserSubscriptions(userId)
+	allSubscriptions, err := model.GetAllUserSubscriptions(c.Request.Context(), userId)
 	if err != nil {
 		allSubscriptions = []model.SubscriptionSummary{}
 	}
 
 	// Get active subscriptions for backward compatibility
-	activeSubscriptions, err := model.GetAllActiveUserSubscriptions(userId)
+	activeSubscriptions, err := model.GetAllActiveUserSubscriptions(c.Request.Context(), userId)
 	if err != nil {
 		activeSubscriptions = []model.SubscriptionSummary{}
 	}
@@ -83,14 +83,14 @@ func UpdateSubscriptionPreference(c *gin.Context) {
 	}
 	pref := common.NormalizeBillingPreference(req.BillingPreference)
 
-	user, err := model.GetUserById(userId, true)
+	user, err := model.GetUserById(c.Request.Context(), userId, true)
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
 	current := user.GetSetting()
 	current.BillingPreference = pref
-	if err := model.UpdateUserSetting(user.Id, current); err != nil {
+	if err := model.UpdateUserSetting(c.Request.Context(), user.Id, current); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -109,7 +109,7 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 		return
 	}
 
-	if err := model.PurchaseSubscriptionWithBalance(userId, req.PlanId); err != nil {
+	if err := model.PurchaseSubscriptionWithBalance(c.Request.Context(), userId, req.PlanId); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -120,7 +120,7 @@ func SubscriptionRequestBalancePay(c *gin.Context) {
 
 func AdminListSubscriptionPlans(c *gin.Context) {
 	var plans []model.SubscriptionPlan
-	if err := model.DB.Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).Order("sort_order desc, id desc").Find(&plans).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -187,14 +187,14 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
+		if _, ok := ratio_setting.GetGroupRatioCopy(c.Request.Context())[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
 			return
 		}
 	}
 	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
 	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+		if _, ok := ratio_setting.GetGroupRatioCopy(c.Request.Context())[req.Plan.DowngradeGroup]; !ok {
 			common.ApiErrorMsg(c, "降级分组不存在")
 			return
 		}
@@ -204,12 +204,12 @@ func AdminCreateSubscriptionPlan(c *gin.Context) {
 		common.ApiErrorMsg(c, "自定义重置周期需大于0秒")
 		return
 	}
-	err := model.DB.Create(&req.Plan).Error
+	err := model.DB.WithContext(c.Request.Context()).Create(&req.Plan).Error
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	model.InvalidateSubscriptionPlanCache(req.Plan.Id)
+	model.InvalidateSubscriptionPlanCache(c.Request.Context(), req.Plan.Id)
 	common.ApiSuccess(c, req.Plan)
 }
 
@@ -261,14 +261,14 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 	}
 	req.Plan.UpgradeGroup = strings.TrimSpace(req.Plan.UpgradeGroup)
 	if req.Plan.UpgradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.UpgradeGroup]; !ok {
+		if _, ok := ratio_setting.GetGroupRatioCopy(c.Request.Context())[req.Plan.UpgradeGroup]; !ok {
 			common.ApiErrorMsg(c, "升级分组不存在")
 			return
 		}
 	}
 	req.Plan.DowngradeGroup = strings.TrimSpace(req.Plan.DowngradeGroup)
 	if req.Plan.DowngradeGroup != "" {
-		if _, ok := ratio_setting.GetGroupRatioCopy()[req.Plan.DowngradeGroup]; !ok {
+		if _, ok := ratio_setting.GetGroupRatioCopy(c.Request.Context())[req.Plan.DowngradeGroup]; !ok {
 			common.ApiErrorMsg(c, "降级分组不存在")
 			return
 		}
@@ -279,7 +279,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		return
 	}
 
-	err := model.DB.Transaction(func(tx *gorm.DB) error {
+	err := model.DB.WithContext(c.Request.Context()).Transaction(func(tx *gorm.DB) error {
 		// update plan (allow zero values updates with map)
 		updateMap := map[string]any{
 			"title":                      req.Plan.Title,
@@ -317,7 +317,7 @@ func AdminUpdateSubscriptionPlan(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	model.InvalidateSubscriptionPlanCache(id)
+	model.InvalidateSubscriptionPlanCache(c.Request.Context(), id)
 	common.ApiSuccess(c, nil)
 }
 
@@ -340,11 +340,11 @@ func AdminUpdateSubscriptionPlanStatus(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	if err := model.DB.Model(&model.SubscriptionPlan{}).Where("id = ?", id).Update("enabled", *req.Enabled).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).Model(&model.SubscriptionPlan{}).Where("id = ?", id).Update("enabled", *req.Enabled).Error; err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	model.InvalidateSubscriptionPlanCache(id)
+	model.InvalidateSubscriptionPlanCache(c.Request.Context(), id)
 	common.ApiSuccess(c, nil)
 }
 
@@ -363,7 +363,7 @@ func AdminBindSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(req.UserId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(c.Request.Context(), req.UserId, req.PlanId, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -383,7 +383,7 @@ func AdminListUserSubscriptions(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的用户ID")
 		return
 	}
-	subs, err := model.GetAllUserSubscriptions(userId)
+	subs, err := model.GetAllUserSubscriptions(c.Request.Context(), userId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -413,7 +413,7 @@ func recordSubscriptionResetUserLogs(c *gin.Context, result *model.SubscriptionR
 	}
 	content := fmt.Sprintf("管理员重置订阅套餐 %s（ID: %d）额度", result.PlanTitle, result.PlanId)
 	for _, userId := range result.AffectedUserIds {
-		model.RecordLogWithAdminInfo(userId, model.LogTypeManage, content, adminInfo, nil, c)
+		model.RecordLogWithAdminInfo(c.Request.Context(), userId, model.LogTypeManage, content, adminInfo, nil, c)
 	}
 }
 
@@ -433,7 +433,7 @@ func AdminCreateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	msg, err := model.AdminBindSubscription(userId, req.PlanId, "")
+	msg, err := model.AdminBindSubscription(c.Request.Context(), userId, req.PlanId, "")
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -461,7 +461,7 @@ func AdminResetUserSubscriptionsByPlan(c *gin.Context) {
 		return
 	}
 	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetUserSubscriptionsByPlan(userId, req.PlanId, advanceResetTime)
+	result, err := model.AdminResetUserSubscriptionsByPlan(c.Request.Context(), userId, req.PlanId, advanceResetTime)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -490,7 +490,7 @@ func AdminResetPlanSubscriptions(c *gin.Context) {
 		return
 	}
 	advanceResetTime := resolveAdvanceResetTime(req.AdvanceResetTime)
-	result, err := model.AdminResetPlanSubscriptions(planId, advanceResetTime)
+	result, err := model.AdminResetPlanSubscriptions(c.Request.Context(), planId, advanceResetTime)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -515,7 +515,7 @@ func AdminInvalidateUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
-	msg, err := model.AdminInvalidateUserSubscription(subId)
+	msg, err := model.AdminInvalidateUserSubscription(c.Request.Context(), subId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -534,7 +534,7 @@ func AdminDeleteUserSubscription(c *gin.Context) {
 		common.ApiErrorMsg(c, "无效的订阅ID")
 		return
 	}
-	msg, err := model.AdminDeleteUserSubscription(subId)
+	msg, err := model.AdminDeleteUserSubscription(c.Request.Context(), subId)
 	if err != nil {
 		common.ApiError(c, err)
 		return

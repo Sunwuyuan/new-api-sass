@@ -44,7 +44,7 @@ type pluginProtocolBridgeDeps struct {
 	resolvePlugin      func(constant.TaskPlatform) (*pluginruntime.LoadedPlugin, *pluginruntime.RoutingGeneration, bool)
 }
 
-func defaultPluginProtocolBridgeDeps() pluginProtocolBridgeDeps {
+func defaultPluginProtocolBridgeDeps(tenantCtx context.Context) pluginProtocolBridgeDeps {
 	timeout := time.Duration(constant.TaskPluginProtocolTimeoutSeconds) * time.Second
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
@@ -63,12 +63,14 @@ func defaultPluginProtocolBridgeDeps() pluginProtocolBridgeDeps {
 		loadTimeout = halfHeartbeat
 	}
 	return pluginProtocolBridgeDeps{
-		submit:             executeTaskSubmission,
-		loadTask:           model.GetTaskForProtocolObservation,
-		now:                time.Now,
-		admissions:         pluginProtocolObservationAdmissions,
-		protocolLimits:     relay.DefaultPluginProtocolLimits(),
-		artifactContentURL: service.BuildTaskArtifactContentURL,
+		submit:         executeTaskSubmission,
+		loadTask:       model.GetTaskForProtocolObservation,
+		now:            time.Now,
+		admissions:     pluginProtocolObservationAdmissions,
+		protocolLimits: relay.DefaultPluginProtocolLimits(),
+		artifactContentURL: func(arg0 string, arg1 string) (string, error) {
+			return service.BuildTaskArtifactContentURL(tenantCtx, arg0, arg1)
+		},
 		submissionTimeout:  timeout,
 		observationTimeout: timeout,
 		loadTimeout:        loadTimeout,
@@ -76,13 +78,17 @@ func defaultPluginProtocolBridgeDeps() pluginProtocolBridgeDeps {
 		tickJitter:         jitter,
 		heartbeatInterval:  heartbeat,
 		admissionTimeout:   pluginruntime.DefaultCallTimeout,
-		getByTaskId:        model.GetByTaskId,
-		resolvePlugin:      resolveTaskPluginForProtocolRetrieve,
+		getByTaskId: func(arg0 int, arg1 string) (*model.Task, bool, error) {
+			return model.GetByTaskId(tenantCtx, arg0, arg1)
+		},
+		resolvePlugin: func(arg0 constant.TaskPlatform) (*pluginruntime.LoadedPlugin, *pluginruntime.RoutingGeneration, bool) {
+			return resolveTaskPluginForProtocolRetrieve(tenantCtx, arg0)
+		},
 	}
 }
 
-func (d pluginProtocolBridgeDeps) withDefaults() pluginProtocolBridgeDeps {
-	defaults := defaultPluginProtocolBridgeDeps()
+func (d pluginProtocolBridgeDeps) withDefaults(tenantCtx context.Context) pluginProtocolBridgeDeps {
+	defaults := defaultPluginProtocolBridgeDeps(tenantCtx)
 	if d.submit == nil {
 		d.submit = defaults.submit
 	}
@@ -131,8 +137,8 @@ func (d pluginProtocolBridgeDeps) withDefaults() pluginProtocolBridgeDeps {
 	return d
 }
 
-func resolveTaskPluginForProtocolRetrieve(platform constant.TaskPlatform) (*pluginruntime.LoadedPlugin, *pluginruntime.RoutingGeneration, bool) {
-	generation := pluginruntime.DefaultRegistry.Generation()
+func resolveTaskPluginForProtocolRetrieve(tenantCtx context.Context, platform constant.TaskPlatform) (*pluginruntime.LoadedPlugin, *pluginruntime.RoutingGeneration, bool) {
+	generation := pluginruntime.TenantState(tenantCtx).DefaultRegistry.Generation()
 	plugin, ok := relay.ResolveTaskPluginForPlatform(generation, platform)
 	return plugin, generation, ok
 }
@@ -142,7 +148,7 @@ func serveTaskPluginProtocol(
 	pinned pluginruntime.PinnedEndpoint,
 	deps pluginProtocolBridgeDeps,
 ) {
-	deps = deps.withDefaults()
+	deps = deps.withDefaults(c.Request.Context())
 	generation := uint64(0)
 	if pinned.Generation != nil {
 		generation = pinned.Generation.Number
@@ -341,7 +347,7 @@ func serveTaskPluginProtocol(
 	if background {
 		outcome.Task.PrivateData.ResponsesBackground = true
 		if outcome.Task.ID != 0 {
-			if err := model.DB.Model(outcome.Task).Update("private_data", outcome.Task.PrivateData).Error; err != nil {
+			if err := model.DB.WithContext(c.Request.Context()).Model(outcome.Task).Update("private_data", outcome.Task.PrivateData).Error; err != nil {
 				logger.LogError(c, "persist task background flag failed: "+err.Error())
 			}
 		}
@@ -496,7 +502,7 @@ func streamTaskPluginProtocol(
 			return
 		}
 		hookStarted := deps.now()
-		rendererContext, contextErr := taskPluginProtocolRendererContext(protocolRequest, pinned, task, deps.artifactContentURL)
+		rendererContext, contextErr := taskPluginProtocolRendererContext(c.Request.Context(), protocolRequest, pinned, task, deps.artifactContentURL)
 		if contextErr != nil {
 			logger.LogError(c, "build task protocol renderer context failed")
 			writeTaskPluginProtocolFailure(c, machine, lastStatus)
@@ -844,7 +850,7 @@ func renderTaskPluginProtocolFinalResponse(
 	if err != nil {
 		return nil, 0, err
 	}
-	rendererContext, err := taskPluginProtocolRendererContext(
+	rendererContext, err := taskPluginProtocolRendererContext(ctx,
 		protocolRequest,
 		pinned,
 		task,
@@ -889,7 +895,7 @@ func renderTaskPluginProtocolEventsResponse(
 	if err != nil {
 		return nil, 0, err
 	}
-	rendererContext, err := taskPluginProtocolRendererContext(
+	rendererContext, err := taskPluginProtocolRendererContext(ctx,
 		protocolRequest,
 		pinned,
 		task,
@@ -923,11 +929,11 @@ func renderTaskPluginProtocolEventsResponse(
 }
 
 func RetrieveTaskPluginResponse(c *gin.Context) {
-	retrieveTaskPluginResponse(c, defaultPluginProtocolBridgeDeps())
+	retrieveTaskPluginResponse(c, defaultPluginProtocolBridgeDeps(c.Request.Context()))
 }
 
 func retrieveTaskPluginResponse(c *gin.Context, deps pluginProtocolBridgeDeps) {
-	deps = deps.withDefaults()
+	deps = deps.withDefaults(c.Request.Context())
 	responseID := strings.TrimSpace(c.Param("response_id"))
 	if !strings.HasPrefix(responseID, "resp_") {
 		writeTaskPluginResponseNotFound(c, responseID, "bad_prefix")
@@ -1151,7 +1157,7 @@ func taskPluginProtocolJSONValue(value any) (any, error) {
 	return decoded, nil
 }
 
-func taskPluginProtocolRendererContext(
+func taskPluginProtocolRendererContext(tenantCtx context.Context,
 	request pluginruntime.ProtocolRequestContext,
 	pinned pluginruntime.PinnedEndpoint,
 	task *model.Task,
@@ -1165,7 +1171,7 @@ func taskPluginProtocolRendererContext(
 		return nil, errors.New("task artifact projection is unavailable")
 	}
 
-	artifacts, err := taskjsplugin.New(pinned.Plugin).ListArtifacts(task)
+	artifacts, err := taskjsplugin.New(tenantCtx, pinned.Plugin).ListArtifacts(task)
 	if err != nil {
 		return nil, fmt.Errorf("project task artifacts: %w", err)
 	}

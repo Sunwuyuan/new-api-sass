@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"maps"
 	"net/http"
 	"net/url"
@@ -86,7 +87,7 @@ func UploadTaskPlugin(c *gin.Context) {
 		enabled = *request.Enabled
 	}
 	if enabled && !request.Force {
-		if err = jsplugin.PreflightRoutingConflict(jsplugin.DefaultRegistry.Generation(), loaded); err != nil {
+		if err = jsplugin.PreflightRoutingConflict(jsplugin.TenantState(c.Request.Context()).DefaultRegistry.Generation(), loaded); err != nil {
 			common.ApiErrorMsg(c, err.Error())
 			return
 		}
@@ -96,7 +97,7 @@ func UploadTaskPlugin(c *gin.Context) {
 		Source: request.Source, SourceHash: fmt.Sprintf("%x", sha256.Sum256([]byte(request.Source))),
 		Icon: icon, Enabled: enabled, Remark: request.Remark,
 	}
-	if err = model.SaveTaskPlugin(&plugin); err != nil {
+	if err = model.SaveTaskPlugin(c.Request.Context(), &plugin); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -108,7 +109,7 @@ func UploadTaskPlugin(c *gin.Context) {
 }
 
 func GetTaskPluginVersions(c *gin.Context) {
-	plugins, err := model.ListTaskPluginVersions(c.Param("key"))
+	plugins, err := model.ListTaskPluginVersions(c.Request.Context(), c.Param("key"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -150,12 +151,13 @@ type taskPluginRuntimeStatus struct {
 }
 
 func ListTaskPlugins(c *gin.Context) {
-	databasePlugins, err := model.ListTaskPlugins()
+	taskPluginSyncState := tenantTaskPluginSyncState(c.Request.Context())
+	databasePlugins, err := model.ListTaskPlugins(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	snapshot := jsplugin.DefaultRegistry.Snapshot()
+	snapshot := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.Snapshot()
 	factory := make(map[string]jsplugin.Meta, len(snapshot.Factory))
 	override := make(map[string]jsplugin.Meta, len(snapshot.Override))
 	for _, meta := range snapshot.Factory {
@@ -176,7 +178,7 @@ func ListTaskPlugins(c *gin.Context) {
 		}
 	}
 
-	runtimeErrors := jsplugin.DefaultRegistry.RoutingErrors()
+	runtimeErrors := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.RoutingErrors()
 	taskPluginSyncState.Lock()
 	maps.Copy(runtimeErrors, taskPluginSyncState.errors)
 	taskPluginSyncState.Unlock()
@@ -214,13 +216,13 @@ func ListTaskPlugins(c *gin.Context) {
 			}
 			// "disabled_fallback" promises that the built-in still serves. When
 			// the factory layer is suppressed as well, nothing serves this key.
-			if item.RuntimeStatus == "disabled_fallback" && hasFactory && setting.IsTaskPluginFactoryDisabled(key) {
+			if item.RuntimeStatus == "disabled_fallback" && hasFactory && setting.IsTaskPluginFactoryDisabled(c.Request.Context(), key) {
 				item.RuntimeStatus = "disabled"
 			}
 		} else {
 			item.Source = "factory"
 			item.Meta = factoryMeta
-			item.Enabled = !setting.IsTaskPluginFactoryDisabled(key)
+			item.Enabled = !setting.IsTaskPluginFactoryDisabled(c.Request.Context(), key)
 			_, _, item.HasIcon = plugins.Icon(key)
 			source, sourceErr := plugins.Source(key)
 			if sourceErr == nil {
@@ -234,7 +236,7 @@ func ListTaskPlugins(c *gin.Context) {
 			}
 		}
 		if !hasFactory {
-			channels, inFlight, usageErr := model.GetTaskPluginUsage(key)
+			channels, inFlight, usageErr := model.GetTaskPluginUsage(c.Request.Context(), key)
 			if usageErr != nil {
 				common.ApiError(c, usageErr)
 				return
@@ -254,7 +256,8 @@ func ListTaskPlugins(c *gin.Context) {
 }
 
 func GetTaskPluginRuntime(c *gin.Context) {
-	routingStatus := jsplugin.DefaultRegistry.RoutingStatus()
+	taskPluginSyncState := tenantTaskPluginSyncState(c.Request.Context())
+	routingStatus := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.RoutingStatus()
 	pluginErrors := routingStatus.Errors
 
 	taskPluginSyncState.Lock()
@@ -285,7 +288,7 @@ func GetTaskPluginRuntime(c *gin.Context) {
 		LastRebuild:      lastRebuild,
 		PluginErrors:     pluginErrors,
 	}
-	databaseSnapshot, err := model.GetTaskPluginSyncSnapshot()
+	databaseSnapshot, err := model.GetTaskPluginSyncSnapshot(c.Request.Context())
 	if err != nil {
 		status.DatabaseError = "database snapshot unavailable"
 	} else {
@@ -313,7 +316,7 @@ type taskPluginDetail struct {
 func GetTaskPluginIcon(c *gin.Context) {
 	key := c.Param("key")
 	icon := ""
-	plugin, err := model.GetTaskPluginVersion(key, c.Query("version"))
+	plugin, err := model.GetTaskPluginVersion(c.Request.Context(), key, c.Query("version"))
 	if err == nil {
 		icon = plugin.Icon
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
@@ -341,7 +344,7 @@ func GetTaskPluginIcon(c *gin.Context) {
 func GetTaskPlugin(c *gin.Context) {
 	key := c.Param("key")
 	version := c.Query("version")
-	plugin, err := model.GetTaskPluginVersion(key, version)
+	plugin, err := model.GetTaskPluginVersion(c.Request.Context(), key, version)
 	if err == nil {
 		loaded, compileErr := jsplugin.NewRegistry().Register(plugin.Source, jsplugin.Options{Key: plugin.Key, Version: plugin.Version})
 		if compileErr != nil {
@@ -382,7 +385,7 @@ func DryRunTaskPlugin(c *gin.Context) {
 		return
 	}
 	detailSource := ""
-	plugin, err := model.GetTaskPluginVersion(c.Param("key"), "")
+	plugin, err := model.GetTaskPluginVersion(c.Request.Context(), c.Param("key"), "")
 	if err == nil {
 		detailSource = plugin.Source
 	} else if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -406,9 +409,9 @@ func DryRunTaskPlugin(c *gin.Context) {
 	}
 	var output any
 	if request.Member == "" {
-		output, err = loaded.Engine.Call(context.Background(), request.Hook, args...)
+		output, err = loaded.Engine.Call(c.Request.Context(), request.Hook, args...)
 	} else {
-		output, err = loaded.Engine.CallMember(context.Background(), request.Hook, request.Member, args...)
+		output, err = loaded.Engine.CallMember(c.Request.Context(), request.Hook, request.Member, args...)
 	}
 	if err != nil {
 		common.ApiErrorMsg(c, err.Error())
@@ -420,7 +423,7 @@ func DryRunTaskPlugin(c *gin.Context) {
 func DeleteTaskPluginVersion(c *gin.Context) {
 	key := c.Param("key")
 	version := c.Param("version")
-	plugin, lookupErr := model.GetTaskPluginVersion(key, version)
+	plugin, lookupErr := model.GetTaskPluginVersion(c.Request.Context(), key, version)
 	if lookupErr != nil {
 		if errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 			common.ApiErrorMsg(c, "override plugin version not found; factory plugins cannot be deleted")
@@ -429,8 +432,8 @@ func DeleteTaskPluginVersion(c *gin.Context) {
 		common.ApiError(c, lookupErr)
 		return
 	}
-	if plugin.Active && !taskPluginHasFactory(key) {
-		channels, inFlight, usageErr := model.GetTaskPluginUsage(key)
+	if plugin.Active && !taskPluginHasFactory(c.Request.Context(), key) {
+		channels, inFlight, usageErr := model.GetTaskPluginUsage(c.Request.Context(), key)
 		if usageErr != nil {
 			common.ApiError(c, usageErr)
 			return
@@ -440,7 +443,7 @@ func DeleteTaskPluginVersion(c *gin.Context) {
 			return
 		}
 	}
-	_, err := model.DeleteTaskPluginVersion(key, version)
+	_, err := model.DeleteTaskPluginVersion(c.Request.Context(), key, version)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			common.ApiErrorMsg(c, "override plugin version not found; factory plugins cannot be deleted")
@@ -466,7 +469,7 @@ func ActivateTaskPlugin(c *gin.Context) {
 		common.ApiErrorMsg(c, err.Error())
 		return
 	}
-	versions, err := model.ListTaskPluginVersions(c.Param("key"))
+	versions, err := model.ListTaskPluginVersions(c.Request.Context(), c.Param("key"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -486,7 +489,7 @@ func ActivateTaskPlugin(c *gin.Context) {
 		taskPluginCompileError(c, err)
 		return
 	}
-	if err = model.ActivateTaskPlugin(target.Key, target.Version); err != nil {
+	if err = model.ActivateTaskPlugin(c.Request.Context(), target.Key, target.Version); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -510,7 +513,7 @@ func SetTaskPluginStatus(c *gin.Context) {
 	key := c.Param("key")
 	disabledChannels := 0
 	if !*request.Enabled {
-		channels, inFlight, usageErr := model.GetTaskPluginUsage(key)
+		channels, inFlight, usageErr := model.GetTaskPluginUsage(c.Request.Context(), key)
 		if usageErr != nil {
 			common.ApiError(c, usageErr)
 			return
@@ -523,13 +526,13 @@ func SetTaskPluginStatus(c *gin.Context) {
 		}
 		if cascade {
 			for _, channel := range channels {
-				if model.UpdateChannelStatus(channel.Id, "", common.ChannelStatusManuallyDisabled, "task plugin disabled") {
+				if model.UpdateChannelStatus(c.Request.Context(), channel.Id, "", common.ChannelStatusManuallyDisabled, "task plugin disabled") {
 					disabledChannels++
 				}
 			}
 		}
 	}
-	_, lookupErr := model.GetTaskPluginVersion(key, "")
+	_, lookupErr := model.GetTaskPluginVersion(c.Request.Context(), key, "")
 	hasActiveOverride := lookupErr == nil
 	if lookupErr != nil && !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
 		common.ApiError(c, lookupErr)
@@ -540,8 +543,8 @@ func SetTaskPluginStatus(c *gin.Context) {
 	// exists; otherwise the built-in would keep routing the same models (and
 	// blocking same-model uploads) right after the administrator disabled the
 	// plugin. Switching on reverses both layers.
-	if taskPluginHasFactory(key) {
-		keys := setting.GetTaskPluginDisabledFactoryKeys()
+	if taskPluginHasFactory(c.Request.Context(), key) {
+		keys := setting.GetTaskPluginDisabledFactoryKeys(c.Request.Context())
 		if *request.Enabled {
 			next := make([]string, 0, len(keys))
 			for _, item := range keys {
@@ -553,16 +556,16 @@ func SetTaskPluginStatus(c *gin.Context) {
 		} else {
 			keys = append(append([]string{}, keys...), key)
 		}
-		if err := setting.SetTaskPluginDisabledFactoryKeysOption(keys); err != nil {
+		if err := setting.SetTaskPluginDisabledFactoryKeysOption(c.Request.Context(), keys); err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		encoded, err := common.Marshal(setting.GetTaskPluginDisabledFactoryKeys())
+		encoded, err := common.Marshal(setting.GetTaskPluginDisabledFactoryKeys(c.Request.Context()))
 		if err != nil {
 			common.ApiError(c, err)
 			return
 		}
-		if err = model.UpdateOption(setting.TaskPluginDisabledFactoryKeysKey, string(encoded)); err != nil {
+		if err = model.UpdateOption(c.Request.Context(), setting.TaskPluginDisabledFactoryKeysKey, string(encoded)); err != nil {
 			common.ApiError(c, err)
 			return
 		}
@@ -571,7 +574,7 @@ func SetTaskPluginStatus(c *gin.Context) {
 			return
 		}
 	}
-	if err := model.SetTaskPluginEnabled(key, *request.Enabled); err != nil {
+	if err := model.SetTaskPluginEnabled(c.Request.Context(), key, *request.Enabled); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -582,8 +585,8 @@ func SetTaskPluginStatus(c *gin.Context) {
 	common.ApiSuccess(c, gin.H{"plugin_enabled": *request.Enabled, "disabled_channels": disabledChannels})
 }
 
-func taskPluginHasFactory(key string) bool {
-	for _, meta := range jsplugin.DefaultRegistry.Snapshot().Factory {
+func taskPluginHasFactory(tenantCtx context.Context, key string) bool {
+	for _, meta := range jsplugin.TenantState(tenantCtx).DefaultRegistry.Snapshot().Factory {
 		if meta.Key == key {
 			return true
 		}
@@ -592,7 +595,7 @@ func taskPluginHasFactory(key string) bool {
 }
 
 func GetTaskPluginMarketplaceSources(c *gin.Context) {
-	common.ApiSuccess(c, setting.GetTaskPluginMarketplaceSources())
+	common.ApiSuccess(c, setting.GetTaskPluginMarketplaceSources(c.Request.Context()))
 }
 
 func UpdateTaskPluginMarketplaceSources(c *gin.Context) {
@@ -624,7 +627,7 @@ func UpdateTaskPluginMarketplaceSources(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	if err = model.UpdateOption(setting.TaskPluginMarketplaceSourcesKey, string(encoded)); err != nil {
+	if err = model.UpdateOption(c.Request.Context(), setting.TaskPluginMarketplaceSourcesKey, string(encoded)); err != nil {
 		common.ApiError(c, err)
 		return
 	}
@@ -632,7 +635,7 @@ func UpdateTaskPluginMarketplaceSources(c *gin.Context) {
 }
 
 func GetTaskPluginOptions(c *gin.Context) {
-	snapshot := jsplugin.DefaultRegistry.Snapshot()
+	snapshot := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.Snapshot()
 	seen := make(map[string]bool)
 	options := make([]gin.H, 0, len(snapshot.Factory)+len(snapshot.Override))
 	for layer, metas := range [][]jsplugin.Meta{snapshot.Override, snapshot.Factory} {
@@ -643,16 +646,16 @@ func GetTaskPluginOptions(c *gin.Context) {
 			// Disabled factory keys are omitted from bind options. The disabled
 			// set suppresses only the factory fallback; an enabled override for
 			// the same key is listed in the override pass and still appears.
-			if layer == 1 && setting.IsTaskPluginFactoryDisabled(meta.Key) {
+			if layer == 1 && setting.IsTaskPluginFactoryDisabled(c.Request.Context(), meta.Key) {
 				continue
 			}
-			if _, ok := jsplugin.DefaultRegistry.Get(meta.Key); !ok {
+			if _, ok := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.Get(meta.Key); !ok {
 				continue
 			}
 			seen[meta.Key] = true
 			hasIcon := false
 			if layer == 0 {
-				if row, rowErr := model.GetTaskPluginVersion(meta.Key, ""); rowErr == nil {
+				if row, rowErr := model.GetTaskPluginVersion(c.Request.Context(), meta.Key, ""); rowErr == nil {
 					hasIcon = row.HasIcon()
 				}
 			} else {
@@ -684,43 +687,56 @@ func GetTaskPluginOptions(c *gin.Context) {
 	common.ApiSuccess(c, options)
 }
 
-var taskPluginSyncState = struct {
+type taskPluginSyncStatus struct {
 	sync.Mutex
 	hashes      map[string]string
 	errors      map[string]string
 	lastRebuild taskPluginRebuildOutcome
-}{hashes: map[string]string{}, errors: map[string]string{}}
+}
 
-func syncTaskPluginsOnce() error {
-	return syncTaskPluginsOnceContext(context.Background())
+var taskPluginSyncStates tenant.Registry[*taskPluginSyncStatus]
+
+func tenantTaskPluginSyncState(ctx context.Context) *taskPluginSyncStatus {
+	state, err := taskPluginSyncStates.Get(ctx, func() *taskPluginSyncStatus {
+		return &taskPluginSyncStatus{hashes: make(map[string]string), errors: make(map[string]string)}
+	})
+	if err != nil {
+		panic(err)
+	}
+	return state
+}
+
+func syncTaskPluginsOnce(ctx context.Context) error {
+	return syncTaskPluginsOnceContext(ctx)
 }
 
 func syncTaskPluginsOnceContext(ctx context.Context) error {
+	taskPluginSyncState := tenantTaskPluginSyncState(ctx)
 	started := time.Now()
 	taskPluginSyncState.Lock()
 	defer taskPluginSyncState.Unlock()
-	databaseSnapshot, err := model.GetTaskPluginSyncSnapshot()
+	databaseSnapshot, err := model.GetTaskPluginSyncSnapshot(ctx)
 	if err != nil {
 		syncErr := fmt.Errorf("sync task plugins: %w", err)
 		taskPluginSyncState.lastRebuild = taskPluginRebuildOutcome{
 			Status:           "failed",
 			AttemptedAt:      time.Now(),
-			Generation:       jsplugin.DefaultRegistry.Generation().Number,
+			Generation:       jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 			DatabaseRevision: taskPluginSyncState.lastRebuild.DatabaseRevision,
 			Error:            syncErr.Error(),
 		}
 		logger.LogDebug(
 			ctx,
 			"task_plugin subsystem=sync event=failed stage=database_snapshot retained_generation=%d elapsed_ms=%d",
-			jsplugin.DefaultRegistry.Generation().Number,
+			jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 			time.Since(started).Milliseconds(),
 		)
 		return syncErr
 	}
 	databasePlugins := databaseSnapshot.Plugins
 	sort.Slice(databasePlugins, func(i, j int) bool { return databasePlugins[i].Key < databasePlugins[j].Key })
-	currentOverrides := jsplugin.DefaultRegistry.OverridePlugins()
-	generationBefore := jsplugin.DefaultRegistry.Generation().Number
+	currentOverrides := jsplugin.TenantState(ctx).DefaultRegistry.OverridePlugins()
+	generationBefore := jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number
 	logger.LogDebug(
 		ctx,
 		"task_plugin subsystem=sync event=start database_revision=%q generation=%d desired_plugins=%d current_overrides=%d",
@@ -782,19 +798,19 @@ func syncTaskPluginsOnceContext(ctx context.Context) error {
 			plugin.Version,
 		)
 	}
-	if err = jsplugin.DefaultRegistry.ReplaceOverrides(nextOverrides); err != nil {
+	if err = jsplugin.TenantState(ctx).DefaultRegistry.ReplaceOverrides(nextOverrides); err != nil {
 		syncErr := fmt.Errorf("publish task plugin generation: %w", err)
 		taskPluginSyncState.lastRebuild = taskPluginRebuildOutcome{
 			Status:           "failed",
 			AttemptedAt:      time.Now(),
-			Generation:       jsplugin.DefaultRegistry.Generation().Number,
+			Generation:       jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 			DatabaseRevision: databaseSnapshot.Revision,
 			Error:            syncErr.Error(),
 		}
 		logger.LogDebug(
 			ctx,
 			"task_plugin subsystem=sync event=failed stage=publish retained_generation=%d retained_generation_active=true database_revision=%q elapsed_ms=%d",
-			jsplugin.DefaultRegistry.Generation().Number,
+			jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 			databaseSnapshot.Revision,
 			time.Since(started).Milliseconds(),
 		)
@@ -806,7 +822,7 @@ func syncTaskPluginsOnceContext(ctx context.Context) error {
 			delete(taskPluginSyncState.errors, key)
 		}
 	}
-	pluginErrors := jsplugin.DefaultRegistry.RoutingErrors()
+	pluginErrors := jsplugin.TenantState(ctx).DefaultRegistry.RoutingErrors()
 	maps.Copy(pluginErrors, taskPluginSyncState.errors)
 	pluginErrorCount := len(pluginErrors)
 	status := "success"
@@ -816,7 +832,7 @@ func syncTaskPluginsOnceContext(ctx context.Context) error {
 	taskPluginSyncState.lastRebuild = taskPluginRebuildOutcome{
 		Status:           status,
 		AttemptedAt:      time.Now(),
-		Generation:       jsplugin.DefaultRegistry.Generation().Number,
+		Generation:       jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 		DatabaseRevision: databaseSnapshot.Revision,
 		PluginErrorCount: pluginErrorCount,
 	}
@@ -825,24 +841,19 @@ func syncTaskPluginsOnceContext(ctx context.Context) error {
 		"task_plugin subsystem=sync event=complete database_revision=%q previous_generation=%d generation=%d status=%q active_overrides=%d plugin_errors=%d elapsed_ms=%d",
 		databaseSnapshot.Revision,
 		generationBefore,
-		jsplugin.DefaultRegistry.Generation().Number,
+		jsplugin.TenantState(ctx).DefaultRegistry.Generation().Number,
 		status,
-		len(jsplugin.DefaultRegistry.ActiveOverridePlugins()),
+		len(jsplugin.TenantState(ctx).DefaultRegistry.ActiveOverridePlugins()),
 		pluginErrorCount,
 		time.Since(started).Milliseconds(),
 	)
 	return nil
 }
 
-func SyncTaskPluginsOnce() {
-	if err := syncTaskPluginsOnce(); err != nil {
+func SyncTaskPluginsOnce(ctx context.Context) {
+	if err := syncTaskPluginsOnce(ctx); err != nil {
 		common.SysError(err.Error())
 	}
 }
 
-func SyncTaskPlugins() {
-	SyncTaskPluginsOnce()
-	for range time.NewTicker(30 * time.Second).C {
-		SyncTaskPluginsOnce()
-	}
-}
+func RefreshTenantPlugins(ctx context.Context) error { return syncTaskPluginsOnceContext(ctx) }

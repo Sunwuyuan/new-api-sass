@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"encoding/base64"
 	"errors"
@@ -21,11 +23,12 @@ var (
 )
 
 type PasskeyCredential struct {
+	TenantID        int64          `json:"-" gorm:"not null;index;uniqueIndex:tenant_passkey_credential_user_i_d,priority:1;uniqueIndex:tenant_passkey_credential_credential_i_d,priority:1"`
 	ID              int            `json:"id" gorm:"primaryKey"`
-	UserID          int            `json:"user_id" gorm:"uniqueIndex;not null"`
+	UserID          int            `json:"user_id" gorm:"uniqueIndex:tenant_passkey_credential_user_i_d;not null"`
 	RPID            *string        `json:"rp_id,omitempty" gorm:"column:rp_id;type:varchar(253)"`
-	CredentialID    string         `json:"credential_id" gorm:"type:varchar(512);uniqueIndex;not null"` // base64 encoded
-	PublicKey       string         `json:"public_key" gorm:"type:text;not null"`                        // base64 encoded
+	CredentialID    string         `json:"credential_id" gorm:"type:varchar(512);uniqueIndex:tenant_passkey_credential_credential_i_d;not null"` // base64 encoded
+	PublicKey       string         `json:"public_key" gorm:"type:text;not null"`                                                                 // base64 encoded
 	AttestationType string         `json:"attestation_type" gorm:"type:varchar(255)"`
 	AAGUID          string         `json:"aaguid" gorm:"type:varchar(512)"` // base64 encoded
 	SignCount       uint32         `json:"sign_count" gorm:"default:0"`
@@ -122,13 +125,13 @@ func NewPasskeyCredentialFromWebAuthn(userID int, credential *webauthn.Credentia
 	return passkey
 }
 
-func GetPasskeyByUserID(userID int) (*PasskeyCredential, error) {
+func GetPasskeyByUserID(tenantCtx context.Context, userID int) (*PasskeyCredential, error) {
 	if userID == 0 {
 		common.SysLog("GetPasskeyByUserID: empty user ID")
 		return nil, ErrFriendlyPasskeyNotFound
 	}
 	var credential PasskeyCredential
-	if err := DB.Where("user_id = ?", userID).First(&credential).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("user_id = ?", userID).First(&credential).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 未找到记录是正常情况（用户未绑定），返回 ErrPasskeyNotFound 而不记录日志
 			return nil, ErrPasskeyNotFound
@@ -140,7 +143,7 @@ func GetPasskeyByUserID(userID int) (*PasskeyCredential, error) {
 	return &credential, nil
 }
 
-func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
+func GetPasskeyByCredentialID(tenantCtx context.Context, credentialID []byte) (*PasskeyCredential, error) {
 	if len(credentialID) == 0 {
 		common.SysLog("GetPasskeyByCredentialID: empty credential ID")
 		return nil, ErrFriendlyPasskeyNotFound
@@ -148,7 +151,7 @@ func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
 
 	credIDStr := base64.StdEncoding.EncodeToString(credentialID)
 	var credential PasskeyCredential
-	if err := DB.Where("credential_id = ?", credIDStr).First(&credential).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("credential_id = ?", credIDStr).First(&credential).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			common.SysLog(fmt.Sprintf("GetPasskeyByCredentialID: passkey not found for credential ID length %d", len(credentialID)))
 			return nil, ErrFriendlyPasskeyNotFound
@@ -163,14 +166,14 @@ func GetPasskeyByCredentialID(credentialID []byte) (*PasskeyCredential, error) {
 // UpdatePasskeyAssertionState persists only fields produced by a successful
 // assertion. Registration identity (credential ID, public key, AAGUID,
 // transports and attestation metadata) is immutable on this path.
-func UpdatePasskeyAssertionState(userID int, credential *webauthn.Credential, lastUsedAt time.Time, rpID string) error {
+func UpdatePasskeyAssertionState(tenantCtx context.Context, userID int, credential *webauthn.Credential, lastUsedAt time.Time, rpID string) error {
 	if userID <= 0 || credential == nil || len(credential.ID) == 0 || lastUsedAt.IsZero() || rpID == "" {
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
 	credentialID := base64.StdEncoding.EncodeToString(credential.ID)
-	passkeyOptionMutex.Lock()
-	defer passkeyOptionMutex.Unlock()
-	return DB.Transaction(func(tx *gorm.DB) error {
+	TenantState(tenantCtx).passkeyOptionMutex.Lock()
+	defer TenantState(tenantCtx).passkeyOptionMutex.Unlock()
+	return DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := validatePasskeyRPIDWithTx(tx, rpID); err != nil {
 			return err
 		}
@@ -222,21 +225,21 @@ func upsertPasskeyCredentialWithTx(tx *gorm.DB, credential *PasskeyCredential) e
 
 // UpsertPasskeyCredentialWithAuthVersion is reserved for enrollment changes;
 // assertion sign-count updates must use UpdatePasskeyAssertionState.
-func UpsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential) error {
-	return upsertPasskeyCredentialWithAuthVersion(credential, nil)
+func UpsertPasskeyCredentialWithAuthVersion(tenantCtx context.Context, credential *PasskeyCredential) error {
+	return upsertPasskeyCredentialWithAuthVersion(tenantCtx, credential, nil)
 }
 
-func RegisterPasskeyForSession(identity AuthSessionIdentity, credential *PasskeyCredential) error {
-	return upsertPasskeyCredentialWithAuthVersion(credential, &identity)
+func RegisterPasskeyForSession(tenantCtx context.Context, identity AuthSessionIdentity, credential *PasskeyCredential) error {
+	return upsertPasskeyCredentialWithAuthVersion(tenantCtx, credential, &identity)
 }
 
-func upsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential, identity *AuthSessionIdentity) error {
+func upsertPasskeyCredentialWithAuthVersion(tenantCtx context.Context, credential *PasskeyCredential, identity *AuthSessionIdentity) error {
 	if credential == nil || credential.UserID <= 0 {
 		return fmt.Errorf("Passkey 保存失败，请重试")
 	}
-	passkeyOptionMutex.Lock()
-	defer passkeyOptionMutex.Unlock()
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	TenantState(tenantCtx).passkeyOptionMutex.Lock()
+	defer TenantState(tenantCtx).passkeyOptionMutex.Unlock()
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if identity != nil && (credential.RPID == nil || *credential.RPID == "") {
 			return system_setting.ErrPasskeyRPIDUnavailable
 		}
@@ -260,22 +263,22 @@ func upsertPasskeyCredentialWithAuthVersion(credential *PasskeyCredential, ident
 	}); err != nil {
 		return err
 	}
-	return PublishUserAuthCache(credential.UserID)
+	return PublishUserAuthCache(tenantCtx, credential.UserID)
 }
 
-func DeletePasskeyByUserIDWithAuthVersion(userID int) error {
-	return deletePasskeyWithAuthVersion(userID, nil)
+func DeletePasskeyByUserIDWithAuthVersion(tenantCtx context.Context, userID int) error {
+	return deletePasskeyWithAuthVersion(tenantCtx, userID, nil)
 }
 
-func DeletePasskeyForSession(identity AuthSessionIdentity) error {
-	return deletePasskeyWithAuthVersion(identity.UserID, &identity)
+func DeletePasskeyForSession(tenantCtx context.Context, identity AuthSessionIdentity) error {
+	return deletePasskeyWithAuthVersion(tenantCtx, identity.UserID, &identity)
 }
 
-func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) error {
+func deletePasskeyWithAuthVersion(tenantCtx context.Context, userID int, identity *AuthSessionIdentity) error {
 	if userID == 0 {
 		return fmt.Errorf("删除失败，请重试")
 	}
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if identity != nil {
 			if err := ValidateAuthSessionWithTx(tx, *identity); err != nil {
 				return err
@@ -302,5 +305,5 @@ func deletePasskeyWithAuthVersion(userID int, identity *AuthSessionIdentity) err
 	}); err != nil {
 		return err
 	}
-	return PublishUserAuthCache(userID)
+	return PublishUserAuthCache(tenantCtx, userID)
 }

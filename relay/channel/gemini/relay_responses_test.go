@@ -11,7 +11,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/types"
@@ -23,8 +26,8 @@ import (
 func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "gemini-responses-test")
 
 	info := newGeminiResponsesRelayInfo(false)
@@ -70,8 +73,8 @@ func TestGeminiResponsesHandlerReturnsOpenAIResponsesJSON(t *testing.T) {
 func TestGeminiResponsesHandlerClosesBodyOnReadError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "gemini-responses-read-error-test")
 
 	body := &failingReadCloser{}
@@ -85,8 +88,8 @@ func TestGeminiResponsesHandlerClosesBodyOnReadError(t *testing.T) {
 func TestGeminiResponsesStreamHandlerReturnsOpenAIResponsesSSE(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	c.Set(common.RequestIdKey, "gemini-responses-stream-test")
 
 	oldStreamingTimeout := constant.StreamingTimeout
@@ -168,7 +171,7 @@ func TestGeminiResponsesStreamHandlerReturnsOpenAIResponsesSSE(t *testing.T) {
 }
 
 func newGeminiResponsesRelayInfo(isStream bool) *relaycommon.RelayInfo {
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsStream:        isStream,
 		RelayMode:       relayconstant.RelayModeResponses,
 		RelayFormat:     types.RelayFormatOpenAIResponses,

@@ -1,5 +1,8 @@
 package service
 
+import context "context"
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"crypto/hmac"
 	"crypto/sha256"
@@ -23,13 +26,13 @@ const (
 
 var ErrTaskArtifactAccessInvalid = errors.New("task artifact access is invalid")
 
-func taskArtifactAccessMessage(taskID, artifactKey string) []byte {
-	return []byte(taskArtifactAccessVersion + "\x00" + taskID + "\x00" + artifactKey)
+func taskArtifactAccessMessage(tenantCtx context.Context, taskID, artifactKey string) []byte {
+	return []byte(tenant.MustKey(tenantCtx, taskArtifactAccessVersion+"\x00"+taskID+"\x00"+artifactKey))
 }
 
 // IssueTaskArtifactAccess creates a stable capability bound to exactly one
 // public task ID and artifact key. It contains no user or upstream data.
-func IssueTaskArtifactAccess(taskID, artifactKey string) (string, error) {
+func IssueTaskArtifactAccess(tenantCtx context.Context, taskID, artifactKey string) (string, error) {
 	taskID = strings.TrimSpace(taskID)
 	artifactKey = strings.TrimSpace(artifactKey)
 	if taskID == "" || len(taskID) > maxTaskArtifactTaskIDLength ||
@@ -39,13 +42,13 @@ func IssueTaskArtifactAccess(taskID, artifactKey string) (string, error) {
 	}
 
 	mac := hmac.New(sha256.New, []byte(common.CryptoSecret))
-	_, _ = mac.Write(taskArtifactAccessMessage(taskID, artifactKey))
+	_, _ = mac.Write(taskArtifactAccessMessage(tenantCtx, taskID, artifactKey))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
 }
 
 // VerifyTaskArtifactAccess verifies the route binding without reading task,
 // user, or token state. Signature comparison is constant-time.
-func VerifyTaskArtifactAccess(access, taskID, artifactKey string) bool {
+func VerifyTaskArtifactAccess(tenantCtx context.Context, access, taskID, artifactKey string) bool {
 	taskID = strings.TrimSpace(taskID)
 	artifactKey = strings.TrimSpace(artifactKey)
 	if len(access) != taskArtifactAccessLength ||
@@ -61,7 +64,7 @@ func VerifyTaskArtifactAccess(access, taskID, artifactKey string) bool {
 	}
 
 	mac := hmac.New(sha256.New, []byte(common.CryptoSecret))
-	_, _ = mac.Write(taskArtifactAccessMessage(taskID, artifactKey))
+	_, _ = mac.Write(taskArtifactAccessMessage(tenantCtx, taskID, artifactKey))
 	return hmac.Equal(actualSignature, mac.Sum(nil))
 }
 
@@ -95,7 +98,7 @@ func ValidateTaskArtifactBaseURL(raw string) error {
 // BuildTaskArtifactContentURL returns an absolute, long-lived capability URL.
 // TaskPublicAddress wins when configured; ServerAddress is the only fallback.
 // Request Host headers are intentionally not involved.
-func BuildTaskArtifactContentURL(taskID, artifactKey string) (string, error) {
+func BuildTaskArtifactContentURL(tenantCtx context.Context, taskID, artifactKey string) (string, error) {
 	taskID = strings.TrimSpace(taskID)
 	artifactKey = strings.TrimSpace(artifactKey)
 	if taskID == "" || len(taskID) > maxTaskArtifactTaskIDLength ||
@@ -103,9 +106,9 @@ func BuildTaskArtifactContentURL(taskID, artifactKey string) (string, error) {
 		return "", ErrTaskArtifactAccessInvalid
 	}
 
-	baseAddress := strings.TrimSpace(system_setting.TaskPublicAddress)
+	baseAddress := strings.TrimSpace(system_setting.TenantState(tenantCtx).TaskPublicAddress)
 	if baseAddress == "" {
-		baseAddress = strings.TrimSpace(system_setting.ServerAddress)
+		baseAddress = strings.TrimSpace(system_setting.TenantState(tenantCtx).ServerAddress)
 	}
 	if err := ValidateTaskArtifactBaseURL(baseAddress); err != nil {
 		return "", err
@@ -115,7 +118,7 @@ func BuildTaskArtifactContentURL(taskID, artifactKey string) (string, error) {
 		return "", err
 	}
 
-	access, err := IssueTaskArtifactAccess(taskID, artifactKey)
+	access, err := IssueTaskArtifactAccess(tenantCtx, taskID, artifactKey)
 	if err != nil {
 		return "", err
 	}

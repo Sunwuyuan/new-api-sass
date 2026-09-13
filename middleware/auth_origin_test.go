@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,11 +14,11 @@ import (
 func runOriginGuardRequest(t *testing.T, origin, referer string) *httptest.ResponseRecorder {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/api/user/auth/refresh", SessionCookieOriginGuard(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "https://panel.example.com/api/user/auth/refresh", nil)
+	request := testtenant.NewRequest(http.MethodPost, "https://panel.example.com/api/user/auth/refresh", nil)
 	request.Host = "panel.example.com"
 	request.Header.Set("Origin", origin)
 	if origin == "" {
@@ -91,11 +92,11 @@ func TestSessionCookieOriginGuardDevelopmentCompatibility(t *testing.T) {
 			common.SessionCookieSecure = test.secure
 
 			gin.SetMode(gin.TestMode)
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.POST("/api/user/auth/refresh", SessionCookieOriginGuard(), func(c *gin.Context) {
 				c.Status(http.StatusNoContent)
 			})
-			request := httptest.NewRequest(http.MethodPost, "http://localhost:3000/api/user/auth/refresh", nil)
+			request := testtenant.NewRequest(http.MethodPost, "http://localhost:3000/api/user/auth/refresh", nil)
 			request.Host = "localhost:3000"
 			if test.origin != "" {
 				request.Header.Set("Origin", test.origin)
@@ -120,11 +121,11 @@ func TestSessionCookieOriginGuardDoesNotTrustForwardedProtoFromClient(t *testing
 	})
 
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.POST("/api/user/auth/refresh", SessionCookieOriginGuard(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodPost, "http://panel.example.com/api/user/auth/refresh", nil)
+	request := testtenant.NewRequest(http.MethodPost, "http://panel.example.com/api/user/auth/refresh", nil)
 	request.Host = "panel.example.com"
 	request.Header.Set("Origin", "https://panel.example.com")
 	request.Header.Set("X-Forwarded-Proto", "https")

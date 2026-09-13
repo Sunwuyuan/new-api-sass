@@ -1,5 +1,7 @@
 package ratio_setting
 
+import context "context"
+
 import (
 	"github.com/QuantumNous/new-api/types"
 )
@@ -136,51 +138,51 @@ var cacheRatioMap = types.NewRWMap[string, float64]()
 var createCacheRatioMap = types.NewRWMap[string, float64]()
 
 // GetCacheRatioMap returns a copy of the cache ratio map
-func GetCacheRatioMap() map[string]float64 {
-	return cacheRatioMap.ReadAll()
+func GetCacheRatioMap(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).cacheRatioMap.ReadAll()
 }
 
 // CacheRatio2JSONString converts the cache ratio map to a JSON string
-func CacheRatio2JSONString() string {
-	return cacheRatioMap.MarshalJSONString()
+func CacheRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).cacheRatioMap.MarshalJSONString()
 }
 
 // CreateCacheRatio2JSONString converts the create cache ratio map to a JSON string
-func CreateCacheRatio2JSONString() string {
-	return createCacheRatioMap.MarshalJSONString()
+func CreateCacheRatio2JSONString(tenantCtx context.Context) string {
+	return TenantState(tenantCtx).createCacheRatioMap.MarshalJSONString()
 }
 
 // UpdateCacheRatioByJSONString updates the cache ratio map from a JSON string
-func UpdateCacheRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(cacheRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateCacheRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).cacheRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
 // UpdateCreateCacheRatioByJSONString updates the create cache ratio map from a JSON string
-func UpdateCreateCacheRatioByJSONString(jsonStr string) error {
-	return types.LoadFromJsonStringWithCallback(createCacheRatioMap, jsonStr, InvalidateExposedDataCache)
+func UpdateCreateCacheRatioByJSONString(tenantCtx context.Context, jsonStr string) error {
+	return types.LoadFromJsonStringWithCallback(TenantState(tenantCtx).createCacheRatioMap, jsonStr, func() { InvalidateExposedDataCache(tenantCtx) })
 }
 
 // GetCacheRatio returns the cache ratio for a model
-func GetCacheRatio(name string) (float64, bool) {
-	ratio, ok := cacheRatioMap.Get(name)
+func GetCacheRatio(tenantCtx context.Context, name string) (float64, bool) {
+	ratio, ok := TenantState(tenantCtx).cacheRatioMap.Get(name)
 	if !ok {
 		return DefaultCacheRatio, false
 	}
 	return ratio, true
 }
 
-func GetCreateCacheRatio(name string) (float64, bool) {
-	ratio, ok := createCacheRatioMap.Get(name)
+func GetCreateCacheRatio(tenantCtx context.Context, name string) (float64, bool) {
+	ratio, ok := TenantState(tenantCtx).createCacheRatioMap.Get(name)
 	if !ok {
 		return DefaultCreateCacheRatio, false
 	}
 	return ratio, true
 }
 
-func GetCacheRatioCopy() map[string]float64 {
-	return cacheRatioMap.ReadAll()
+func GetCacheRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).cacheRatioMap.ReadAll()
 }
 
-func GetCreateCacheRatioCopy() map[string]float64 {
-	return createCacheRatioMap.ReadAll()
+func GetCreateCacheRatioCopy(tenantCtx context.Context) map[string]float64 {
+	return TenantState(tenantCtx).createCacheRatioMap.ReadAll()
 }

@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"errors"
 	"net/smtp"
@@ -9,18 +11,19 @@ import (
 )
 
 type smtpAutoAuth struct {
+	ctx      context.Context
 	username string
 	password string
 	mech     string
 }
 
-func AutoSMTPAuth(username, password string) smtp.Auth {
-	return &smtpAutoAuth{username: username, password: password}
+func AutoSMTPAuth(ctx context.Context, username, password string) smtp.Auth {
+	return &smtpAutoAuth{ctx: ctx, username: username, password: password}
 }
 
 func (a *smtpAutoAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
-	useLoginAuth := SMTPForceAuthLogin
-	if !useLoginAuth && shouldUseSMTPLoginAuth() {
+	useLoginAuth := TenantState(a.ctx).SMTPForceAuthLogin
+	if !useLoginAuth && shouldUseSMTPLoginAuth(a.ctx) {
 		useLoginAuth = !(server != nil && len(server.Auth) == 1 && smtpServerSupportsAuth(server, "NTLM"))
 	}
 	if useLoginAuth {
@@ -31,7 +34,7 @@ func (a *smtpAutoAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
 	switch {
 	case smtpServerSupportsAuth(server, "PLAIN"):
 		a.mech = "PLAIN"
-		return smtp.PlainAuth("", a.username, a.password, SMTPServer).Start(server)
+		return smtp.PlainAuth("", a.username, a.password, TenantState(a.ctx).SMTPServer).Start(server)
 	case smtpServerSupportsAuth(server, "LOGIN"):
 		a.mech = "LOGIN"
 		return "LOGIN", []byte{}, nil
@@ -44,7 +47,7 @@ func (a *smtpAutoAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
 		return "NTLM", negotiateMessage, nil
 	default:
 		a.mech = "PLAIN"
-		return smtp.PlainAuth("", a.username, a.password, SMTPServer).Start(server)
+		return smtp.PlainAuth("", a.username, a.password, TenantState(a.ctx).SMTPServer).Start(server)
 	}
 }
 

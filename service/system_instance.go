@@ -62,21 +62,21 @@ type SystemInstanceStorageMetrics struct {
 	UsedPercent float64 `json:"used_percent"`
 }
 
-func StartSystemInstanceReporter() {
+func StartSystemInstanceReporter(tenantCtx context.Context) {
 	systemInstanceReporterOnce.Do(func() {
 		gopool.Go(func() {
-			reportSystemInstanceWithLog()
+			reportSystemInstanceWithLog(tenantCtx)
 
 			ticker := time.NewTicker(systemInstanceReportInterval)
 			defer ticker.Stop()
 			for range ticker.C {
-				reportSystemInstanceWithLog()
+				reportSystemInstanceWithLog(tenantCtx)
 			}
 		})
 	})
 }
 
-func ReportCurrentSystemInstance() error {
+func ReportCurrentSystemInstance(tenantCtx context.Context) error {
 	identity := common.GetNodeIdentity()
 	hostname, hostnameErr := os.Hostname()
 	if strings.TrimSpace(identity.Name) == "" {
@@ -120,11 +120,11 @@ func ReportCurrentSystemInstance() error {
 			},
 		},
 	}
-	return model.UpsertSystemInstance(identity.Name, info, common.StartTime, common.GetTimestamp())
+	return model.UpsertSystemInstance(tenantCtx, identity.Name, info, common.StartTime, common.GetTimestamp())
 }
 
-func reportSystemInstanceWithLog() {
-	if err := ReportCurrentSystemInstance(); err != nil {
+func reportSystemInstanceWithLog(tenantCtx context.Context) {
+	if err := ReportCurrentSystemInstance(tenantCtx); err != nil {
 		logger.LogWarn(context.Background(), fmt.Sprintf("system instance report failed: %v", err))
 	}
 }

@@ -17,9 +17,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
+
 	passkeysvc "github.com/QuantumNous/new-api/service/passkey"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
@@ -97,7 +99,7 @@ func TestPasskeyDomainsPreserveCredentialsAcrossVerificationFlows(t *testing.T) 
 		t.Run(kind, func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
 			key := newSecurityLoginPasskey(t, user.Id)
-			settings := system_setting.GetPasskeySettings()
+			settings := system_setting.GetPasskeySettings(testtenant.Context())
 			legacyRPID := "www.example.com"
 			if kind == "historical mixed case" {
 				legacyRPID = "WWW.example.com"
@@ -108,7 +110,7 @@ func TestPasskeyDomainsPreserveCredentialsAcrossVerificationFlows(t *testing.T) 
 			beginHandler, finishHandler := PasskeyLoginBegin, PasskeyLoginFinish
 			request := map[string]any{"rp_id": legacyRPID}
 			if kind == "login factor" {
-				pending, err := service.StartLoginVerification(user, "password")
+				pending, err := service.StartLoginVerification(testtenant.Context(), user, "password")
 				require.NoError(t, err)
 				request["flow_token"] = pending.FlowToken
 				beginPath, finishPath = "/api/user/login/passkey/begin", "/api/user/login/passkey/finish"
@@ -121,7 +123,7 @@ func TestPasskeyDomainsPreserveCredentialsAcrossVerificationFlows(t *testing.T) 
 			begin := decodePasskeyDomainBegin(t, passkeyDomainRequest(t, beginPath, request, identity, "https://www.example.com", beginHandler))
 			assert.Equal(t, legacyRPID, begin.Options.PublicKey.RPID)
 			assert.Equal(t, []string{"example.com", legacyRPID}, begin.RPIDs)
-			before, err := model.GetPasskeyByUserID(user.Id)
+			before, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			require.Nil(t, before.RPID)
 			finish := map[string]any{"flow_token": begin.FlowToken, "credential": passkeyDomainAssertion(t, key, begin.Options.PublicKey.Challenge, legacyRPID, "https://www.example.com", user.Id, true)}
@@ -132,7 +134,7 @@ func TestPasskeyDomainsPreserveCredentialsAcrossVerificationFlows(t *testing.T) 
 			var result securityEnrollmentResponse
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			require.True(t, result.Success, response.Body.String())
-			after, err := model.GetPasskeyByUserID(user.Id)
+			after, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			require.NotNil(t, after.RPID)
 			assert.Equal(t, legacyRPID, *after.RPID)
@@ -143,16 +145,16 @@ func TestPasskeyDomainsPreserveCredentialsAcrossVerificationFlows(t *testing.T) 
 				require.NoError(t, common.Unmarshal(result.Data, &proof))
 				assert.Equal(t, service.VerificationScopeAccessTokenGenerate, proof.Scope)
 			}
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			replay := passkeyDomainRequest(t, finishPath, finish, identity, "https://www.example.com", finishHandler)
 			require.NoError(t, common.Unmarshal(replay.Body.Bytes(), &result))
 			assert.False(t, result.Success)
-			afterCount, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			afterCount, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.Equal(t, count, afterCount)
 			// Once identified, a browser hint cannot override the credential's binding.
-			wa, ids, err := passkeysvc.BuildLoginWebAuthn(httptest.NewRequest(http.MethodPost, beginPath, nil), "example.com", *after.RPID)
+			wa, ids, err := passkeysvc.BuildLoginWebAuthn(testtenant.Context(), httptest.NewRequest(http.MethodPost, beginPath, nil), "example.com", *after.RPID)
 			require.NoError(t, err)
 			assert.Equal(t, legacyRPID, wa.Config.RPID)
 			assert.Equal(t, []string{legacyRPID}, ids)
@@ -165,7 +167,7 @@ func TestPasskeyDomainsRejectInvalidAssertions(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
 			key := newSecurityLoginPasskey(t, user.Id)
-			settings := system_setting.GetPasskeySettings()
+			settings := system_setting.GetPasskeySettings(testtenant.Context())
 			settings.LegacyRPIDs = "www.example.com"
 			settings.Origins = "https://example.com,https://www.example.com"
 			begin := decodePasskeyDomainBegin(t, passkeyDomainRequest(t, "/api/user/passkey/login/begin", map[string]string{"rp_id": "www.example.com"}, identity, "https://www.example.com", PasskeyLoginBegin))
@@ -180,7 +182,7 @@ func TestPasskeyDomainsRejectInvalidAssertions(t *testing.T) {
 			case "wrong user":
 				handle++
 			case "expired challenge":
-				flow, err := model.GetAuthFlow(begin.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposePasskeyLogin})
+				flow, err := model.GetAuthFlow(testtenant.Context(), begin.FlowToken, model.AuthFlowMatch{Purpose: model.AuthFlowPurposePasskeyLogin})
 				require.NoError(t, err)
 				var payload struct {
 					SessionData webauthn.SessionData    `json:"session_data"`
@@ -205,10 +207,10 @@ func TestPasskeyDomainsRejectInvalidAssertions(t *testing.T) {
 			require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 			assert.False(t, result.Success, response.Body.String())
 			assert.Empty(t, response.Header().Values("Set-Cookie"))
-			count, err := model.CountActiveUserSessions(user.Id, time.Now().Unix())
+			count, err := model.CountActiveUserSessions(testtenant.Context(), user.Id, time.Now().Unix())
 			require.NoError(t, err)
 			assert.EqualValues(t, 1, count)
-			stored, err := model.GetPasskeyByUserID(user.Id)
+			stored, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			if failure == "known different domain" {
 				assert.Equal(t, "example.com", *stored.RPID)
@@ -221,7 +223,7 @@ func TestPasskeyDomainsRejectInvalidAssertions(t *testing.T) {
 
 func TestPasskeyDomainChoicesRespectOriginAndConfiguration(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.LegacyRPIDs = "www.example.com"
 	settings.Origins = "https://example.com,https://www.example.com"
 	for _, test := range []struct {
@@ -255,15 +257,15 @@ func TestPasskeyDomainChoicesRespectOriginAndConfiguration(t *testing.T) {
 func setupPasskeyDomainOptions(t *testing.T) {
 	t.Helper()
 	require.NoError(t, model.DB.AutoMigrate(&model.Option{}))
-	common.OptionMapRWMutex.RLock()
-	previousOptions := maps.Clone(common.OptionMap)
-	previousAddress := system_setting.ServerAddress
-	common.OptionMapRWMutex.RUnlock()
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.RLock()
+	previousOptions := maps.Clone(common.TenantState(testtenant.Context()).OptionMap)
+	previousAddress := system_setting.TenantState(testtenant.Context()).ServerAddress
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.RUnlock()
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = previousOptions
-		system_setting.ServerAddress = previousAddress
-		common.OptionMapRWMutex.Unlock()
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		common.TenantState(testtenant.Context()).OptionMap = previousOptions
+		system_setting.TenantState(testtenant.Context()).ServerAddress = previousAddress
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	})
 }
 
@@ -272,7 +274,7 @@ func TestPasskeyDomainRemovalProtectsExistingAndUnknownCredentials(t *testing.T)
 		t.Run("binding="+binding, func(t *testing.T) {
 			user, _ := setupSecurityEnrollmentTest(t)
 			setupPasskeyDomainOptions(t)
-			settings := system_setting.GetPasskeySettings()
+			settings := system_setting.GetPasskeySettings(testtenant.Context())
 			settings.LegacyRPIDs = "www.example.com"
 			settings.Origins = "https://example.com,https://www.example.com"
 			credential := &model.PasskeyCredential{UserID: user.Id, CredentialID: "existing", PublicKey: "key"}
@@ -280,8 +282,8 @@ func TestPasskeyDomainRemovalProtectsExistingAndUnknownCredentials(t *testing.T)
 				credential.RPID = &binding
 			}
 			require.NoError(t, model.DB.Create(credential).Error)
-			assert.Error(t, model.UpdateOption("passkey.legacy_rp_ids", ""))
-			assert.Equal(t, "www.example.com", system_setting.PasskeySettingsSnapshot().LegacyRPIDs)
+			assert.Error(t, model.UpdateOption(testtenant.Context(), "passkey.legacy_rp_ids", ""))
+			assert.Equal(t, "www.example.com", system_setting.PasskeySettingsSnapshot(testtenant.Context()).LegacyRPIDs)
 		})
 	}
 }
@@ -289,26 +291,26 @@ func TestPasskeyDomainRemovalProtectsExistingAndUnknownCredentials(t *testing.T)
 func TestPasskeyDomainRemovalWithoutAffectedCredentialsNeedsNoOverride(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.LegacyRPIDs = "www.example.com,WWW.example.com"
 	upper := "WWW.example.com"
 	require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id, RPID: &upper, CredentialID: "uppercase", PublicKey: "key"}).Error)
-	change, err := model.UpdatePasskeyDomainOptions(map[string]string{"passkey.legacy_rp_ids": upper}, false, "")
+	change, err := model.UpdatePasskeyDomainOptions(testtenant.Context(), map[string]string{"passkey.legacy_rp_ids": upper}, false, "")
 	require.NoError(t, err)
 	assert.Equal(t, []string{"www.example.com"}, change.RemovedRPIDs)
 	assert.Zero(t, change.AffectedCredentials)
 	assert.Zero(t, change.UnknownCredentials)
 	assert.False(t, change.ConfirmationRequired)
-	assert.Equal(t, upper, settings.LegacyRPIDs)
+	assert.Equal(t, upper, system_setting.PasskeySettingsSnapshot(testtenant.Context()).LegacyRPIDs)
 }
 
 func TestPasskeySnapshotDoesNotMaterializeDefaults(t *testing.T) {
 	setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.RPID, settings.Origins = "", ""
-	system_setting.ServerAddress = "https://www.example.com"
-	assert.Equal(t, "www.example.com", system_setting.PasskeySettingsSnapshot().EffectiveRPID())
+	system_setting.TenantState(testtenant.Context()).ServerAddress = "https://www.example.com"
+	assert.Equal(t, "www.example.com", system_setting.PasskeySettingsSnapshot(testtenant.Context()).EffectiveRPID())
 	assert.Empty(t, settings.RPID)
 	assert.Empty(t, settings.Origins)
 }
@@ -316,7 +318,7 @@ func TestPasskeySnapshotDoesNotMaterializeDefaults(t *testing.T) {
 func TestPasskeyDomainPreviewConfirmationAndAudit(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.LegacyRPIDs = "www.example.com,WWW.example.com"
 	settings.Origins = "https://example.com,https://www.example.com"
 	lower, upper, empty := "www.example.com", "WWW.example.com", ""
@@ -339,11 +341,11 @@ func TestPasskeyDomainPreviewConfirmationAndAudit(t *testing.T) {
 	assert.EqualValues(t, 2, preview.UnknownCredentials)
 	assert.True(t, preview.ConfirmationRequired)
 	require.NotEmpty(t, preview.RemovalConfirmation)
-	options, err := model.AllOption()
+	options, err := model.AllOption(testtenant.Context())
 	require.NoError(t, err)
 	assert.Empty(t, options, "preview must not materialize default rows")
 	assert.Equal(t, "www.example.com,WWW.example.com", settings.LegacyRPIDs)
-	assert.ErrorIs(t, model.UpdateOptionsBulk(map[string]string{"passkey.legacy_rp_ids": upper, "Notice": "must roll back"}), model.ErrPasskeyDomainRemovalConfirmation)
+	assert.ErrorIs(t, model.UpdateOptionsBulk(testtenant.Context(), map[string]string{"passkey.legacy_rp_ids": upper, "Notice": "must roll back"}), model.ErrPasskeyDomainRemovalConfirmation)
 	blocked := passkeyDomainRequest(t, "/api/option/", map[string]string{"key": "passkey.legacy_rp_ids", "value": upper}, identity, "https://example.com", UpdateOption)
 	assert.Equal(t, http.StatusConflict, blocked.Code)
 	assert.Contains(t, blocked.Body.String(), "PASSKEY_RP_ID_REMOVAL_CONFIRMATION_REQUIRED")
@@ -356,14 +358,14 @@ func TestPasskeyDomainPreviewConfirmationAndAudit(t *testing.T) {
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.NoError(t, common.Unmarshal(result.Data, &preview))
 	assert.EqualValues(t, 3, preview.UnknownCredentials)
-	options, err = model.AllOption()
+	options, err = model.AllOption(testtenant.Context())
 	require.NoError(t, err)
 	assert.Empty(t, options)
 	request["removal_confirmation"] = preview.RemovalConfirmation
 	response = passkeyDomainRequest(t, "/api/option/passkey/domains", request, identity, "https://example.com", UpdatePasskeyDomains)
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
-	assert.Equal(t, upper, settings.LegacyRPIDs)
+	assert.Equal(t, upper, system_setting.PasskeySettingsSnapshot(testtenant.Context()).LegacyRPIDs)
 	var audits []model.AuditLog
 	require.NoError(t, model.LOG_DB.Find(&audits).Error)
 	for _, audit := range audits {
@@ -395,8 +397,8 @@ func TestPasskeyDomainPreviewConfirmationAndAudit(t *testing.T) {
 	assert.NotContains(t, string(encoded), preview.RemovalConfirmation)
 	// Simulate an old node's cache after removal: persistence must use DB trust.
 	settings.LegacyRPIDs = lower + "," + upper
-	assert.ErrorIs(t, model.UpdatePasskeyAssertionState(user.Id, &webauthn.Credential{ID: []byte("0")}, time.Now(), lower), system_setting.ErrPasskeyRPIDUnavailable)
-	assert.ErrorIs(t, model.RegisterPasskeyForSession(identity, &model.PasskeyCredential{UserID: user.Id, RPID: &lower, CredentialID: "replacement", PublicKey: "key"}), system_setting.ErrPasskeyRPIDUnavailable)
+	assert.ErrorIs(t, model.UpdatePasskeyAssertionState(testtenant.Context(), user.Id, &webauthn.Credential{ID: []byte("0")}, time.Now(), lower), system_setting.ErrPasskeyRPIDUnavailable)
+	assert.ErrorIs(t, model.RegisterPasskeyForSession(testtenant.Context(), identity, &model.PasskeyCredential{UserID: user.Id, RPID: &lower, CredentialID: "replacement", PublicKey: "key"}), system_setting.ErrPasskeyRPIDUnavailable)
 }
 
 func TestPasskeyDomainSettingsAcceptExactHTTPSInternalHosts(t *testing.T) {
@@ -415,7 +417,7 @@ func TestPasskeyDomainSettingsAcceptExactHTTPSInternalHosts(t *testing.T) {
 		t.Run(test.rpID+"/"+test.origins, func(t *testing.T) {
 			setupSecurityEnrollmentTest(t)
 			setupPasskeyDomainOptions(t)
-			change, err := model.UpdatePasskeyDomainOptions(map[string]string{"passkey.rp_id": test.rpID, "passkey.legacy_rp_ids": "", "passkey.origins": test.origins}, false, "")
+			change, err := model.UpdatePasskeyDomainOptions(testtenant.Context(), map[string]string{"passkey.rp_id": test.rpID, "passkey.legacy_rp_ids": "", "passkey.origins": test.origins}, false, "")
 			if !test.valid {
 				assert.ErrorIs(t, err, system_setting.ErrPasskeyRPIDInvalid)
 				return
@@ -430,14 +432,14 @@ func TestPasskeyDomainSettingsAcceptExactHTTPSInternalHosts(t *testing.T) {
 func TestPasskeyImplicitDomainChangesRetainPreviousTrust(t *testing.T) {
 	setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.RPID, settings.Origins = "", ""
-	system_setting.ServerAddress = "https://www.example.com"
-	require.NoError(t, model.UpdateOption("ServerAddress", "https://example.com"))
-	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot().RelyingPartyIDs())
-	assert.Equal(t, "https://www.example.com,https://example.com", settings.Origins)
+	system_setting.TenantState(testtenant.Context()).ServerAddress = "https://www.example.com"
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "ServerAddress", "https://example.com"))
+	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot(testtenant.Context()).RelyingPartyIDs())
+	assert.Equal(t, "https://www.example.com,https://example.com", system_setting.PasskeySettingsSnapshot(testtenant.Context()).Origins)
 	// Moving the retained RP into the primary is not a removal.
-	change, err := model.UpdatePasskeyDomainOptions(map[string]string{"passkey.rp_id": "www.example.com", "passkey.legacy_rp_ids": ""}, false, "")
+	change, err := model.UpdatePasskeyDomainOptions(testtenant.Context(), map[string]string{"passkey.rp_id": "www.example.com", "passkey.legacy_rp_ids": ""}, false, "")
 	require.NoError(t, err)
 	assert.Empty(t, change.RemovedRPIDs)
 	assert.Equal(t, "example.com", change.LegacyRPIDs)
@@ -446,8 +448,8 @@ func TestPasskeyImplicitDomainChangesRetainPreviousTrust(t *testing.T) {
 func TestPasskeyRegistrationAndDomainRemovalSerialize(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	system_setting.GetPasskeySettings().Origins = "https://example.com,https://www.example.com"
-	require.NoError(t, model.UpdateOption("passkey.legacy_rp_ids", "www.example.com"))
+	system_setting.GetPasskeySettings(testtenant.Context()).Origins = "https://example.com,https://www.example.com"
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "passkey.legacy_rp_ids", "www.example.com"))
 	registering, release := make(chan struct{}), make(chan struct{})
 	require.NoError(t, model.DB.Callback().Create().Before("gorm:create").Register("passkey_registration_barrier", func(tx *gorm.DB) {
 		if _, ok := tx.Statement.Dest.(*model.PasskeyCredential); ok {
@@ -459,21 +461,21 @@ func TestPasskeyRegistrationAndDomainRemovalSerialize(t *testing.T) {
 	rpID := "www.example.com"
 	registered, removed := make(chan error, 1), make(chan error, 1)
 	go func() {
-		registered <- model.RegisterPasskeyForSession(identity, &model.PasskeyCredential{UserID: user.Id, RPID: &rpID, CredentialID: "concurrent", PublicKey: "key"})
+		registered <- model.RegisterPasskeyForSession(testtenant.Context(), identity, &model.PasskeyCredential{UserID: user.Id, RPID: &rpID, CredentialID: "concurrent", PublicKey: "key"})
 	}()
 	<-registering
 	removing := make(chan struct{})
 	go func() {
 		close(removing)
-		removed <- model.UpdateOption("passkey.legacy_rp_ids", "")
+		removed <- model.UpdateOption(testtenant.Context(), "passkey.legacy_rp_ids", "")
 	}()
 	<-removing
 	// A concurrent snapshot must remain read-only while the write is pending.
-	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot().RelyingPartyIDs())
+	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot(testtenant.Context()).RelyingPartyIDs())
 	close(release)
 	require.NoError(t, <-registered)
 	assert.ErrorIs(t, <-removed, model.ErrPasskeyDomainRemovalConfirmation)
-	stored, err := model.GetPasskeyByUserID(user.Id)
+	stored, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	require.NotNil(t, stored.RPID)
 	assert.Equal(t, rpID, *stored.RPID)
@@ -482,12 +484,12 @@ func TestPasskeyRegistrationAndDomainRemovalSerialize(t *testing.T) {
 func TestPasskeyDomainEndpointRequiresRoot(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	bundle, err := service.CreateLoginSession(user.Id, "password", "127.0.0.1", "domain-settings-test")
+	bundle, err := service.CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "domain-settings-test")
 	require.NoError(t, err)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.PUT("/api/option/passkey/domains", middleware.RootAuth(), UpdatePasskeyDomains)
 	for _, bearer := range []string{"", bundle.AccessToken} {
-		request := httptest.NewRequest(http.MethodPut, "/api/option/passkey/domains", strings.NewReader(`{"rp_id":"example.com","legacy_rp_ids":"","origins":"https://example.com","preview":true}`))
+		request := testtenant.NewRequest(http.MethodPut, "/api/option/passkey/domains", strings.NewReader(`{"rp_id":"example.com","legacy_rp_ids":"","origins":"https://example.com","preview":true}`))
 		if bearer != "" {
 			request.Header.Set("Authorization", "Bearer "+bearer)
 		}
@@ -495,7 +497,7 @@ func TestPasskeyDomainEndpointRequiresRoot(t *testing.T) {
 		router.ServeHTTP(response, request)
 		assert.Contains(t, []int{http.StatusUnauthorized, http.StatusForbidden}, response.Code)
 	}
-	options, err := model.AllOption()
+	options, err := model.AllOption(testtenant.Context())
 	require.NoError(t, err)
 	assert.Empty(t, options)
 }
@@ -503,18 +505,18 @@ func TestPasskeyDomainEndpointRequiresRoot(t *testing.T) {
 func TestPasskeyDefaultsDoNotRestrictUnrelatedServerAddressSetup(t *testing.T) {
 	setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.Enabled, settings.RPID, settings.LegacyRPIDs, settings.Origins = false, "", "", ""
-	system_setting.ServerAddress = ""
-	require.NoError(t, model.UpdateOption("ServerAddress", "http://127.0.0.1:3000"))
-	assert.Equal(t, "http://127.0.0.1:3000", system_setting.ServerAddress)
+	system_setting.TenantState(testtenant.Context()).ServerAddress = ""
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "ServerAddress", "http://127.0.0.1:3000"))
+	assert.Equal(t, "http://127.0.0.1:3000", system_setting.TenantState(testtenant.Context()).ServerAddress)
 	assert.Empty(t, settings.RPID)
 	assert.Empty(t, settings.LegacyRPIDs)
 }
 
 func TestPasskeyRegistrationRejectsUnavailableRequestOrigin(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.RPID = "www.example.com"
 	settings.LegacyRPIDs = "example.com"
 	settings.Origins = "https://example.com,https://www.example.com"
@@ -535,63 +537,63 @@ func TestPasskeyRegistrationRejectsUnavailableRequestOrigin(t *testing.T) {
 func TestPasskeyRPIDRotationRetainsDefaultsAndRollsBackOnFailure(t *testing.T) {
 	setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	settings := system_setting.GetPasskeySettings()
+	settings := system_setting.GetPasskeySettings(testtenant.Context())
 	settings.RPID, settings.LegacyRPIDs = "", ""
 	settings.Origins = "https://www.example.com,https://example.com,https://login.example.com"
-	system_setting.ServerAddress = "https://www.example.com"
+	system_setting.TenantState(testtenant.Context()).ServerAddress = "https://www.example.com"
 	require.NoError(t, model.DB.Create(&model.Option{Key: "passkey.rp_id", Value: ""}).Error)
-	require.NoError(t, model.UpdateOption("passkey.rp_id", "example.com"))
-	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot().RelyingPartyIDs())
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "passkey.rp_id", "example.com"))
+	assert.Equal(t, []string{"example.com", "www.example.com"}, system_setting.PasskeySettingsSnapshot(testtenant.Context()).RelyingPartyIDs())
 	// Simulate a second node with an older local cache. Persisted domains win.
-	system_setting.GetPasskeySettings().RPID = "www.example.com"
-	require.NoError(t, model.UpdateOption("passkey.rp_id", "login.example.com"))
-	assert.Equal(t, []string{"login.example.com", "www.example.com", "example.com"}, system_setting.PasskeySettingsSnapshot().RelyingPartyIDs())
-	before, err := model.AllOption()
+	system_setting.GetPasskeySettings(testtenant.Context()).RPID = "www.example.com"
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "passkey.rp_id", "login.example.com"))
+	assert.Equal(t, []string{"login.example.com", "www.example.com", "example.com"}, system_setting.PasskeySettingsSnapshot(testtenant.Context()).RelyingPartyIDs())
+	before, err := model.AllOption(testtenant.Context())
 	require.NoError(t, err)
-	snapshot := system_setting.PasskeySettingsSnapshot()
+	snapshot := system_setting.PasskeySettingsSnapshot(testtenant.Context())
 	failure := errors.New("synthetic option write failure")
 	require.NoError(t, model.DB.Callback().Update().Before("gorm:update").Register("passkey_option_failure", func(tx *gorm.DB) {
-		if option, ok := tx.Statement.Dest.(*model.Option); ok && option.Key == "passkey.legacy_rp_ids" {
+		if tx.Statement.Table == "options" {
 			tx.AddError(failure)
 		}
 	}))
-	assert.ErrorIs(t, model.UpdateOptionsBulk(map[string]string{"passkey.rp_id": "next.example.com", "passkey.legacy_rp_ids": "www.example.com"}), failure)
+	assert.ErrorIs(t, model.UpdateOptionsBulk(testtenant.Context(), map[string]string{"passkey.rp_id": "next.example.com", "passkey.legacy_rp_ids": "www.example.com"}), failure)
 	require.NoError(t, model.DB.Callback().Update().Remove("passkey_option_failure"))
-	after, err := model.AllOption()
+	after, err := model.AllOption(testtenant.Context())
 	require.NoError(t, err)
 	assert.ElementsMatch(t, before, after)
-	assert.Equal(t, snapshot, system_setting.PasskeySettingsSnapshot())
+	assert.Equal(t, snapshot, system_setting.PasskeySettingsSnapshot(testtenant.Context()))
 	for _, invalid := range []string{"*.example.com", "https://example.com", "example.com:443", "example.com/path", "com"} {
-		assert.ErrorIs(t, model.UpdateOption("passkey.rp_id", invalid), system_setting.ErrPasskeyRPIDInvalid)
-		assert.ErrorIs(t, model.UpdateOption("passkey.legacy_rp_ids", invalid), system_setting.ErrPasskeyRPIDInvalid)
+		assert.ErrorIs(t, model.UpdateOption(testtenant.Context(), "passkey.rp_id", invalid), system_setting.ErrPasskeyRPIDInvalid)
+		assert.ErrorIs(t, model.UpdateOption(testtenant.Context(), "passkey.legacy_rp_ids", invalid), system_setting.ErrPasskeyRPIDInvalid)
 	}
-	assert.Equal(t, snapshot, system_setting.PasskeySettingsSnapshot())
+	assert.Equal(t, snapshot, system_setting.PasskeySettingsSnapshot(testtenant.Context()))
 	// Older settings accepted mixed case. Rotation must preserve its hash input.
 	require.NoError(t, model.DB.Model(&model.Option{}).Where(&model.Option{Key: "passkey.rp_id"}).Update("value", "WWW.example.com").Error)
-	require.NoError(t, model.UpdateOption("passkey.rp_id", "next.example.com"))
-	assert.Contains(t, system_setting.PasskeySettingsSnapshot().RelyingPartyIDs(), "WWW.example.com")
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "passkey.rp_id", "next.example.com"))
+	assert.Contains(t, system_setting.PasskeySettingsSnapshot(testtenant.Context()).RelyingPartyIDs(), "WWW.example.com")
 }
 
 func TestPasskeyRPIDRotationKeepsInFlightRegistration(t *testing.T) {
 	user, identity := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	system_setting.GetPasskeySettings().Origins = "https://example.com,https://www.example.com"
+	system_setting.GetPasskeySettings(testtenant.Context()).Origins = "https://example.com,https://www.example.com"
 	proof := issueSecurityEnrollmentProof(t, identity, service.VerificationOperation{Scope: "passkey.register"}, "password")
 	begin := decodePasskeyDomainBegin(t, securityEnrollmentRequest(http.MethodPost, "/api/user/passkey/register/begin", "", proof, identity, PasskeyRegisterBegin))
 	assert.Equal(t, "example.com", begin.Options.PublicKey.RP.ID)
-	require.NoError(t, model.UpdateOption("passkey.rp_id", "www.example.com"))
+	require.NoError(t, model.UpdateOption(testtenant.Context(), "passkey.rp_id", "www.example.com"))
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	response := passkeyDomainRequest(t, "/api/user/passkey/register/finish", passkeyFinishRequest{FlowToken: begin.FlowToken, Credential: securityPasskeyResponse(t, key, begin.Options.PublicKey.Challenge, true, 0)}, identity, "https://example.com", PasskeyRegisterFinish)
 	var result securityEnrollmentResponse
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	require.True(t, result.Success, response.Body.String())
-	credential, err := model.GetPasskeyByUserID(user.Id)
+	credential, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 	require.NoError(t, err)
 	require.NotNil(t, credential.RPID)
 	assert.Equal(t, "example.com", *credential.RPID)
 	// A later registration uses the current primary, not the retained domain.
-	wa, err := passkeysvc.BuildWebAuthn(httptest.NewRequest(http.MethodPost, "https://www.example.com/api/user/passkey/register/begin", nil))
+	wa, err := passkeysvc.BuildWebAuthn(testtenant.Context(), httptest.NewRequest(http.MethodPost, "https://www.example.com/api/user/passkey/register/begin", nil))
 	require.NoError(t, err)
 	options, _, err := wa.BeginRegistration(passkeysvc.NewWebAuthnUser(user, credential))
 	require.NoError(t, err)
@@ -626,7 +628,7 @@ func TestPasskeyDomainFailuresDoNotLogCredentials(t *testing.T) {
 func TestPasskeyDomainErrorsRespectRequestLanguage(t *testing.T) {
 	user, _ := setupSecurityEnrollmentTest(t)
 	setupPasskeyDomainOptions(t)
-	system_setting.GetPasskeySettings().LegacyRPIDs = "www.example.com"
+	system_setting.GetPasskeySettings(testtenant.Context()).LegacyRPIDs = "www.example.com"
 	require.NoError(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id, CredentialID: "unknown-domain", PublicKey: "key"}).Error)
 	for _, locale := range []struct {
 		language, invalid, unavailable, removal string
@@ -646,12 +648,12 @@ func TestPasskeyDomainErrorsRespectRequestLanguage(t *testing.T) {
 				{"/api/user/passkey/login/begin", `{"rp_id":"unconfigured.example.com"}`, "PASSKEY_RP_ID_UNAVAILABLE", locale.unavailable, PasskeyLoginBegin},
 			} {
 				response := httptest.NewRecorder()
-				c, _ := gin.CreateTestContext(response)
+				c, _ := testtenant.CreateTestContext(response)
 				method := http.MethodPost
 				if request.path == "/api/option/" {
 					method = http.MethodPut
 				}
-				c.Request = httptest.NewRequest(method, request.path, strings.NewReader(request.body))
+				c.Request = testtenant.NewRequest(method, request.path, strings.NewReader(request.body))
 				c.Request.Header.Set("Accept-Language", locale.language)
 				c.Request.Header.Set("Origin", "https://example.com")
 				c.Set("id", user.Id)
@@ -677,7 +679,7 @@ func TestPasskeyRPIDMigrationPreservesExistingCredentials(t *testing.T) {
 		t.Run(fmt.Sprintf("upgrade=%t", upgrade), func(t *testing.T) {
 			user, identity := setupSecurityEnrollmentTest(t)
 			key := newSecurityLoginPasskey(t, user.Id)
-			before, err := model.GetPasskeyByUserID(user.Id)
+			before, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			if upgrade {
 				// This schema is copied from the latest released model at
@@ -697,16 +699,20 @@ func TestPasskeyRPIDMigrationPreservesExistingCredentials(t *testing.T) {
 				// PostgreSQL's old SELECT * prepared plans along with its old pool.
 				pool.SetMaxIdleConns(0)
 				pool.SetMaxIdleConns(2)
+				require.NoError(t, model.MigrateTenantSchema(model.DB, []any{&model.PasskeyCredential{}}))
 				require.NoError(t, model.DB.AutoMigrate(&model.PasskeyCredential{}))
 			}
-			after, err := model.GetPasskeyByUserID(user.Id)
+			if upgrade {
+				before.TenantID = 1
+			}
+			after, err := model.GetPasskeyByUserID(testtenant.Context(), user.Id)
 			require.NoError(t, err)
 			assert.Equal(t, before, after)
 			assert.True(t, model.DB.Migrator().HasIndex(&model.PasskeyCredential{}, "idx_passkey_credentials_deleted_at"))
-			assert.Error(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id, CredentialID: "another-key", PublicKey: "key"}).Error)
-			assert.Error(t, model.DB.Create(&model.PasskeyCredential{UserID: user.Id + 1, CredentialID: before.CredentialID, PublicKey: "key"}).Error)
-			system_setting.GetPasskeySettings().LegacyRPIDs = "www.example.com"
-			system_setting.GetPasskeySettings().Origins = "https://example.com,https://www.example.com"
+			assert.Error(t, model.DB.Create(&model.PasskeyCredential{TenantID: before.TenantID, UserID: user.Id, CredentialID: "another-key", PublicKey: "key"}).Error)
+			assert.Error(t, model.DB.Create(&model.PasskeyCredential{TenantID: before.TenantID, UserID: user.Id + 1, CredentialID: before.CredentialID, PublicKey: "key"}).Error)
+			system_setting.GetPasskeySettings(testtenant.Context()).LegacyRPIDs = "www.example.com"
+			system_setting.GetPasskeySettings(testtenant.Context()).Origins = "https://example.com,https://www.example.com"
 			begin := decodePasskeyDomainBegin(t, passkeyDomainRequest(t, "/api/user/passkey/login/begin", map[string]string{"rp_id": "www.example.com"}, identity, "https://www.example.com", PasskeyLoginBegin))
 			response := passkeyDomainRequest(t, "/api/user/passkey/login/finish", map[string]any{"flow_token": begin.FlowToken, "credential": passkeyDomainAssertion(t, key, begin.Options.PublicKey.Challenge, "www.example.com", "https://www.example.com", user.Id, true)}, identity, "https://www.example.com", PasskeyLoginFinish)
 			var result securityEnrollmentResponse
@@ -722,10 +728,10 @@ func TestParsePasskeyFinishRequestDoesNotRewriteRequestBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	bodyText := `{"flow_token":"flow-1","credential":{"id":"credential-1"}}`
 	body := &passkeyTestBody{Reader: strings.NewReader(bodyText)}
-	request := httptest.NewRequest(http.MethodPost, "/api/user/passkey/register/finish", nil)
+	request := testtenant.NewRequest(http.MethodPost, "/api/user/passkey/register/finish", nil)
 	request.Body = body
 	request.ContentLength = int64(len(bodyText))
-	context, _ := gin.CreateTestContext(httptest.NewRecorder())
+	context, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	context.Request = request
 
 	parsed, err := parsePasskeyFinishRequest(context)
@@ -738,12 +744,12 @@ func TestParsePasskeyFinishRequestDoesNotRewriteRequestBody(t *testing.T) {
 
 func TestPasskeyRegisterFinishRejectsUnapprovedFlowWithoutConsumingIt(t *testing.T) {
 	_, identity := setupSecurityEnrollmentTest(t)
-	system_setting.GetPasskeySettings().UserVerification = "required"
+	system_setting.GetPasskeySettings(testtenant.Context()).UserVerification = "required"
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	payload, err := common.Marshal(map[string]any{"scope": service.VerificationScopePasskeyRegister})
 	require.NoError(t, err)
-	token, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+	token, _, err := model.CreateAuthFlow(testtenant.Context(), model.AuthFlowCreate{
 		Purpose: model.AuthFlowPurposePasskeyRegister, UserId: identity.UserID, SessionId: identity.SessionID,
 		Payload: string(payload), ExpiresAt: time.Now().Add(time.Minute),
 	})
@@ -757,9 +763,9 @@ func TestPasskeyRegisterFinishRejectsUnapprovedFlowWithoutConsumingIt(t *testing
 	require.NoError(t, common.Unmarshal(response.Body.Bytes(), &result))
 	assert.False(t, result.Success)
 	assert.Equal(t, "AUTH_FLOW_INVALID", result.Code)
-	_, err = model.GetPasskeyByUserID(identity.UserID)
+	_, err = model.GetPasskeyByUserID(testtenant.Context(), identity.UserID)
 	assert.ErrorIs(t, err, model.ErrPasskeyNotFound)
-	flow, err := model.GetAuthFlow(token, model.AuthFlowMatch{Purpose: model.AuthFlowPurposePasskeyRegister})
+	flow, err := model.GetAuthFlow(testtenant.Context(), token, model.AuthFlowMatch{Purpose: model.AuthFlowPurposePasskeyRegister})
 	require.NoError(t, err)
 	assert.Nil(t, flow.ConsumedAt)
 }

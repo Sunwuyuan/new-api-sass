@@ -160,18 +160,18 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 	if !ok {
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
-	identity, internal, err := service.ParseDashboardAccessToken(raw)
+	identity, internal, err := service.ParseDashboardAccessToken(c.Request.Context(), raw)
 	if internal {
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
-		_, user, err := service.ValidateLoginSession(identity)
+		_, user, err := service.ValidateLoginSession(c.Request.Context(), identity)
 		if err != nil {
 			return nil, service.AuthIdentity{}, dashboardCredentialInternal, err
 		}
 		return user, identity, dashboardCredentialInternal, nil
 	}
-	patUser, err := model.ValidateAccessToken(raw)
+	patUser, err := model.ValidateAccessToken(c.Request.Context(), raw)
 	if err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
@@ -179,7 +179,7 @@ func classifyDashboardCredential(c *gin.Context) (*model.UserBase, service.AuthI
 		return nil, service.AuthIdentity{}, dashboardCredentialUnmatched, nil
 	}
 	beginAccessTokenAudit(c, patUser, raw)
-	user, err := model.GetUserCache(patUser.Id)
+	user, err := model.GetUserCache(c.Request.Context(), patUser.Id)
 	if err != nil {
 		return nil, service.AuthIdentity{}, dashboardCredentialPAT, err
 	}
@@ -236,7 +236,7 @@ func RequirePermission(permission authz.Permission) func(c *gin.Context) {
 	return func(c *gin.Context) {
 		role := c.GetInt("role")
 		userID := c.GetInt("id")
-		if authz.Can(userID, role, permission) {
+		if authz.Can(c.Request.Context(), userID, role, permission) {
 			c.Next()
 			return
 		}
@@ -258,7 +258,7 @@ func TokenOrUserAuth() func(c *gin.Context) {
 	return func(c *gin.Context) {
 		raw, ok := authorizationToken(c.GetHeader("Authorization"))
 		if ok {
-			identity, internal, err := service.ParseDashboardAccessToken(raw)
+			identity, internal, err := service.ParseDashboardAccessToken(c.Request.Context(), raw)
 			if !internal {
 				TokenAuth()(c)
 				return
@@ -267,7 +267,7 @@ func TokenOrUserAuth() func(c *gin.Context) {
 				writeDashboardAuthError(c, err)
 				return
 			}
-			_, user, err := service.ValidateLoginSession(identity)
+			_, user, err := service.ValidateLoginSession(c.Request.Context(), identity)
 			if err != nil {
 				writeDashboardAuthError(c, err)
 				return
@@ -303,7 +303,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 		parts := strings.Split(key, "-")
 		key = parts[0]
 
-		token, err := model.GetTokenByKey(key, false)
+		token, err := model.GetTokenByKey(c.Request.Context(), key, false)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				c.JSON(http.StatusUnauthorized, gin.H{
@@ -332,7 +332,7 @@ func TokenAuthReadOnly() func(c *gin.Context) {
 			return
 		}
 
-		userCache, err := model.GetUserCache(token.UserId)
+		userCache, err := model.GetUserCache(c.Request.Context(), token.UserId)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("TokenAuthReadOnly GetUserCache error for user %d: %v", token.UserId, err))
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -415,7 +415,7 @@ func TokenAuth() func(c *gin.Context) {
 			parts = strings.Split(key, "-")
 			key = parts[0]
 		}
-		token, err := model.ValidateUserToken(key)
+		token, err := model.ValidateUserToken(c.Request.Context(), key)
 		if token != nil {
 			id := c.GetInt("id")
 			if id == 0 {
@@ -450,7 +450,7 @@ func TokenAuth() func(c *gin.Context) {
 			logger.LogDebug(c, "Client IP %s passed the token IP restrictions check", clientIp)
 		}
 
-		userCache, err := model.GetUserCache(token.UserId)
+		userCache, err := model.GetUserCache(c.Request.Context(), token.UserId)
 		if err != nil {
 			common.SysLog(fmt.Sprintf("TokenAuth GetUserCache error for user %d: %v", token.UserId, err))
 			abortWithOpenAiMessage(c, http.StatusInternalServerError,
@@ -469,12 +469,12 @@ func TokenAuth() func(c *gin.Context) {
 		tokenGroup := token.Group
 		if tokenGroup != "" {
 			// check common.UserUsableGroups[userGroup]
-			if _, ok := service.GetUserUsableGroups(userGroup)[tokenGroup]; !ok {
+			if _, ok := service.GetUserUsableGroups(c.Request.Context(), userGroup)[tokenGroup]; !ok {
 				abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("无权访问 %s 分组", tokenGroup))
 				return
 			}
 			// check group in common.GroupRatio
-			if !ratio_setting.ContainsGroupRatio(tokenGroup) {
+			if !ratio_setting.ContainsGroupRatio(c.Request.Context(), tokenGroup) {
 				if tokenGroup != "auto" {
 					abortWithOpenAiMessage(c, http.StatusForbidden, fmt.Sprintf("分组 %s 已被弃用", tokenGroup))
 					return
@@ -523,7 +523,7 @@ func SetupContextForToken(c *gin.Context, token *model.Token, parts ...string) e
 		}
 	}
 	if len(parts) > 1 {
-		if model.IsAdmin(token.UserId) {
+		if model.IsAdmin(c.Request.Context(), token.UserId) {
 			id, err := strconv.Atoi(parts[1])
 			if err != nil {
 				abortWithOpenAiMessage(c, http.StatusBadRequest, i18n.T(c, i18n.MsgDistributorInvalidChannelId))

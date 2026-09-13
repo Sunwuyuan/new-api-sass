@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"fmt"
 	"net/http"
@@ -31,7 +33,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 		return
 	}
 
-	plan, err := model.GetSubscriptionPlanById(req.PlanId)
+	plan, err := model.GetSubscriptionPlanById(c.Request.Context(), req.PlanId)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -44,17 +46,17 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 		common.ApiErrorMsg(c, "该套餐未配置 StripePriceId")
 		return
 	}
-	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
+	if !strings.HasPrefix(setting.TenantState(c.Request.Context()).StripeApiSecret, "sk_") && !strings.HasPrefix(setting.TenantState(c.Request.Context()).StripeApiSecret, "rk_") {
 		common.ApiErrorMsg(c, "Stripe 未配置或密钥无效")
 		return
 	}
-	if setting.StripeWebhookSecret == "" {
+	if setting.TenantState(c.Request.Context()).StripeWebhookSecret == "" {
 		common.ApiErrorMsg(c, "Stripe Webhook 未配置")
 		return
 	}
 
 	userId := c.GetInt("id")
-	user, err := model.GetUserById(userId, false)
+	user, err := model.GetUserById(c.Request.Context(), userId, false)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -65,7 +67,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	}
 
 	if plan.MaxPurchasePerUser > 0 {
-		count, err := model.CountUserSubscriptionsByPlan(userId, plan.Id)
+		count, err := model.CountUserSubscriptionsByPlan(c.Request.Context(), userId, plan.Id)
 		if err != nil {
 			common.ApiError(c, err)
 			return
@@ -79,7 +81,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	reference := fmt.Sprintf("sub-stripe-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "sub_ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeSubscriptionLink(referenceId, user.StripeCustomer, user.Email, plan.StripePriceId)
+	payLink, err := genStripeSubscriptionLink(c.Request.Context(), referenceId, user.StripeCustomer, user.Email, plan.StripePriceId)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 订阅支付链接创建失败 trade_no=%s plan_id=%d error=%q", referenceId, plan.Id, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
@@ -96,7 +98,7 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	if err := order.Insert(); err != nil {
+	if err := order.Insert(c.Request.Context()); err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
 		return
 	}
@@ -109,13 +111,13 @@ func SubscriptionRequestStripePay(c *gin.Context) {
 	})
 }
 
-func genStripeSubscriptionLink(referenceId string, customerId string, email string, priceId string) (string, error) {
-	stripe.Key = setting.StripeApiSecret
+func genStripeSubscriptionLink(tenantCtx context.Context, referenceId string, customerId string, email string, priceId string) (string, error) {
+	stripeSession := session.Client{B: stripe.GetBackend(stripe.APIBackend), Key: setting.TenantState(tenantCtx).StripeApiSecret}
 
 	params := &stripe.CheckoutSessionParams{
 		ClientReferenceID: stripe.String(referenceId),
-		SuccessURL:        stripe.String(paymentReturnPath("/wallet")),
-		CancelURL:         stripe.String(paymentReturnPath("/wallet")),
+		SuccessURL:        stripe.String(paymentReturnPath(tenantCtx, "/wallet")),
+		CancelURL:         stripe.String(paymentReturnPath(tenantCtx, "/wallet")),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
 				Price:    stripe.String(priceId),
@@ -134,7 +136,7 @@ func genStripeSubscriptionLink(referenceId string, customerId string, email stri
 		params.Customer = stripe.String(customerId)
 	}
 
-	result, err := session.New(params)
+	result, err := stripeSession.New(params)
 	if err != nil {
 		return "", err
 	}

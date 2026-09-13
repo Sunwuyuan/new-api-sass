@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -17,22 +18,22 @@ import (
 func withHeaderNavModules(t *testing.T, raw string) {
 	t.Helper()
 
-	common.OptionMapRWMutex.Lock()
-	if common.OptionMap == nil {
-		common.OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+	if common.TenantState(testtenant.Context()).OptionMap == nil {
+		common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
 	}
-	previous, hadPrevious := common.OptionMap["HeaderNavModules"]
-	common.OptionMap["HeaderNavModules"] = raw
-	common.OptionMapRWMutex.Unlock()
+	previous, hadPrevious := common.TenantState(testtenant.Context()).OptionMap["HeaderNavModules"]
+	common.TenantState(testtenant.Context()).OptionMap["HeaderNavModules"] = raw
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		defer common.OptionMapRWMutex.Unlock()
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		defer common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 		if hadPrevious {
-			common.OptionMap["HeaderNavModules"] = previous
+			common.TenantState(testtenant.Context()).OptionMap["HeaderNavModules"] = previous
 			return
 		}
-		delete(common.OptionMap, "HeaderNavModules")
+		delete(common.TenantState(testtenant.Context()).OptionMap, "HeaderNavModules")
 	})
 }
 
@@ -40,7 +41,7 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 	t.Helper()
 
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/api/test", handler, func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
@@ -71,7 +72,7 @@ func performHeaderNavRequest(t *testing.T, handler gin.HandlerFunc, authenticate
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/api/test", nil)
 	if authenticated {
 		request.Header.Set("Authorization", "Bearer "+accessToken)
 	}
@@ -172,11 +173,11 @@ func TestHeaderNavPublicRouteRejectsExpiredInternalAccessToken(t *testing.T) {
 	withHeaderNavModules(t, "")
 	gin.SetMode(gin.TestMode)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/api/test", HeaderNavModuleAuth("pricing"), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"success": true})
 	})
-	request := httptest.NewRequest(http.MethodGet, "/api/test", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/api/test", nil)
 	request.Header.Set("Authorization", "Bearer "+issueExpiredDashboardAccessToken(t, service.AuthIdentity{
 		UserID: 1, SessionID: "expired-header-nav-session", UserAuthVersion: 1, SessionVersion: 1,
 	}))

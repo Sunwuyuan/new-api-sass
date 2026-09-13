@@ -1,5 +1,7 @@
 package setting
 
+import context "context"
+
 import (
 	"fmt"
 	"math"
@@ -25,34 +27,37 @@ var ModelRequestRateLimitSuccessCount = 1000
 var ModelRequestRateLimitGroup = map[string][2]int{}
 var ModelRequestRateLimitMutex sync.RWMutex
 
-func ModelRequestRateLimitGroup2JSONString() string {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
+func ModelRequestRateLimitGroup2JSONString(tenantCtx context.Context) string {
+	TenantState(tenantCtx).ModelRequestRateLimitMutex.RLock()
+	defer TenantState(tenantCtx).ModelRequestRateLimitMutex.RUnlock()
 
-	jsonBytes, err := common.Marshal(ModelRequestRateLimitGroup)
+	jsonBytes, err := common.Marshal(TenantState(tenantCtx).ModelRequestRateLimitGroup)
 	if err != nil {
 		common.SysLog("error marshalling model ratio: " + err.Error())
 	}
 	return string(jsonBytes)
 }
 
-func UpdateModelRequestRateLimitGroupByJSONString(jsonStr string) error {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
-
-	ModelRequestRateLimitGroup = make(map[string][2]int)
-	return common.Unmarshal([]byte(jsonStr), &ModelRequestRateLimitGroup)
+func UpdateModelRequestRateLimitGroupByJSONString(tenantCtx context.Context, jsonStr string) error {
+	groups := make(map[string][2]int)
+	if err := common.Unmarshal([]byte(jsonStr), &groups); err != nil {
+		return err
+	}
+	TenantState(tenantCtx).ModelRequestRateLimitMutex.Lock()
+	defer TenantState(tenantCtx).ModelRequestRateLimitMutex.Unlock()
+	TenantState(tenantCtx).ModelRequestRateLimitGroup = groups
+	return nil
 }
 
-func GetGroupRateLimit(group string) (totalCount, successCount int, found bool) {
-	ModelRequestRateLimitMutex.RLock()
-	defer ModelRequestRateLimitMutex.RUnlock()
+func GetGroupRateLimit(tenantCtx context.Context, group string) (totalCount, successCount int, found bool) {
+	TenantState(tenantCtx).ModelRequestRateLimitMutex.RLock()
+	defer TenantState(tenantCtx).ModelRequestRateLimitMutex.RUnlock()
 
-	if ModelRequestRateLimitGroup == nil {
+	if TenantState(tenantCtx).ModelRequestRateLimitGroup == nil {
 		return 0, 0, false
 	}
 
-	limits, found := ModelRequestRateLimitGroup[group]
+	limits, found := TenantState(tenantCtx).ModelRequestRateLimitGroup[group]
 	if !found {
 		return 0, 0, false
 	}

@@ -20,8 +20,8 @@ var hotBuckets sync.Map
 // hiding fields or making response-only privacy hardening changes.
 const seriesSchema = "dbcd0a3c01b55203"
 
-func Init() {
-	go flushLoop()
+func Init(tenantCtx context.Context) {
+	go flushLoop(tenantCtx)
 }
 
 func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens int64) {
@@ -42,7 +42,7 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	if generationMs <= 0 {
 		generationMs = latencyMs
 	}
-	Record(Sample{
+	Record(info.Context, Sample{
 		Model:        info.OriginModelName,
 		Group:        info.UsingGroup,
 		LatencyMs:    latencyMs,
@@ -54,8 +54,8 @@ func RecordRelaySample(info *relaycommon.RelayInfo, success bool, outputTokens i
 	})
 }
 
-func Record(sample Sample) {
-	setting := perf_metrics_setting.GetSetting()
+func Record(tenantCtx context.Context, sample Sample) {
+	setting := perf_metrics_setting.GetSetting(tenantCtx)
 	if !setting.Enabled || sample.Model == "" {
 		return
 	}
@@ -69,14 +69,14 @@ func Record(sample Sample) {
 	key := bucketKey{
 		model:    sample.Model,
 		group:    sample.Group,
-		bucketTs: bucketStart(time.Now().Unix()),
+		bucketTs: bucketStart(tenantCtx, time.Now().Unix()),
 	}
-	actual, _ := hotBuckets.LoadOrStore(key, &atomicBucket{})
+	actual, _ := TenantRuntime(tenantCtx).hotBuckets.LoadOrStore(key, &atomicBucket{})
 	actual.(*atomicBucket).add(sample)
-	recordRedis(key, sample)
+	recordRedis(tenantCtx, key, sample)
 }
 
-func Query(params QueryParams) (QueryResult, error) {
+func Query(tenantCtx context.Context, params QueryParams) (QueryResult, error) {
 	if params.Hours <= 0 {
 		params.Hours = 24
 	}
@@ -87,7 +87,7 @@ func Query(params QueryParams) (QueryResult, error) {
 	startTs := endTs - int64(params.Hours)*3600
 
 	merged := map[bucketKey]counters{}
-	rows, err := model.GetPerfMetrics(params.Model, params.Group, startTs, endTs)
+	rows, err := model.GetPerfMetrics(tenantCtx, params.Model, params.Group, startTs, endTs)
 	if err != nil {
 		return QueryResult{}, err
 	}
@@ -107,7 +107,7 @@ func Query(params QueryParams) (QueryResult, error) {
 		})
 	}
 
-	hotBuckets.Range(func(key, value any) bool {
+	TenantRuntime(tenantCtx).hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
 		if k.model != params.Model || k.bucketTs < startTs || k.bucketTs > endTs {
 			return true
@@ -122,7 +122,7 @@ func Query(params QueryParams) (QueryResult, error) {
 	return buildQueryResult(params.Model, merged), nil
 }
 
-func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
+func QuerySummaryAll(tenantCtx context.Context, hours int, groups []string) (SummaryAllResult, error) {
 	if hours <= 0 {
 		hours = 24
 	}
@@ -133,7 +133,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 	startTs := endTs - int64(hours)*3600
 	allowedGroups := allowedGroupSet(groups)
 
-	rows, err := model.GetPerfMetricsSummaryBucketsAll(startTs, endTs, groups)
+	rows, err := model.GetPerfMetricsSummaryBucketsAll(tenantCtx, startTs, endTs, groups)
 	if err != nil {
 		return SummaryAllResult{}, err
 	}
@@ -152,7 +152,7 @@ func QuerySummaryAll(hours int, groups []string) (SummaryAllResult, error) {
 		mergeModelBucket(modelBuckets, row.ModelName, row.BucketTs, value)
 	}
 
-	hotBuckets.Range(func(key, value any) bool {
+	TenantRuntime(tenantCtx).hotBuckets.Range(func(key, value any) bool {
 		k := key.(bucketKey)
 		if k.bucketTs < startTs || k.bucketTs > endTs {
 			return true
@@ -277,8 +277,8 @@ func allowedGroupSet(groups []string) map[string]struct{} {
 	return allowed
 }
 
-func bucketStart(ts int64) int64 {
-	bucketSeconds := perf_metrics_setting.GetBucketSeconds()
+func bucketStart(tenantCtx context.Context, ts int64) int64 {
+	bucketSeconds := perf_metrics_setting.GetBucketSeconds(tenantCtx)
 	if bucketSeconds <= 0 {
 		bucketSeconds = 3600
 	}
@@ -391,11 +391,11 @@ func avgTps(value counters) float64 {
 	return float64(value.outputTokens) / (float64(value.generationMs) / 1000)
 }
 
-func recordRedis(key bucketKey, sample Sample) {
+func recordRedis(tenantCtx context.Context, key bucketKey, sample Sample) {
 	if !common.RedisEnabled || common.RDB == nil {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(tenantCtx, time.Second)
 	defer cancel()
 
 	redisKey := redisBucketKey(key)
@@ -419,16 +419,16 @@ func recordRedis(key bucketKey, sample Sample) {
 	_, _ = pipe.Exec(ctx)
 }
 
-func mergeRedisActiveBuckets(merged map[bucketKey]counters, params QueryParams, startTs int64, endTs int64) {
+func mergeRedisActiveBuckets(tenantCtx context.Context, merged map[bucketKey]counters, params QueryParams, startTs int64, endTs int64) {
 	if !common.RedisEnabled || common.RDB == nil || params.Model == "" || params.Group == "" {
 		return
 	}
-	active := bucketStart(time.Now().Unix())
+	active := bucketStart(tenantCtx, time.Now().Unix())
 	if active < startTs || active > endTs {
 		return
 	}
 	key := bucketKey{model: params.Model, group: params.Group, bucketTs: active}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(tenantCtx, time.Second)
 	defer cancel()
 	values, err := common.RDB.HGetAll(ctx, redisBucketKey(key)).Result()
 	if err != nil || len(values) == 0 {

@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"bytes"
 	"encoding/json"
@@ -21,21 +23,21 @@ type WorkerRequest struct {
 }
 
 // DoWorkerRequest 通过Worker发送请求
-func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
-	if !system_setting.EnableWorker() {
+func DoWorkerRequest(tenantCtx context.Context, req *WorkerRequest) (*http.Response, error) {
+	if !system_setting.EnableWorker(tenantCtx) {
 		return nil, fmt.Errorf("worker not enabled")
 	}
-	if !system_setting.WorkerAllowHttpImageRequestEnabled && !strings.HasPrefix(req.URL, "https") {
+	if !system_setting.TenantState(tenantCtx).WorkerAllowHttpImageRequestEnabled && !strings.HasPrefix(req.URL, "https") {
 		return nil, fmt.Errorf("only support https url")
 	}
 
 	// SSRF防护：验证请求URL
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSetting(tenantCtx)
 	if err := common.ValidateURLWithFetchSetting(req.URL, fetchSetting.EnableSSRFProtection, fetchSetting.AllowPrivateIp, fetchSetting.DomainFilterMode, fetchSetting.IpFilterMode, fetchSetting.DomainList, fetchSetting.IpList, fetchSetting.AllowedPorts, fetchSetting.ApplyIPFilterForDomain); err != nil {
 		return nil, fmt.Errorf("request reject: %v", err)
 	}
 
-	workerUrl := system_setting.WorkerUrl
+	workerUrl := system_setting.TenantState(tenantCtx).WorkerUrl
 	if !strings.HasSuffix(workerUrl, "/") {
 		workerUrl += "/"
 	}
@@ -46,24 +48,24 @@ func DoWorkerRequest(req *WorkerRequest) (*http.Response, error) {
 		return nil, fmt.Errorf("failed to marshal worker payload: %v", err)
 	}
 
-	return GetHttpClient().Post(workerUrl, "application/json", bytes.NewBuffer(workerPayload))
+	return GetHttpClient(tenantCtx).Post(workerUrl, "application/json", bytes.NewBuffer(workerPayload))
 }
 
-func DoDownloadRequest(originUrl string, reason ...string) (resp *http.Response, err error) {
-	if system_setting.EnableWorker() {
+func DoDownloadRequest(tenantCtx context.Context, originUrl string, reason ...string) (resp *http.Response, err error) {
+	if system_setting.EnableWorker(tenantCtx) {
 		common.SysLog(fmt.Sprintf("downloading file from worker: %s, reason: %s", originUrl, strings.Join(reason, ", ")))
 		req := &WorkerRequest{
 			URL: originUrl,
-			Key: system_setting.WorkerValidKey,
+			Key: system_setting.TenantState(tenantCtx).WorkerValidKey,
 		}
-		return DoWorkerRequest(req)
+		return DoWorkerRequest(tenantCtx, req)
 	} else {
 		// SSRF防护：验证请求URL（非Worker模式）
-		if err := ValidateSSRFProtectedFetchURL(originUrl); err != nil {
+		if err := ValidateSSRFProtectedFetchURL(tenantCtx, originUrl); err != nil {
 			return nil, fmt.Errorf("request reject: %v", err)
 		}
 
 		common.SysLog(fmt.Sprintf("downloading from origin: %s, reason: %s", common.MaskSensitiveInfo(originUrl), strings.Join(reason, ", ")))
-		return GetSSRFProtectedHTTPClient().Get(originUrl)
+		return GetSSRFProtectedHTTPClient(tenantCtx).Get(originUrl)
 	}
 }

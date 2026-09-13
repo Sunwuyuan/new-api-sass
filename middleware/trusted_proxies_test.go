@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +13,7 @@ import (
 
 func requestClientIP(router http.Handler, remoteAddr string, forwardedFor string) string {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/client-ip", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/client-ip", nil)
 	request.RemoteAddr = remoteAddr
 	if forwardedFor != "" {
 		request.Header.Set("X-Forwarded-For", forwardedFor)
@@ -22,7 +23,7 @@ func requestClientIP(router http.Handler, remoteAddr string, forwardedFor string
 }
 
 func newClientIPRouter() *gin.Engine {
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/client-ip", func(c *gin.Context) {
 		c.String(http.StatusOK, c.ClientIP())
 	})

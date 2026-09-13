@@ -10,9 +10,13 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	builtinplugins "github.com/QuantumNous/new-api/plugins"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go"
@@ -63,7 +67,7 @@ func TestTaskPluginResponsesNonStreamDecodesWithOfficialGoSDK(t *testing.T) {
 		option.WithBaseURL(server.URL+"/v1/"),
 		option.WithMaxRetries(0),
 	)
-	requestContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	requestContext, cancel := context.WithTimeout(testtenant.Context(), 5*time.Second)
 	defer cancel()
 
 	response, err := client.Responses.New(requestContext, responses.ResponseNewParams{
@@ -109,7 +113,7 @@ func TestTaskPluginResponsesStreamDecodesWithOfficialGoSDK(t *testing.T) {
 		option.WithBaseURL(server.URL+"/v1/"),
 		option.WithMaxRetries(0),
 	)
-	requestContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	requestContext, cancel := context.WithTimeout(testtenant.Context(), 5*time.Second)
 	defer cancel()
 
 	stream := client.Responses.NewStreaming(requestContext, responses.ResponseNewParams{
@@ -155,7 +159,7 @@ func TestBuiltInKlingResponsesNonStreamDecodesWithOfficialGoSDK(t *testing.T) {
 		option.WithBaseURL(server.URL+"/v1/"),
 		option.WithMaxRetries(0),
 	)
-	requestContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	requestContext, cancel := context.WithTimeout(testtenant.Context(), 5*time.Second)
 	defer cancel()
 
 	response, err := client.Responses.New(requestContext, responses.ResponseNewParams{
@@ -183,7 +187,7 @@ func TestBuiltInKlingResponsesStreamDecodesWithOfficialGoSDK(t *testing.T) {
 		option.WithBaseURL(server.URL+"/v1/"),
 		option.WithMaxRetries(0),
 	)
-	requestContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	requestContext, cancel := context.WithTimeout(testtenant.Context(), 5*time.Second)
 	defer cancel()
 
 	stream := client.Responses.NewStreaming(requestContext, responses.ResponseNewParams{
@@ -283,7 +287,7 @@ func newPluginProtocolSDKTestServer(
 		}
 		modelName, _ := requestBody["model"].(string)
 		stream, _ := requestBody["stream"].(bool)
-		c, _ := gin.CreateTestContext(writer)
+		c, _ := testtenant.CreateTestContext(writer)
 		c.Request = request
 		common.SetContextKey(c, constant.ContextKeyUserId, 71)
 		common.SetContextKey(c, constant.ContextKeyTokenId, 81)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -39,7 +40,7 @@ func TestUpdateChannelStatusPersistsMultiKeyState(t *testing.T) {
 	}
 	require.NoError(t, DB.Create(&channel).Error)
 
-	changed := UpdateChannelStatus(channel.Id, "key-a", common.ChannelStatusAutoDisabled, "provider rejected key")
+	changed := UpdateChannelStatus(testtenant.Context(), channel.Id, "key-a", common.ChannelStatusAutoDisabled, "provider rejected key")
 	require.True(t, changed)
 
 	var stored Channel
@@ -65,7 +66,7 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 	}
 	require.NoError(t, DB.Create(&channel).Error)
 
-	stale, err := GetChannelById(channel.Id, true)
+	stale, err := GetChannelById(testtenant.Context(), channel.Id, true)
 	require.NoError(t, err)
 
 	concurrentChannelInfo := ChannelInfo{
@@ -86,7 +87,7 @@ func TestSaveStatusStateFromSingleKeySnapshotPreservesUnownedColumns(t *testing.
 		"status_reason": "manual operation",
 		"status_time":   int64(1234),
 	})
-	require.NoError(t, stale.saveStatusState())
+	require.NoError(t, stale.saveStatusState(testtenant.Context()))
 
 	var stored Channel
 	require.NoError(t, DB.First(&stored, channel.Id).Error)

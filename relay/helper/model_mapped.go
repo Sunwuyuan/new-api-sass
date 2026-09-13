@@ -32,7 +32,7 @@ func ModelMappedHelper(c *gin.Context, info *relaycommon.RelayInfo, request dto.
 		}
 		for {
 			mappedModel, exists := modelMap[currentModel]
-			baseModel := hostreasoning.BaseModelName(currentModel)
+			baseModel := hostreasoning.BaseModelName(c.Request.Context(), currentModel)
 			if (!exists || mappedModel == "") && baseModel != currentModel {
 				mappedModel, exists = modelMap[baseModel]
 			}

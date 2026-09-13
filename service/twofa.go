@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"errors"
 	"time"
@@ -16,15 +18,15 @@ type TwoFASetup struct {
 	ExpiresAt   int64    `json:"expires_at"`
 }
 
-func StartTwoFASetup(identity AuthIdentity, authorization *model.AuthFlowAuthorization) (*TwoFASetup, error) {
-	if err := ValidateFlowAuthorization(identity, VerificationOperation{Scope: VerificationScopeTwoFASetup}, authorization); err != nil {
+func StartTwoFASetup(tenantCtx context.Context, identity AuthIdentity, authorization *model.AuthFlowAuthorization) (*TwoFASetup, error) {
+	if err := ValidateFlowAuthorization(tenantCtx, identity, VerificationOperation{Scope: VerificationScopeTwoFASetup}, authorization); err != nil {
 		return nil, err
 	}
-	user, err := model.GetUserById(identity.UserID, false)
+	user, err := model.GetUserById(tenantCtx, identity.UserID, false)
 	if err != nil {
 		return nil, err
 	}
-	key, err := common.GenerateTOTPSecret(user.Username)
+	key, err := common.GenerateTOTPSecret(tenantCtx, user.Username)
 	if err != nil {
 		return nil, err
 	}
@@ -33,15 +35,15 @@ func StartTwoFASetup(identity AuthIdentity, authorization *model.AuthFlowAuthori
 		return nil, err
 	}
 	expiresAt := time.Now().Add(5 * time.Minute)
-	flowToken, err := model.CreateTwoFAEnrollment(identity, authorization, key.Secret(), codes, expiresAt)
+	flowToken, err := model.CreateTwoFAEnrollment(tenantCtx, identity, authorization, key.Secret(), codes, expiresAt)
 	if err != nil {
 		return nil, err
 	}
-	return &TwoFASetup{Secret: key.Secret(), QRCodeData: common.GenerateQRCodeData(key.Secret(), user.Username), BackupCodes: codes, FlowToken: flowToken, ExpiresAt: expiresAt.Unix()}, nil
+	return &TwoFASetup{Secret: key.Secret(), QRCodeData: common.GenerateQRCodeData(tenantCtx, key.Secret(), user.Username), BackupCodes: codes, FlowToken: flowToken, ExpiresAt: expiresAt.Unix()}, nil
 }
 
-func FinishTwoFASetup(identity AuthIdentity, flowToken, code string) error {
-	flow, err := model.GetAuthFlow(flowToken, model.AuthFlowMatch{
+func FinishTwoFASetup(tenantCtx context.Context, identity AuthIdentity, flowToken, code string) error {
+	flow, err := model.GetAuthFlow(tenantCtx, flowToken, model.AuthFlowMatch{
 		Purpose: model.AuthFlowPurposeTwoFASetup, UserId: identity.UserID, SessionId: identity.SessionID,
 	})
 	if errors.Is(err, model.ErrAuthFlowInvalid) || errors.Is(err, model.ErrAuthFlowExpired) || errors.Is(err, model.ErrAuthFlowConsumed) {
@@ -56,11 +58,11 @@ func FinishTwoFASetup(identity AuthIdentity, flowToken, code string) error {
 	if err := common.UnmarshalJsonStr(flow.Payload, &payload); err != nil {
 		return err
 	}
-	if err := ValidateFlowAuthorization(identity, VerificationOperation{Scope: VerificationScopeTwoFASetup}, payload.Authorization); err != nil {
+	if err := ValidateFlowAuthorization(tenantCtx, identity, VerificationOperation{Scope: VerificationScopeTwoFASetup}, payload.Authorization); err != nil {
 		if errors.Is(err, model.ErrAuthFlowInvalid) {
 			return model.ErrTwoFASetupInvalid
 		}
 		return err
 	}
-	return model.EnableTwoFAEnrollment(identity, flowToken, code)
+	return model.EnableTwoFAEnrollment(tenantCtx, identity, flowToken, code)
 }

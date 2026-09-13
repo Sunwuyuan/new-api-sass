@@ -76,10 +76,10 @@ func (e *WaffoPancakeWebhookEvent) NormalizedEventType() string {
 // runtime checkout / webhook paths use this; configuration endpoints use
 // newWaffoPancakeClientFromCreds so the operator can verify typed-but-not-
 // yet-saved credentials.
-func newWaffoPancakeClient() (*pancake.Client, error) {
+func newWaffoPancakeClient(tenantCtx context.Context) (*pancake.Client, error) {
 	return pancake.New(pancake.Config{
-		MerchantID: setting.WaffoPancakeMerchantID,
-		PrivateKey: setting.WaffoPancakePrivateKey,
+		MerchantID: setting.TenantState(tenantCtx).WaffoPancakeMerchantID,
+		PrivateKey: setting.TenantState(tenantCtx).WaffoPancakePrivateKey,
 	})
 }
 
@@ -106,7 +106,7 @@ func CreateWaffoPancakeCheckoutSession(ctx context.Context, params *WaffoPancake
 	if strings.TrimSpace(params.OrderMerchantExternalID) == "" {
 		return nil, fmt.Errorf("missing order merchant external id")
 	}
-	client, err := newWaffoPancakeClient()
+	client, err := newWaffoPancakeClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("build Waffo Pancake client: %w", err)
 	}
@@ -196,7 +196,7 @@ func VerifyConfiguredWaffoPancakeWebhook(payload string, signatureHeader string)
 
 // ResolveWaffoPancakeTradeNo maps a verified webhook event to a local TopUp
 // trade_no via OrderMerchantExternalID, and rejects buyer-identity mismatches.
-func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+func ResolveWaffoPancakeTradeNo(tenantCtx context.Context, event *WaffoPancakeWebhookEvent) (string, error) {
 	if event == nil {
 		return "", fmt.Errorf("missing webhook event")
 	}
@@ -204,7 +204,7 @@ func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error)
 	if tradeNo == "" {
 		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
 	}
-	topUp := model.GetTopUpByTradeNo(tradeNo)
+	topUp := model.GetTopUpByTradeNo(tenantCtx, tradeNo)
 	if topUp == nil || topUp.PaymentProvider != model.PaymentProviderWaffoPancake {
 		return "", fmt.Errorf("waffo pancake order not found for tradeNo=%s", tradeNo)
 	}
@@ -223,7 +223,7 @@ func ResolveWaffoPancakeTradeNo(event *WaffoPancakeWebhookEvent) (string, error)
 
 // ResolveWaffoPancakeSubscriptionTradeNo is the SubscriptionOrder counterpart
 // of ResolveWaffoPancakeTradeNo.
-func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (string, error) {
+func ResolveWaffoPancakeSubscriptionTradeNo(tenantCtx context.Context, event *WaffoPancakeWebhookEvent) (string, error) {
 	if event == nil {
 		return "", fmt.Errorf("missing webhook event")
 	}
@@ -231,7 +231,7 @@ func ResolveWaffoPancakeSubscriptionTradeNo(event *WaffoPancakeWebhookEvent) (st
 	if tradeNo == "" {
 		return "", fmt.Errorf("missing webhook orderMerchantExternalId")
 	}
-	order := model.GetSubscriptionOrderByTradeNo(tradeNo)
+	order := model.GetSubscriptionOrderByTradeNo(tenantCtx, tradeNo)
 	if order == nil || order.PaymentProvider != model.PaymentProviderWaffoPancake {
 		return "", fmt.Errorf("waffo pancake subscription order not found for tradeNo=%s", tradeNo)
 	}
@@ -404,7 +404,7 @@ func SaveWaffoPancakeConfig(ctx context.Context, merchantID, privateKey, returnU
 	if pk := strings.TrimSpace(privateKey); pk != "" {
 		values["WaffoPancakePrivateKey"] = pk
 	}
-	if err := model.UpdateOptionsBulk(values); err != nil {
+	if err := model.UpdateOptionsBulk(ctx, values); err != nil {
 		return fmt.Errorf("persist Waffo Pancake config: %w", err)
 	}
 	return nil

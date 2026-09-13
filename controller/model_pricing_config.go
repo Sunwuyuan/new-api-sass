@@ -10,7 +10,7 @@ import (
 )
 
 func GetModelPricingConfig(c *gin.Context) {
-	snapshot, err := model.GetModelPricingSnapshot(c.QueryArray("model"))
+	snapshot, err := model.GetModelPricingSnapshot(c.Request.Context(), c.QueryArray("model"))
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -27,7 +27,7 @@ func PreviewModelPricingConversion(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	preview, err := model.PreviewModelPricingConversion(request.ModelName, request.Pricing)
+	preview, err := model.PreviewModelPricingConversion(c.Request.Context(), request.ModelName, request.Pricing)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -44,7 +44,7 @@ func PreviewModelPricing(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	preview, err := model.PreviewModelPricing(request.ModelName, request.Pricing)
+	preview, err := model.PreviewModelPricing(c.Request.Context(), request.ModelName, request.Pricing)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -52,7 +52,7 @@ func PreviewModelPricing(c *gin.Context) {
 	common.ApiSuccess(c, model.ModelPricingDescription{
 		Effective:      preview,
 		CacheWriteMode: model.ResolveCacheWriteMode(request.ModelName, request.Pricing),
-		BillingDetails: model.ResolveLegacyBillingDetails(request.ModelName, preview, request.Pricing),
+		BillingDetails: model.ResolveLegacyBillingDetails(c.Request.Context(), request.ModelName, preview, request.Pricing),
 	})
 }
 
@@ -64,7 +64,7 @@ func UpdateModelPricingConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
-	if err := model.UpdateModelPricing(request.Changes); err != nil {
+	if err := model.UpdateModelPricing(c.Request.Context(), request.Changes); err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, model.ErrModelPricingConflict) {
 			status = http.StatusConflict

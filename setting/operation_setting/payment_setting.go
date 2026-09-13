@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type PaymentSetting struct {
@@ -26,11 +28,11 @@ func init() {
 	config.GlobalConfig.Register("payment_setting", &paymentSetting)
 }
 
-func GetPaymentSetting() *PaymentSetting {
-	return &paymentSetting
+func GetPaymentSetting(tenantCtx context.Context) *PaymentSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("payment_setting").(*PaymentSetting)
 }
 
-func IsPaymentComplianceConfirmed() bool {
-	return paymentSetting.ComplianceConfirmed &&
-		paymentSetting.ComplianceTermsVersion == CurrentComplianceTermsVersion
+func IsPaymentComplianceConfirmed(tenantCtx context.Context) bool {
+	return (*(config.GlobalConfig.ForTenant(tenantCtx).Get("payment_setting").(*PaymentSetting))).ComplianceConfirmed &&
+		(*(config.GlobalConfig.ForTenant(tenantCtx).Get("payment_setting").(*PaymentSetting))).ComplianceTermsVersion == CurrentComplianceTermsVersion
 }

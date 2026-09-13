@@ -17,7 +17,7 @@ import (
 
 func GetAllRedemptions(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := model.GetAllRedemptions(pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	redemptions, total, err := model.GetAllRedemptions(c.Request.Context(), pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -32,7 +32,7 @@ func SearchRedemptions(c *gin.Context) {
 	keyword := c.Query("keyword")
 	status := c.Query("status")
 	pageInfo := common.GetPageQuery(c)
-	redemptions, total, err := model.SearchRedemptions(keyword, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
+	redemptions, total, err := model.SearchRedemptions(c.Request.Context(), keyword, status, pageInfo.GetStartIdx(), pageInfo.GetPageSize())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -49,7 +49,7 @@ func GetRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	redemption, err := model.GetRedemptionById(id)
+	redemption, err := model.GetRedemptionById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -63,7 +63,7 @@ func GetRedemption(c *gin.Context) {
 }
 
 func AddRedemption(c *gin.Context) {
-	if !operation_setting.IsPaymentComplianceConfirmed() {
+	if !operation_setting.IsPaymentComplianceConfirmed(c.Request.Context()) {
 		common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 		return
 	}
@@ -109,7 +109,7 @@ func AddRedemption(c *gin.Context) {
 			Quota:       redemption.Quota,
 			ExpiredTime: redemption.ExpiredTime,
 		}
-		err = cleanRedemption.Insert()
+		err = cleanRedemption.Insert(c.Request.Context())
 		if err != nil {
 			common.SysError("failed to insert redemption: " + err.Error())
 			c.JSON(http.StatusOK, gin.H{
@@ -124,7 +124,7 @@ func AddRedemption(c *gin.Context) {
 	recordManageAudit(c, "redemption.create", map[string]any{
 		"name":  redemption.Name,
 		"count": redemption.Count,
-		"quota": logger.LogQuota(redemption.Quota),
+		"quota": logger.LogQuota(c.Request.Context(), redemption.Quota),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -136,7 +136,7 @@ func AddRedemption(c *gin.Context) {
 
 func DeleteRedemption(c *gin.Context) {
 	id, _ := strconv.Atoi(c.Param("id"))
-	err := model.DeleteRedemptionById(id)
+	err := model.DeleteRedemptionById(c.Request.Context(), id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -156,7 +156,7 @@ func UpdateRedemption(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	cleanRedemption, err := model.GetRedemptionById(redemption.Id)
+	cleanRedemption, err := model.GetRedemptionById(c.Request.Context(), redemption.Id)
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -182,7 +182,7 @@ func UpdateRedemption(c *gin.Context) {
 	if statusOnly != "" {
 		cleanRedemption.Status = redemption.Status
 	}
-	err = cleanRedemption.Update()
+	err = cleanRedemption.Update(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -196,7 +196,7 @@ func UpdateRedemption(c *gin.Context) {
 }
 
 func DeleteInvalidRedemption(c *gin.Context) {
-	rows, err := model.DeleteInvalidRedemptions()
+	rows, err := model.DeleteInvalidRedemptions(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -224,7 +224,7 @@ func DeleteRedemptionBatch(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	count, err := model.BatchDeleteRedemptions(request.Ids)
+	count, err := model.BatchDeleteRedemptions(c.Request.Context(), request.Ids)
 	if err != nil {
 		common.ApiError(c, err)
 		return

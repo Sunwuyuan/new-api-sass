@@ -38,7 +38,7 @@ import {
   UpdateCheckError,
   type UpdateCheckErrorCode,
 } from './api'
-import { compareSystemVersions } from './releases'
+import { compareSystemVersions, parseSystemVersion } from './releases'
 import {
   subscribeSystemUpdatePreferences,
   useSystemUpdatePreferencesStore,
@@ -46,6 +46,21 @@ import {
   type SystemUpdateSnapshot,
 } from './store'
 
+function hostedUpdateCheckDisabled(
+  status: { hosted?: unknown; update_check_disabled?: unknown } | null | undefined
+): boolean {
+  return status?.update_check_disabled === true || status?.hosted === true
+}
+
+function hostedRelease(version: string | undefined) {
+  if (!version || !parseSystemVersion(version)) return null
+  return {
+    tag_name: version,
+    prerelease: false,
+    body: null,
+    published_at: null,
+  }
+}
 export const SYSTEM_UPDATE_INTERVAL = 60 * 60 * 1000
 export const SYSTEM_UPDATE_QUERY_KEY = ['system-update'] as const
 
@@ -68,15 +83,40 @@ export function getUpdateErrorMessage(
 export const systemUpdateQueryOptions = queryOptions({
   queryKey: SYSTEM_UPDATE_QUERY_KEY,
   queryFn: async ({ signal, client }): Promise<SystemUpdateSnapshot> => {
-    // Refresh the running server version too, so an open tab notices upgrades.
-    void client
-      .fetchQuery({ ...statusQueryOptions, meta: { errorToast: false } })
-      .catch(() => undefined)
+    const cached = client.getQueryData(statusQueryOptions.queryKey) as
+      | { hosted?: unknown; update_check_disabled?: unknown; version?: unknown }
+      | undefined
+    const now = Date.now()
+    const statusState = client.getQueryState(statusQueryOptions.queryKey)
+    const statusAge = now - (statusState?.dataUpdatedAt ?? 0)
+    const statusFresh =
+      statusState?.data != null &&
+      statusAge >= 0 &&
+      statusAge < 5 * 60 * 1000
+    let status = cached
+    if (!hostedUpdateCheckDisabled(cached) && !statusFresh) {
+      // Refresh the running server version too, so an open tab notices upgrades.
+      status =
+        (await client
+          .fetchQuery({ ...statusQueryOptions, meta: { errorToast: false } })
+          .catch(() => cached)) ?? cached
+    }
+    if (hostedUpdateCheckDisabled(status)) {
+      const version =
+        typeof status?.version === 'string' ? status.version.trim() : undefined
+      const snapshot: SystemUpdateSnapshot = {
+        release: hostedRelease(version),
+        lastCheckedAt: now,
+        lastAttemptAt: now,
+        error: null,
+      }
+      useSystemUpdateStore.getState().setSnapshot(snapshot)
+      return snapshot
+    }
     let snapshot: SystemUpdateSnapshot
     try {
       const release = await fetchLatestSystemRelease(signal)
       signal.throwIfAborted()
-      const now = Date.now()
       snapshot = {
         release,
         lastCheckedAt: now,
@@ -136,10 +176,11 @@ export function useSystemUpdate() {
   const visible = useSyncExternalStore(focusManager.subscribe, isPageVisible)
   const online = useSyncExternalStore(onlineManager.subscribe, isBrowserOnline)
   const { status } = useStatus()
+  const hosted = hostedUpdateCheckDisabled(status)
   const queryClient = useQueryClient()
   const query = useQuery({
     ...systemUpdateQueryOptions,
-    enabled: isAdmin && visible && online,
+    enabled: isAdmin && visible && online && !hosted,
   })
 
   useEffect(() => {
@@ -155,7 +196,7 @@ export function useSystemUpdate() {
       : version || undefined
   const release = query.data?.release ?? null
   const comparison = compareSystemVersions(currentVersion, release?.tag_name)
-  const hasUpdate = comparison === -1
+  const hasUpdate = !hosted && comparison === -1
   const isIgnored = useSyncExternalStore(subscribeSystemUpdatePreferences, () =>
     Boolean(
       user &&
@@ -174,7 +215,7 @@ export function useSystemUpdate() {
   }
 
   const checkNow = async () => {
-    if (!isAdmin || !online) return
+    if (!isAdmin || !online || hosted) return
     const result = await query.refetch({ cancelRefetch: false })
     if (result.data?.error) {
       handleServerError(new Error(getUpdateErrorMessage(result.data.error, t)))
@@ -193,5 +234,6 @@ export function useSystemUpdate() {
     online,
     snapshot: query.data,
     checkNow,
+    hosted,
   }
 }

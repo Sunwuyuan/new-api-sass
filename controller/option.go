@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -63,7 +65,7 @@ func collectModelNamesFromOptionValue(raw string, modelNames map[string]struct{}
 	}
 }
 
-func buildCompletionRatioMetaValue(optionValues map[string]string) string {
+func buildCompletionRatioMetaValue(tenantCtx context.Context, optionValues map[string]string) string {
 	modelNames := make(map[string]struct{})
 	for _, key := range completionRatioMetaOptionKeys {
 		collectModelNamesFromOptionValue(optionValues[key], modelNames)
@@ -71,7 +73,7 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 
 	meta := make(map[string]ratio_setting.CompletionRatioInfo, len(modelNames))
 	for modelName := range modelNames {
-		meta[modelName] = ratio_setting.GetCompletionRatioInfo(modelName)
+		meta[modelName] = ratio_setting.GetCompletionRatioInfo(tenantCtx, modelName)
 	}
 
 	jsonBytes, err := common.Marshal(meta)
@@ -84,8 +86,8 @@ func buildCompletionRatioMetaValue(optionValues map[string]string) string {
 func GetOptions(c *gin.Context) {
 	var options []*model.Option
 	optionValues := make(map[string]string)
-	common.OptionMapRWMutex.Lock()
-	for k, v := range common.OptionMap {
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.Lock()
+	for k, v := range common.TenantState(c.Request.Context()).OptionMap {
 		if k == "theme.frontend" || k == "billing_setting.billing_mode" || k == "billing_setting.billing_expr" {
 			continue
 		}
@@ -106,12 +108,12 @@ func GetOptions(c *gin.Context) {
 			optionValues[k] = value
 		}
 	}
-	common.OptionMapRWMutex.Unlock()
+	common.TenantState(c.Request.Context()).OptionMapRWMutex.Unlock()
 	// Display the same effective expressions used by pricing and settlement,
 	// including built-in defaults absent from persisted administrator options.
 	for key, values := range map[string]map[string]string{
-		"billing_setting.billing_mode": billing_setting.GetBillingModeCopy(),
-		"billing_setting.billing_expr": billing_setting.GetBillingExprCopy(),
+		"billing_setting.billing_mode": billing_setting.GetBillingModeCopy(c.Request.Context()),
+		"billing_setting.billing_expr": billing_setting.GetBillingExprCopy(c.Request.Context()),
 	} {
 		encoded, err := common.Marshal(values)
 		if err != nil {
@@ -122,7 +124,7 @@ func GetOptions(c *gin.Context) {
 	}
 	options = append(options, &model.Option{
 		Key:   "CompletionRatioMeta",
-		Value: buildCompletionRatioMetaValue(optionValues),
+		Value: buildCompletionRatioMetaValue(c.Request.Context(), optionValues),
 	})
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -148,7 +150,7 @@ func UpdatePasskeyDomains(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgInvalidParams)
 		return
 	}
-	change, err := model.UpdatePasskeyDomainOptions(map[string]string{
+	change, err := model.UpdatePasskeyDomainOptions(c.Request.Context(), map[string]string{
 		"passkey.rp_id": *request.RPID, "passkey.legacy_rp_ids": *request.LegacyRPIDs, "passkey.origins": *request.Origins,
 	}, request.Preview, request.RemovalConfirmation)
 	if err != nil {
@@ -202,7 +204,7 @@ func UpdateOption(c *gin.Context) {
 	}
 	switch option.Key {
 	case "QuotaForInviter", "QuotaForInvitee":
-		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed() {
+		if isPositiveOptionValue(option.Value.(string)) && !operation_setting.IsPaymentComplianceConfirmed(c.Request.Context()) {
 			common.ApiErrorI18n(c, i18n.MsgPaymentComplianceRequired)
 			return
 		}
@@ -220,7 +222,7 @@ func UpdateOption(c *gin.Context) {
 	}
 	switch option.Key {
 	case "GitHubOAuthEnabled":
-		if option.Value == "true" && common.GitHubClientId == "" {
+		if option.Value == "true" && common.TenantState(c.Request.Context()).GitHubClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 GitHub OAuth，请先填入 GitHub Client Id 以及 GitHub Client Secret！",
@@ -228,7 +230,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "discord.enabled":
-		if option.Value == "true" && system_setting.GetDiscordSettings().ClientId == "" {
+		if option.Value == "true" && system_setting.GetDiscordSettings(c.Request.Context()).ClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 Discord OAuth，请先填入 Discord Client Id 以及 Discord Client Secret！",
@@ -236,7 +238,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "oidc.enabled":
-		if option.Value == "true" && system_setting.GetOIDCSettings().ClientId == "" {
+		if option.Value == "true" && system_setting.GetOIDCSettings(c.Request.Context()).ClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 OIDC 登录，请先填入 OIDC Client Id 以及 OIDC Client Secret！",
@@ -244,7 +246,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "LinuxDOOAuthEnabled":
-		if option.Value == "true" && common.LinuxDOClientId == "" {
+		if option.Value == "true" && common.TenantState(c.Request.Context()).LinuxDOClientId == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 LinuxDO OAuth，请先填入 LinuxDO Client Id 以及 LinuxDO Client Secret！",
@@ -252,7 +254,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "EmailDomainRestrictionEnabled":
-		if option.Value == "true" && len(common.EmailDomainWhitelist) == 0 {
+		if option.Value == "true" && len(common.TenantState(c.Request.Context()).EmailDomainWhitelist) == 0 {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用邮箱域名限制，请先填入限制的邮箱域名！",
@@ -260,7 +262,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "WeChatAuthEnabled":
-		if option.Value == "true" && common.WeChatServerAddress == "" {
+		if option.Value == "true" && common.TenantState(c.Request.Context()).WeChatServerAddress == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用微信登录，请先填入微信登录相关配置信息！",
@@ -268,7 +270,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "TurnstileCheckEnabled":
-		if option.Value == "true" && common.TurnstileSiteKey == "" {
+		if option.Value == "true" && common.TenantState(c.Request.Context()).TurnstileSiteKey == "" {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "无法启用 Turnstile 校验，请先填入 Turnstile 校验相关配置信息！",
@@ -277,7 +279,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "TelegramOAuthEnabled":
-		if option.Value == "true" && !system_setting.GetTelegramSettings().IsConfigured() {
+		if option.Value == "true" && !system_setting.GetTelegramSettings(c.Request.Context()).IsConfigured() {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"code":    "TELEGRAM_OAUTH_NOT_CONFIGURED",
@@ -330,7 +332,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "ImageRatio":
-		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
+		err = ratio_setting.UpdateImageRatioByJSONString(c.Request.Context(), option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -339,7 +341,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "AudioRatio":
-		err = ratio_setting.UpdateAudioRatioByJSONString(option.Value.(string))
+		err = ratio_setting.UpdateAudioRatioByJSONString(c.Request.Context(), option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -348,7 +350,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "AudioCompletionRatio":
-		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(option.Value.(string))
+		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(c.Request.Context(), option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -357,7 +359,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "CreateCacheRatio":
-		err = ratio_setting.UpdateCreateCacheRatioByJSONString(option.Value.(string))
+		err = ratio_setting.UpdateCreateCacheRatioByJSONString(c.Request.Context(), option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -403,7 +405,7 @@ func UpdateOption(c *gin.Context) {
 			models = append(models, modelName)
 		}
 		sort.Strings(models)
-		storedVariants := billing_setting.GetPluginBillingExprCopy()
+		storedVariants := billing_setting.GetPluginBillingExprCopy(c.Request.Context())
 		for _, modelName := range models {
 			variants := make(map[string]any)
 			for key, expression := range storedVariants {
@@ -411,7 +413,7 @@ func UpdateOption(c *gin.Context) {
 					variants[plugin] = expression
 				}
 			}
-			err = model.ValidateModelPricing(modelName, model.PricingValues{
+			err = model.ValidateModelPricing(c.Request.Context(), modelName, model.PricingValues{
 				"billing_setting.billing_expr":          expressions[modelName],
 				billing_setting.PluginBillingExprOption: variants,
 			})
@@ -432,7 +434,7 @@ func UpdateOption(c *gin.Context) {
 				common.ApiErrorMsg(c, "invalid plugin billing expression key: "+key)
 				return
 			}
-			if err = model.ValidateModelPricing(name, model.PricingValues{
+			if err = model.ValidateModelPricing(c.Request.Context(), name, model.PricingValues{
 				billing_setting.PluginBillingExprOption: map[string]any{plugin: expression},
 			}); err != nil {
 				common.ApiErrorMsg(c, err.Error())
@@ -440,7 +442,7 @@ func UpdateOption(c *gin.Context) {
 			}
 		}
 	case "console_setting.api_info":
-		err = console_setting.ValidateConsoleSettings(option.Value.(string), "ApiInfo")
+		err = console_setting.ValidateConsoleSettings(c.Request.Context(), option.Value.(string), "ApiInfo")
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -449,7 +451,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "console_setting.announcements":
-		err = console_setting.ValidateConsoleSettings(option.Value.(string), "Announcements")
+		err = console_setting.ValidateConsoleSettings(c.Request.Context(), option.Value.(string), "Announcements")
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -458,7 +460,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "console_setting.faq":
-		err = console_setting.ValidateConsoleSettings(option.Value.(string), "FAQ")
+		err = console_setting.ValidateConsoleSettings(c.Request.Context(), option.Value.(string), "FAQ")
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -467,7 +469,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "console_setting.uptime_kuma_groups":
-		err = console_setting.ValidateConsoleSettings(option.Value.(string), "UptimeKumaGroups")
+		err = console_setting.ValidateConsoleSettings(c.Request.Context(), option.Value.(string), "UptimeKumaGroups")
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
@@ -477,7 +479,7 @@ func UpdateOption(c *gin.Context) {
 		}
 	}
 	if model.IsPasskeyDomainOption(option.Key) {
-		change, updateErr := model.UpdatePasskeyDomainOptions(map[string]string{option.Key: option.Value.(string)}, false, "")
+		change, updateErr := model.UpdatePasskeyDomainOptions(c.Request.Context(), map[string]string{option.Key: option.Value.(string)}, false, "")
 		if updateErr != nil {
 			writePasskeyDomainSettingsError(c, updateErr)
 			recordPasskeyDomainAudit(c, change, false, updateErr)
@@ -487,7 +489,7 @@ func UpdateOption(c *gin.Context) {
 		common.ApiSuccess(c, change)
 		return
 	}
-	err = model.UpdateOption(option.Key, option.Value.(string))
+	err = model.UpdateOption(c.Request.Context(), option.Key, option.Value.(string))
 	if err != nil {
 		if errors.Is(err, system_setting.ErrPasskeyRPIDInvalid) {
 			writeSecurityOperationError(c, err)

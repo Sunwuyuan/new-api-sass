@@ -22,16 +22,13 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/QuantumNous/new-api/oauth"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
-	perfmetrics "github.com/QuantumNous/new-api/pkg/perf_metrics"
+	"github.com/QuantumNous/new-api/platform"
 	"github.com/QuantumNous/new-api/relay"
 	kitutil "github.com/QuantumNous/new-api/relaykit/relayconvert/kitutil"
 	"github.com/QuantumNous/new-api/router"
 	"github.com/QuantumNous/new-api/service"
-	"github.com/QuantumNous/new-api/service/authz"
 	_ "github.com/QuantumNous/new-api/setting/performance_setting"
-	"github.com/QuantumNous/new-api/setting/ratio_setting"
 
 	"github.com/bytedance/gopkg/util/gopool"
 	"github.com/gin-gonic/gin"
@@ -80,87 +77,24 @@ func main() {
 	}()
 
 	if common.RedisEnabled {
-		// for compatibility with old versions
 		common.MemoryCacheEnabled = true
 	}
-	if common.MemoryCacheEnabled {
-		common.SysLog("memory cache enabled")
-		common.SysLog(fmt.Sprintf("sync frequency: %d seconds", common.SyncFrequency))
-
-		// Add panic recovery and retry for InitChannelCache
-		func() {
-			defer func() {
-				if r := recover(); r != nil {
-					common.SysLog(fmt.Sprintf("InitChannelCache panic: %v, retrying once", r))
-					// Retry once
-					_, _, fixErr := model.FixAbility()
-					if fixErr != nil {
-						common.FatalLog(fmt.Sprintf("InitChannelCache failed: %s", fixErr.Error()))
-					}
-				}
-			}()
-			model.InitChannelCache()
-		}()
-
-		go model.SyncChannelCache(common.SyncFrequency)
-	}
-
-	// Warm pricing after channel cache initialization so Advanced Custom
-	// endpoint inference can read cached route settings on first request.
-	model.GetPricing()
-
-	// 热更新配置
-	go model.SyncOptions(common.SyncFrequency)
-	go controller.SyncTaskPlugins()
-
-	// 周期性重载授权策略，保证多节点/多 master 部署下权限变更能传播到每个实例
-	go authz.StartPolicySync(common.SyncFrequency)
-
-	// 数据看板
-	go model.UpdateQuotaData()
-
-	if os.Getenv("CHANNEL_UPDATE_FREQUENCY") != "" {
-		frequency, err := strconv.Atoi(os.Getenv("CHANNEL_UPDATE_FREQUENCY"))
-		if err != nil {
-			common.FatalLog("failed to parse CHANNEL_UPDATE_FREQUENCY: " + err.Error())
-		}
-		go controller.AutomaticallyUpdateChannels(frequency)
-	}
-
-	// Codex credential auto-refresh check every 10 minutes, refresh when expires within 1 day
-	service.StartCodexCredentialAutoRefreshTask()
-
-	// Subscription quota reset task (daily/weekly/monthly/custom)
-	service.StartSubscriptionQuotaResetTask()
-
-	// Report this process as a system instance so the System Info page can show
-	// all currently alive nodes in multi-instance deployments.
-	service.StartSystemInstanceReporter()
-
 	// Wire task polling adaptor factory (breaks service -> relay import cycle).
 	// Must run before the system task runner starts: the async_task_poll handler
 	// calls service.RunTaskPollingOnce, which needs this factory set.
-	service.GetTaskAdaptorFunc = func(platform constant.TaskPlatform) service.TaskPollingAdaptor {
-		a := relay.GetTaskAdaptor(platform)
+	service.GetTaskAdaptorFunc = func(tenantCtx context.Context, platform constant.TaskPlatform) service.TaskPollingAdaptor {
+		a := relay.GetTaskAdaptor(tenantCtx, platform)
 		if a == nil {
 			return nil
 		}
 		return a
 	}
 
-	// Register the periodic channel test, upstream model update, and async task
-	// polling (Midjourney / Suno / video) jobs as scheduled system tasks
-	// (DB-lease dedup across masters + run history), then start the runner that
-	// schedules and executes them. Master-only execution and the UpdateTask
-	// switch are enforced inside the runner and each handler's Enabled().
 	controller.RegisterScheduledSystemTasks()
-	service.StartSystemTaskRunner()
-
-	if os.Getenv("BATCH_UPDATE_ENABLED") == "true" {
-		common.BatchUpdateEnabled = true
-		common.SysLog("batch update enabled with interval " + strconv.Itoa(common.BatchUpdateInterval) + "s")
-		model.InitBatchUpdater()
-	}
+	service.StartSystemInstanceReporter(context.Background())
+	schedulerCtx, stopScheduler := context.WithCancel(context.Background())
+	defer stopScheduler()
+	go runWorkspaceScheduler(schedulerCtx)
 
 	if os.Getenv("ENABLE_PPROF") == "true" {
 		gopool.Go(func() {
@@ -200,7 +134,7 @@ func main() {
 	InjectGoogleAnalytics()
 
 	// 设置路由
-	router.SetRouter(server, router.WebAssets{
+	router.SetSaaSRouter(server, saasPlatform, router.WebAssets{
 		BuildFS:   buildFS,
 		IndexPage: indexPage,
 	})
@@ -222,7 +156,7 @@ func main() {
 
 	time.Sleep(100 * time.Millisecond)
 
-	common.LogStartupSuccess(startTime, port)
+	common.LogStartupSuccess(context.Background(), startTime, port)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -236,10 +170,7 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		common.SysError(fmt.Sprintf("server forced to shutdown: %v", err))
 	}
-	// 内存中的看板数据保存入库，避免重启丢失未落库数据 (issue #5679)
-	if common.DataExportEnabled {
-		model.SaveQuotaDataCache()
-	}
+	stopScheduler()
 	common.SysLog("server exited")
 }
 
@@ -301,11 +232,6 @@ func InitResources() error {
 
 	logger.SetupLogger()
 
-	// Initialize model settings
-	ratio_setting.InitRatioSettings()
-
-	service.InitHttpClient()
-
 	service.InitTokenEncoders()
 
 	// Initialize SQL Database
@@ -314,26 +240,6 @@ func InitResources() error {
 		common.FatalLog("failed to initialize database: " + err.Error())
 		return err
 	}
-	if err = authz.Init(model.DB); err != nil {
-		common.FatalLog("failed to initialize authorization: " + err.Error())
-		return err
-	}
-	if common.PasswordLoginEncryptionEnabled {
-		if err = model.InitPasswordEncryption(); err != nil {
-			common.FatalLog("failed to initialize password encryption: " + err.Error())
-			return err
-		}
-	}
-
-	model.CheckSetup()
-
-	// Initialize options, should after model.InitDB()
-	if common.IsMasterNode {
-		if err := model.MigrateRetiredFrontendOptions(); err != nil {
-			common.SysError("failed to migrate retired frontend options: " + err.Error())
-		}
-	}
-	model.InitOptionMap()
 
 	// 清理旧的磁盘缓存文件
 	common.CleanupOldCacheFiles()
@@ -350,7 +256,19 @@ func InitResources() error {
 		return err
 	}
 
-	perfmetrics.Init()
+	saasPlatform, err = platform.New(model.DB)
+	if err != nil {
+		return err
+	}
+	common.SessionCookieSecure = saasPlatform.Secure
+	common.SessionCookieTrustedURLs = []string{saasPlatform.Origin}
+	if err := importStandaloneWorkspace(); err != nil {
+		return err
+	}
+	if err := model.EnforceTenantScopes(); err != nil {
+		return err
+	}
+	saasPlatform.InitializeTenant = initializeWorkspace
 
 	// 启动系统监控
 	common.StartSystemMonitor()
@@ -365,15 +283,6 @@ func InitResources() error {
 	}
 	// Register user language loader for lazy loading
 	i18n.SetUserLangLoader(model.GetUserLanguage)
-
-	// Load custom OAuth providers from database
-	err = oauth.LoadCustomProviders()
-	if err != nil {
-		common.SysError("failed to load custom OAuth providers: " + err.Error())
-		// Don't return error, custom OAuth is not critical
-	}
-
-	service.StartAuthArtifactCleanup()
 
 	return nil
 }

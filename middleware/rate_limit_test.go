@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
 	"github.com/go-redis/redis/v8"
@@ -39,7 +40,7 @@ func useRateLimitMiniRedis(t *testing.T) (*miniredis.Miniredis, *redis.Client) {
 
 func performRateLimitRequest(router http.Handler, path string, remoteAddr string) *httptest.ResponseRecorder {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, path, nil)
+	request := testtenant.NewRequest(http.MethodGet, path, nil)
 	request.RemoteAddr = remoteAddr
 	router.ServeHTTP(recorder, request)
 	return recorder
@@ -49,7 +50,7 @@ func TestRedisIPRateLimiterThresholdTTLAndNamespace(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	require.NoError(t, router.SetTrustedProxies(nil))
 	router.GET("/limited", rateLimitFactory(2, 37, "TEST"), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
@@ -77,7 +78,7 @@ func TestRedisUserRateLimiterUsesSharedFixedWindow(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET(
 		"/limited",
 		func(c *gin.Context) { c.Set("id", 42) },
@@ -97,7 +98,7 @@ func TestRedisEmailVerificationRateLimiterPreservesResponseAndTTL(t *testing.T) 
 	gin.SetMode(gin.TestMode)
 	redisServer, _ := useRateLimitMiniRedis(t)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	require.NoError(t, router.SetTrustedProxies(nil))
 	router.GET("/verify", EmailVerificationRateLimit(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
@@ -131,7 +132,7 @@ func TestRedisFixedWindowIsAtomicUnderConcurrency(t *testing.T) {
 	for range requestCount {
 		go func() {
 			defer waitGroup.Done()
-			allowed, _, _, err := redisFixedWindowTake(context.Background(), key, maximumCount, duration)
+			allowed, _, _, err := redisFixedWindowTake(testtenant.Context(), key, maximumCount, duration)
 			if err != nil {
 				errorsFound <- err
 				return
@@ -160,11 +161,11 @@ func TestRedisFixedWindowResetsAtBoundary(t *testing.T) {
 	key := redisIPRateLimitKey("BOUNDARY", "192.0.2.50")
 
 	for range 2 {
-		allowed, _, _, err := redisFixedWindowTake(context.Background(), key, 2, duration)
+		allowed, _, _, err := redisFixedWindowTake(testtenant.Context(), key, 2, duration)
 		require.NoError(t, err)
 		assert.True(t, allowed)
 	}
-	allowed, _, _, err := redisFixedWindowTake(context.Background(), key, 2, duration)
+	allowed, _, _, err := redisFixedWindowTake(testtenant.Context(), key, 2, duration)
 	require.NoError(t, err)
 	assert.False(t, allowed)
 
@@ -172,7 +173,7 @@ func TestRedisFixedWindowResetsAtBoundary(t *testing.T) {
 	// full allowance immediately before and another immediately after a boundary.
 	redisServer.FastForward(time.Duration(duration) * time.Second)
 	for range 2 {
-		allowed, _, _, err = redisFixedWindowTake(context.Background(), key, 2, duration)
+		allowed, _, _, err = redisFixedWindowTake(testtenant.Context(), key, 2, duration)
 		require.NoError(t, err)
 		assert.True(t, allowed)
 	}
@@ -184,7 +185,7 @@ func TestRedisFixedWindowRepairsCounterWithoutTTL(t *testing.T) {
 	key := redisIPRateLimitKey("MISSING-TTL", "192.0.2.51")
 	redisServer.Set(key, "5")
 
-	allowed, count, ttl, err := redisFixedWindowTake(context.Background(), key, 3, duration)
+	allowed, count, ttl, err := redisFixedWindowTake(testtenant.Context(), key, 3, duration)
 	require.NoError(t, err)
 	assert.False(t, allowed)
 	assert.Equal(t, int64(6), count)
@@ -200,7 +201,7 @@ func TestRedisFailurePolicies(t *testing.T) {
 	_, redisClient := useRateLimitMiniRedis(t)
 	require.NoError(t, redisClient.Close())
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	require.NoError(t, router.SetTrustedProxies(nil))
 	router.GET("/ip", rateLimitFactory(1, 30, "FAIL-IP"), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)

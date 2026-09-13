@@ -5,12 +5,14 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -60,7 +62,7 @@ func issueExpiredDashboardAccessToken(t *testing.T, identity service.AuthIdentit
 		"iat":       time.Now().Add(-2 * time.Minute).Unix(),
 	}
 	mac := hmac.New(sha256.New, []byte(common.SessionSecret))
-	_, err := mac.Write([]byte("new-api/auth/access/v1"))
+	_, err := mac.Write([]byte(tenant.MustKey(testtenant.Context(), "new-api/auth/access/v1")))
 	require.NoError(t, err)
 	token, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(mac.Sum(nil))
 	require.NoError(t, err)
@@ -90,11 +92,11 @@ func createMiddlewarePATUser(t *testing.T, username, token string) *model.User {
 func TestUserAuthAllowsOpaqueDottedPAT(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	user := createMiddlewarePATUser(t, "dotted-pat-user", "opaque.key.with-dots")
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/protected", UserAuth(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"id": c.GetInt("id")})
 	})
-	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/protected", nil)
 	request.Header.Set("Authorization", "Bearer opaque.key.with-dots")
 	response := httptest.NewRecorder()
 
@@ -111,15 +113,15 @@ func TestUserAuthAllowsOpaqueDottedPAT(t *testing.T) {
 func TestUserAuthNeverFallsBackForRecognizedInvalidInternalJWT(t *testing.T) {
 	setupDashboardAuthMiddlewareTest(t)
 	identity := service.AuthIdentity{UserID: 42, SessionID: "session-42", UserAuthVersion: 1, SessionVersion: 1}
-	token, _, err := service.IssueAccessToken(identity)
+	token, _, err := service.IssueAccessToken(testtenant.Context(), identity)
 	require.NoError(t, err)
 	tampered := tamperDashboardToken(token)
 	createMiddlewarePATUser(t, "jwt-fallback-user", tampered)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/protected", UserAuth(), func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(http.MethodGet, "/protected", nil)
+	request := testtenant.NewRequest(http.MethodGet, "/protected", nil)
 	request.Header.Set("Authorization", "Bearer "+tampered)
 	response := httptest.NewRecorder()
 
@@ -147,19 +149,19 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 		LastActiveAt:    now,
 		ExpiresAt:       now + 3600,
 	}
-	require.NoError(t, model.CreateUserSession(session))
+	require.NoError(t, model.CreateUserSession(testtenant.Context(), session))
 	identity := service.AuthIdentity{
 		UserID:          internalUser.Id,
 		SessionID:       session.SID,
 		UserAuthVersion: session.UserAuthVersion,
 		SessionVersion:  session.Version,
 	}
-	accessToken, _, err := service.IssueAccessToken(identity)
+	accessToken, _, err := service.IssueAccessToken(testtenant.Context(), identity)
 	require.NoError(t, err)
 	require.NoError(t, model.DB.AutoMigrate(&model.AuthFlow{}))
-	binding, err := service.BindVerificationOperation(service.VerificationOperation{Scope: "channel.key.read", Context: []byte(`{"channel_id":123}`)})
+	binding, err := service.BindVerificationOperation(testtenant.Context(), service.VerificationOperation{Scope: "channel.key.read", Context: []byte(`{"channel_id":123}`)})
 	require.NoError(t, err)
-	securityProof, _, err := service.IssueSecurityProof(identity, "2fa", binding)
+	securityProof, _, err := service.IssueSecurityProof(testtenant.Context(), identity, "2fa", binding)
 	require.NoError(t, err)
 	externalToken, err := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
 		"iss": "external-issuer",
@@ -168,7 +170,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 	}).SignedString([]byte("external-secret"))
 	require.NoError(t, err)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.GET("/optional", TryUserAuth(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"id":               c.GetInt("id"),
@@ -196,7 +198,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(http.MethodGet, "/optional", nil)
+			request := testtenant.NewRequest(http.MethodGet, "/optional", nil)
 			if test.token != "" {
 				request.Header.Set("Authorization", "Bearer "+test.token)
 			}
@@ -217,9 +219,9 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 		})
 	}
 
-	requiredRouter := gin.New()
+	requiredRouter := testtenant.NewRouter()
 	requiredRouter.GET("/required", UserAuth(), func(c *gin.Context) { c.Status(http.StatusNoContent) })
-	requiredRequest := httptest.NewRequest(http.MethodGet, "/required", nil)
+	requiredRequest := testtenant.NewRequest(http.MethodGet, "/required", nil)
 	requiredRequest.Header.Set("Authorization", "Bearer ordinary-unmatched-key")
 	requiredResponse := httptest.NewRecorder()
 	requiredRouter.ServeHTTP(requiredResponse, requiredRequest)
@@ -237,7 +239,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 			tx.AddError(forcedCacheError)
 		}
 	}))
-	cacheFailureRequest := httptest.NewRequest(http.MethodGet, "/optional", nil)
+	cacheFailureRequest := testtenant.NewRequest(http.MethodGet, "/optional", nil)
 	cacheFailureRequest.Header.Set("Authorization", "Bearer optional.pat.with-dots")
 	cacheFailureResponse := httptest.NewRecorder()
 	router.ServeHTTP(cacheFailureResponse, cacheFailureRequest)
@@ -248,7 +250,7 @@ func TestTryUserAuthCredentialClassification(t *testing.T) {
 	sqlDB, err := model.DB.DB()
 	require.NoError(t, err)
 	require.NoError(t, sqlDB.Close())
-	databaseFailureRequest := httptest.NewRequest(http.MethodGet, "/optional", nil)
+	databaseFailureRequest := testtenant.NewRequest(http.MethodGet, "/optional", nil)
 	databaseFailureRequest.Header.Set("Authorization", "Bearer database-failure-key")
 	databaseFailureResponse := httptest.NewRecorder()
 	router.ServeHTTP(databaseFailureResponse, databaseFailureRequest)

@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -39,7 +40,7 @@ export const meta = { apiVersion: 1, key: "mock" };
 	})
 	require.NoError(t, err)
 
-	result, err := engine.Call(context.Background(), "sign", map[string]any{
+	result, err := engine.Call(testtenant.Context(), "sign", map[string]any{
 		"name": "fixture", "message": "hello", "secret": "secret",
 	})
 	require.NoError(t, err)
@@ -48,7 +49,7 @@ export const meta = { apiVersion: 1, key: "mock" };
 	}, result)
 	assert.Equal(t, []string{"[plugin:mock@1.0.0] called fixture"}, logs)
 
-	meta, err := engine.Export(context.Background(), "meta")
+	meta, err := engine.Export(testtenant.Context(), "meta")
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"apiVersion": int64(1), "key": "mock"}, meta)
 }
@@ -237,25 +238,25 @@ export function parseTaskResult() { return {status: "SUCCESS"}; }
 	require.NoError(t, err)
 	engine := plugin.Engine
 
-	disabledContext := context.WithValue(context.Background(), common.RequestIdKey, "plugin-console-disabled")
+	disabledContext := context.WithValue(testtenant.Context(), common.RequestIdKey, "plugin-console-disabled")
 	_, err = engine.Call(disabledContext, "run", "disabled")
 	require.NoError(t, err)
 	assert.Empty(t, output.String())
 
 	common.DebugEnabled = true
-	contextA := context.WithValue(context.Background(), common.RequestIdKey, "plugin-console-request-a")
+	contextA := context.WithValue(testtenant.Context(), common.RequestIdKey, "plugin-console-request-a")
 	_, err = engine.Call(contextA, "run", "context-a")
 	require.NoError(t, err)
 	logA := output.String()
 	output.Reset()
 
-	contextB := context.WithValue(context.Background(), common.RequestIdKey, "plugin-console-request-b")
+	contextB := context.WithValue(testtenant.Context(), common.RequestIdKey, "plugin-console-request-b")
 	_, err = engine.Call(contextB, "run", "context-b")
 	require.NoError(t, err)
 	logB := output.String()
 	output.Reset()
 
-	_, err = engine.Call(context.Background(), "run", "background")
+	_, err = engine.Call(testtenant.Context(), "run", "background")
 	require.NoError(t, err)
 	logBackground := output.String()
 
@@ -303,7 +304,7 @@ func TestCompileIgnoresSourceMapDirectives(t *testing.T) {
 	engine, err := Compile("export function run() { return 1; }\n//# sourceMappingURL=/nonexistent/leak-probe.map\n", Options{Key: "sourcemap"})
 	require.NoError(t, err)
 
-	value, err := engine.Call(context.Background(), "run")
+	value, err := engine.Call(testtenant.Context(), "run")
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), value)
 }
@@ -315,12 +316,12 @@ func TestEngineInterruptsLongRunningHook(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = engine.Call(context.Background(), "run", true)
+	_, err = engine.Call(testtenant.Context(), "run", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timed out")
 	var hookErr *HookError
 	assert.False(t, errors.As(err, &hookErr), "timeouts must not be HookError")
-	value, err := engine.Call(context.Background(), "run", false)
+	value, err := engine.Call(testtenant.Context(), "run", false)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), value, "an interrupted runtime must be discarded")
 }
@@ -430,7 +431,7 @@ func TestEngineHookErrorExtractsSanitizedJSMessage(t *testing.T) {
 			engine, err := Compile(testCase.source, Options{Key: "diag", Version: "1.0.0"})
 			require.NoError(t, err)
 
-			_, err = engine.Call(context.Background(), "run")
+			_, err = engine.Call(testtenant.Context(), "run")
 			require.Error(t, err)
 
 			var hookErr *HookError
@@ -457,7 +458,7 @@ export const protocols = {
 
 	engine.semaphore <- struct{}{}
 	_, err = engine.CallPathWithAdmissionTimeout(
-		context.Background(),
+		testtenant.Context(),
 		time.Nanosecond,
 		"protocols",
 		[]string{"responses", "renderEvents"},
@@ -466,7 +467,7 @@ export const protocols = {
 
 	require.ErrorIs(t, err, ErrCallAdmissionTimeout)
 	result, err := engine.CallPathWithAdmissionTimeout(
-		context.Background(),
+		testtenant.Context(),
 		time.Second,
 		"protocols",
 		[]string{"responses", "renderEvents"},
@@ -485,7 +486,7 @@ export const meta = {
 `, Options{Key: "meta-loop", Version: "1.0.0", Timeout: 20 * time.Millisecond})
 	require.NoError(t, err)
 
-	_, err = engine.Export(context.Background(), "meta")
+	_, err = engine.Export(testtenant.Context(), "meta")
 	require.ErrorContains(t, err, "export meta interrupted")
 }
 
@@ -499,7 +500,7 @@ export const meta = {
 `, Options{Key: "meta-throw", Version: "1.0.0"})
 	require.NoError(t, err)
 
-	_, err = engine.Export(context.Background(), "meta")
+	_, err = engine.Export(testtenant.Context(), "meta")
 	require.ErrorContains(t, err, "export meta failed")
 	assert.Contains(t, err.Error(), "getter failed")
 }
@@ -525,28 +526,28 @@ export const protocols = {
 `, Options{Key: "own-hooks", Version: "1.0.0"})
 	require.NoError(t, err)
 
-	found, err := engine.HasCallablePath(context.Background(), "renderers", "own")
+	found, err := engine.HasCallablePath(testtenant.Context(), "renderers", "own")
 	require.NoError(t, err)
 	assert.True(t, found)
-	result, err := engine.CallMember(context.Background(), "renderers", "own", map[string]any{"id": "task-1"})
+	result, err := engine.CallMember(testtenant.Context(), "renderers", "own", map[string]any{"id": "task-1"})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]any{"id": "task-1"}, result)
 
 	for _, member := range []string{"inherited", "constructor", "toString", "__proto__"} {
 		t.Run(member, func(t *testing.T) {
-			found, err := engine.HasCallablePath(context.Background(), "renderers", member)
+			found, err := engine.HasCallablePath(testtenant.Context(), "renderers", member)
 			require.NoError(t, err)
 			assert.False(t, found)
 
-			_, err = engine.CallMember(context.Background(), "renderers", member)
+			_, err = engine.CallMember(testtenant.Context(), "renderers", member)
 			require.ErrorContains(t, err, "not found")
 		})
 	}
 
-	found, err = engine.HasCallablePath(context.Background(), "protocols", "responses", "renderFinal")
+	found, err = engine.HasCallablePath(testtenant.Context(), "protocols", "responses", "renderFinal")
 	require.NoError(t, err)
 	assert.False(t, found)
-	_, err = engine.CallPath(context.Background(), "protocols", []string{"responses", "renderFinal"})
+	_, err = engine.CallPath(testtenant.Context(), "protocols", []string{"responses", "renderFinal"})
 	require.ErrorContains(t, err, "not found")
 }
 

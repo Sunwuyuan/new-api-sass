@@ -16,7 +16,6 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
-/* eslint-disable react-refresh/only-export-components */
 import { useQueryClient } from '@tanstack/react-query'
 import React, {
   createContext,
@@ -25,6 +24,9 @@ import React, {
   useCallback,
   useMemo,
 } from 'react'
+
+/* eslint-disable react-refresh/only-export-components */
+import { tenantStorage } from '@/lib/tenant'
 
 import { useChannelUpstreamUpdates } from '../hooks/use-channel-upstream-updates'
 import { channelsQueryKeys } from '../lib'
@@ -84,10 +86,10 @@ export function ChannelsProvider({ children }: { children: React.ReactNode }) {
   const [currentRow, setCurrentRow] = useState<Channel | null>(null)
   const [currentTag, setCurrentTag] = useState<string | null>(null)
   const [enableTagMode, setEnableTagMode] = useState(() => {
-    return localStorage.getItem('enable-tag-mode') === 'true'
+    return tenantStorage.getItem('enable-tag-mode') === 'true'
   })
   const [idSort, setIdSort] = useState(() => {
-    return localStorage.getItem('channels-id-sort') === 'true'
+    return tenantStorage.getItem('channels-id-sort') === 'true'
   })
   const [batchMode, setBatchMode] = useState(false)
   const [sensitiveVisible, setSensitiveVisible] = useState(true)

@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -15,6 +17,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/Calcium-Ion/go-epay/epay"
 	"github.com/gin-gonic/gin"
@@ -23,16 +26,16 @@ import (
 )
 
 func GetTopUpInfo(c *gin.Context) {
-	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed()
+	complianceConfirmed := operation_setting.IsPaymentComplianceConfirmed(c.Request.Context())
 
 	// 获取支付方式
-	payMethods := operation_setting.PayMethods
+	payMethods := operation_setting.TenantState(c.Request.Context()).PayMethods
 	if !complianceConfirmed {
 		payMethods = []map[string]string{}
 	}
 
 	// 如果启用了 Stripe 支付，添加到支付方法列表
-	if isStripeTopUpEnabled() {
+	if isStripeTopUpEnabled(c.Request.Context()) {
 		// 检查是否已经包含 Stripe
 		hasStripe := false
 		for _, method := range payMethods {
@@ -47,14 +50,14 @@ func GetTopUpInfo(c *gin.Context) {
 				"name":      "Stripe",
 				"type":      "stripe",
 				"color":     "#635BFF",
-				"min_topup": strconv.Itoa(setting.StripeMinTopUp),
+				"min_topup": strconv.Itoa(setting.TenantState(c.Request.Context()).StripeMinTopUp),
 			}
 			payMethods = append(payMethods, stripeMethod)
 		}
 	}
 
 	// Waffo Pancake is displayed above the standard Waffo gateway.
-	enableWaffoPancake := isWaffoPancakeTopUpEnabled()
+	enableWaffoPancake := isWaffoPancakeTopUpEnabled(c.Request.Context())
 	if enableWaffoPancake {
 		hasWaffoPancake := false
 		for _, method := range payMethods {
@@ -69,13 +72,13 @@ func GetTopUpInfo(c *gin.Context) {
 				"name":      "Waffo Pancake",
 				"type":      model.PaymentMethodWaffoPancake,
 				"color":     "#F97316",
-				"min_topup": strconv.Itoa(setting.WaffoPancakeMinTopUp),
+				"min_topup": strconv.Itoa(setting.TenantState(c.Request.Context()).WaffoPancakeMinTopUp),
 			})
 		}
 	}
 
 	// 如果启用了 Waffo 支付，添加到支付方法列表
-	enableWaffo := isWaffoTopUpEnabled()
+	enableWaffo := isWaffoTopUpEnabled(c.Request.Context())
 	if enableWaffo {
 		hasWaffo := false
 		for _, method := range payMethods {
@@ -90,16 +93,16 @@ func GetTopUpInfo(c *gin.Context) {
 				"name":      "Waffo (Global Payment)",
 				"type":      model.PaymentMethodWaffo,
 				"color":     "#3B82F6",
-				"min_topup": strconv.Itoa(setting.WaffoMinTopUp),
+				"min_topup": strconv.Itoa(setting.TenantState(c.Request.Context()).WaffoMinTopUp),
 			}
 			payMethods = append(payMethods, waffoMethod)
 		}
 	}
 
 	data := gin.H{
-		"enable_online_topup":              isEpayTopUpEnabled(),
-		"enable_stripe_topup":              isStripeTopUpEnabled(),
-		"enable_creem_topup":               isCreemTopUpEnabled(),
+		"enable_online_topup":              isEpayTopUpEnabled(c.Request.Context()),
+		"enable_stripe_topup":              isStripeTopUpEnabled(c.Request.Context()),
+		"enable_creem_topup":               isCreemTopUpEnabled(c.Request.Context()),
 		"enable_waffo_topup":               enableWaffo,
 		"enable_waffo_pancake_topup":       enableWaffoPancake,
 		"enable_redemption":                complianceConfirmed,
@@ -107,19 +110,19 @@ func GetTopUpInfo(c *gin.Context) {
 		"payment_compliance_terms_version": operation_setting.CurrentComplianceTermsVersion,
 		"waffo_pay_methods": func() any {
 			if enableWaffo {
-				return setting.GetWaffoPayMethods()
+				return setting.GetWaffoPayMethods(c.Request.Context())
 			}
 			return nil
 		}(),
-		"creem_products":          setting.CreemProducts,
+		"creem_products":          setting.TenantState(c.Request.Context()).CreemProducts,
 		"pay_methods":             payMethods,
-		"min_topup":               operation_setting.MinTopUp,
-		"stripe_min_topup":        setting.StripeMinTopUp,
-		"waffo_min_topup":         setting.WaffoMinTopUp,
-		"waffo_pancake_min_topup": setting.WaffoPancakeMinTopUp,
-		"amount_options":          operation_setting.GetPaymentSetting().AmountOptions,
-		"discount":                operation_setting.GetPaymentSetting().AmountDiscount,
-		"topup_link":              common.TopUpLink,
+		"min_topup":               operation_setting.TenantState(c.Request.Context()).MinTopUp,
+		"stripe_min_topup":        setting.TenantState(c.Request.Context()).StripeMinTopUp,
+		"waffo_min_topup":         setting.TenantState(c.Request.Context()).WaffoMinTopUp,
+		"waffo_pancake_min_topup": setting.TenantState(c.Request.Context()).WaffoPancakeMinTopUp,
+		"amount_options":          operation_setting.GetPaymentSetting(c.Request.Context()).AmountOptions,
+		"discount":                operation_setting.GetPaymentSetting(c.Request.Context()).AmountDiscount,
+		"topup_link":              common.TenantState(c.Request.Context()).TopUpLink,
 	}
 	common.ApiSuccess(c, data)
 }
@@ -133,39 +136,39 @@ type AmountRequest struct {
 	Amount int64 `json:"amount"`
 }
 
-func GetEpayClient() *epay.Client {
-	if operation_setting.PayAddress == "" || operation_setting.EpayId == "" || operation_setting.EpayKey == "" {
+func GetEpayClient(tenantCtx context.Context) *epay.Client {
+	if operation_setting.TenantState(tenantCtx).PayAddress == "" || operation_setting.TenantState(tenantCtx).EpayId == "" || operation_setting.TenantState(tenantCtx).EpayKey == "" {
 		return nil
 	}
 	withUrl, err := epay.NewClient(&epay.Config{
-		PartnerID: operation_setting.EpayId,
-		Key:       operation_setting.EpayKey,
-	}, operation_setting.PayAddress)
+		PartnerID: operation_setting.TenantState(tenantCtx).EpayId,
+		Key:       operation_setting.TenantState(tenantCtx).EpayKey,
+	}, operation_setting.TenantState(tenantCtx).PayAddress)
 	if err != nil {
 		return nil
 	}
 	return withUrl
 }
 
-func getPayMoney(amount int64, group string) float64 {
+func getPayMoney(tenantCtx context.Context, amount int64, group string) float64 {
 	dAmount := decimal.NewFromInt(amount)
 	// 充值金额以“展示类型”为准：
 	// - USD/CNY: 前端传 amount 为金额单位；TOKENS: 前端传 tokens，需要换成 USD 金额
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
+		dQuotaPerUnit := decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)
 		dAmount = dAmount.Div(dQuotaPerUnit)
 	}
 
-	topupGroupRatio := common.GetTopupGroupRatio(group)
+	topupGroupRatio := common.GetTopupGroupRatio(tenantCtx, group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
 
 	dTopupGroupRatio := decimal.NewFromFloat(topupGroupRatio)
-	dPrice := decimal.NewFromFloat(operation_setting.Price)
+	dPrice := decimal.NewFromFloat(operation_setting.TenantState(tenantCtx).Price)
 	// apply optional preset discount by the original request amount (if configured), default 1.0
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(amount)]; ok {
+	if ds, ok := operation_setting.GetPaymentSetting(tenantCtx).AmountDiscount[int(amount)]; ok {
 		if ds > 0 {
 			discount = ds
 		}
@@ -177,11 +180,11 @@ func getPayMoney(amount int64, group string) float64 {
 	return payMoney.InexactFloat64()
 }
 
-func getMinTopup() int64 {
-	minTopup := operation_setting.MinTopUp
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+func getMinTopup(tenantCtx context.Context) int64 {
+	minTopup := operation_setting.TenantState(tenantCtx).MinTopUp
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
 		dMinTopup := decimal.NewFromInt(int64(minTopup))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)
 		quota, err := common.WalletQuotaFromDecimalStrict(dMinTopup.Mul(dQuotaPerUnit))
 		if err != nil {
 			return common.MaxWalletQuota
@@ -191,26 +194,26 @@ func getMinTopup() int64 {
 	return int64(minTopup)
 }
 
-func getTopUpQuota(amount int64) (int, error) {
+func getTopUpQuota(tenantCtx context.Context, amount int64) (int, error) {
 	quota := decimal.NewFromInt(amount)
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
+		quotaPerUnit := decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)
 		quota = decimal.NewFromInt(quota.Div(quotaPerUnit).IntPart()).Mul(quotaPerUnit)
 	} else {
-		quota = quota.Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+		quota = quota.Mul(decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit))
 	}
 	return common.WalletQuotaFromDecimalStrict(quota)
 }
 
-func getMaxTopUpAmount() int64 {
-	if common.QuotaPerUnit <= 0 {
+func getMaxTopUpAmount(tenantCtx context.Context) int64 {
+	if common.TenantState(tenantCtx).QuotaPerUnit <= 0 {
 		return 0
 	}
-	quotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+	quotaPerUnit := decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit)
 	maxStoredAmount := decimal.NewFromInt(common.MaxWalletQuota).
 		Div(quotaPerUnit).
 		Floor()
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
 		return maxStoredAmount.Add(decimal.NewFromInt(1)).
 			Mul(quotaPerUnit).
 			Ceil().
@@ -231,12 +234,12 @@ func validateCreditedQuota(quota decimal.Decimal) (int, error) {
 	return value, nil
 }
 
-func validateTopUpQuota(amount int64) (int, error) {
-	quota, err := getTopUpQuota(amount)
+func validateTopUpQuota(tenantCtx context.Context, amount int64) (int, error) {
+	quota, err := getTopUpQuota(tenantCtx, amount)
 	if err == nil && quota > 0 {
 		return quota, nil
 	}
-	maxAmount := getMaxTopUpAmount()
+	maxAmount := getMaxTopUpAmount(tenantCtx)
 	if maxAmount > 0 && amount > maxAmount {
 		return 0, fmt.Errorf("单笔充值数量不能大于 %d", maxAmount)
 	}
@@ -246,7 +249,7 @@ func validateTopUpQuota(amount int64) (int, error) {
 func rejectInvalidCreditedQuota(c *gin.Context, userId int, quota decimal.Decimal) bool {
 	creditedQuota, err := validateCreditedQuota(quota)
 	if err == nil {
-		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+		err = model.ValidateTopUpQuotaCapacity(c.Request.Context(), userId, creditedQuota)
 	}
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
@@ -256,9 +259,9 @@ func rejectInvalidCreditedQuota(c *gin.Context, userId int, quota decimal.Decima
 }
 
 func rejectInvalidTopUpQuota(c *gin.Context, userId int, amount int64) bool {
-	creditedQuota, err := validateTopUpQuota(amount)
+	creditedQuota, err := validateTopUpQuota(c.Request.Context(), amount)
 	if err == nil {
-		err = model.ValidateTopUpQuotaCapacity(userId, creditedQuota)
+		err = model.ValidateTopUpQuotaCapacity(c.Request.Context(), userId, creditedQuota)
 	}
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": err.Error()})
@@ -274,8 +277,8 @@ func RequestEpay(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "参数错误"})
 		return
 	}
-	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+	if req.Amount < getMinTopup(c.Request.Context()) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup(c.Request.Context()))})
 		return
 	}
 	id := c.GetInt("id")
@@ -283,28 +286,28 @@ func RequestEpay(c *gin.Context) {
 		return
 	}
 
-	group, err := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(c.Request.Context(), id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getPayMoney(c.Request.Context(), req.Amount, group)
 	if payMoney < 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
 	}
 
-	if !operation_setting.ContainsPayMethod(req.PaymentMethod) {
+	if !operation_setting.ContainsPayMethod(c.Request.Context(), req.PaymentMethod) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "支付方式不存在"})
 		return
 	}
 
-	callBackAddress := service.GetCallbackAddress()
-	returnUrl, _ := url.Parse(paymentReturnPath("/usage-logs"))
+	callBackAddress := service.GetCallbackAddress(c.Request.Context())
+	returnUrl, _ := url.Parse(paymentReturnPath(c.Request.Context(), "/usage-logs"))
 	notifyUrl, _ := url.Parse(callBackAddress + "/api/user/epay/notify")
 	tradeNo := fmt.Sprintf("%s%d", common.GetRandomString(6), time.Now().Unix())
 	tradeNo = fmt.Sprintf("USR%dNO%s", id, tradeNo)
-	client := GetEpayClient()
+	client := GetEpayClient(c.Request.Context())
 	if client == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "当前管理员未配置支付信息"})
 		return
@@ -324,9 +327,9 @@ func RequestEpay(c *gin.Context) {
 		return
 	}
 	amount := req.Amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
+	if operation_setting.GetQuotaDisplayType(c.Request.Context()) == operation_setting.QuotaDisplayTypeTokens {
 		dAmount := decimal.NewFromInt(int64(amount))
-		dQuotaPerUnit := decimal.NewFromFloat(common.QuotaPerUnit)
+		dQuotaPerUnit := decimal.NewFromFloat(common.TenantState(c.Request.Context()).QuotaPerUnit)
 		amount = dAmount.Div(dQuotaPerUnit).IntPart()
 	}
 	topUp := &model.TopUp{
@@ -339,7 +342,7 @@ func RequestEpay(c *gin.Context) {
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	err = topUp.Insert()
+	err = topUp.Insert(c.Request.Context())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 创建充值订单失败 user_id=%d trade_no=%s payment_method=%s amount=%d error=%q", id, tradeNo, req.PaymentMethod, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
@@ -360,7 +363,8 @@ type refCountedMutex struct {
 }
 
 // LockOrder 尝试对给定订单号加锁
-func LockOrder(tradeNo string) {
+func LockOrder(ctx context.Context, tradeNo string) {
+	tradeNo = tenant.MustKey(ctx, "order:"+tradeNo)
 	createLock.Lock()
 	var rcm *refCountedMutex
 	if v, ok := orderLocks.Load(tradeNo); ok {
@@ -375,7 +379,8 @@ func LockOrder(tradeNo string) {
 }
 
 // UnlockOrder 释放给定订单号的锁
-func UnlockOrder(tradeNo string) {
+func UnlockOrder(ctx context.Context, tradeNo string) {
+	tradeNo = tenant.MustKey(ctx, "order:"+tradeNo)
 	v, ok := orderLocks.Load(tradeNo)
 	if !ok {
 		return
@@ -392,7 +397,7 @@ func UnlockOrder(tradeNo string) {
 }
 
 func EpayNotify(c *gin.Context) {
-	if !isEpayWebhookEnabled() {
+	if !isEpayWebhookEnabled(c.Request.Context()) {
 		logger.LogWarn(c.Request.Context(), fmt.Sprintf("易支付 webhook 被拒绝 reason=webhook_disabled path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
@@ -425,7 +430,7 @@ func EpayNotify(c *gin.Context) {
 		_, _ = c.Writer.Write([]byte("fail"))
 		return
 	}
-	client := GetEpayClient()
+	client := GetEpayClient(c.Request.Context())
 	if client == nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("易支付 client 未初始化 path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 		_, err := c.Writer.Write([]byte("fail"))
@@ -451,9 +456,9 @@ func EpayNotify(c *gin.Context) {
 	if verifyInfo.TradeStatus == epay.StatusTradeSuccess {
 		// 进程内锁只是优化；重复/并发回调的正确性由 RechargeEpay 的
 		// 数据库行锁 + 事务内状态校验保证（多实例部署下同样安全）。
-		LockOrder(verifyInfo.ServiceTradeNo)
-		defer UnlockOrder(verifyInfo.ServiceTradeNo)
-		alreadyDone, err := model.RechargeEpay(verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP())
+		LockOrder(c.Request.Context(), verifyInfo.ServiceTradeNo)
+		defer UnlockOrder(c.Request.Context(), verifyInfo.ServiceTradeNo)
+		alreadyDone, err := model.RechargeEpay(c.Request.Context(), verifyInfo.ServiceTradeNo, verifyInfo.Type, c.ClientIP())
 		if err != nil {
 			switch {
 			case errors.Is(err, model.ErrTopUpNotFound):
@@ -491,20 +496,20 @@ func RequestAmount(c *gin.Context) {
 		return
 	}
 
-	if req.Amount < getMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup())})
+	if req.Amount < getMinTopup(c.Request.Context()) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getMinTopup(c.Request.Context()))})
 		return
 	}
 	id := c.GetInt("id")
 	if rejectInvalidTopUpQuota(c, id, req.Amount) {
 		return
 	}
-	group, err := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(c.Request.Context(), id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	payMoney := getPayMoney(req.Amount, group)
+	payMoney := getPayMoney(c.Request.Context(), req.Amount, group)
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -523,9 +528,9 @@ func GetUserTopUps(c *gin.Context) {
 		err    error
 	)
 	if keyword != "" {
-		topups, total, err = model.SearchUserTopUps(userId, keyword, pageInfo)
+		topups, total, err = model.SearchUserTopUps(c.Request.Context(), userId, keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetUserTopUps(userId, pageInfo)
+		topups, total, err = model.GetUserTopUps(c.Request.Context(), userId, pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)
@@ -548,9 +553,9 @@ func GetAllTopUps(c *gin.Context) {
 		err    error
 	)
 	if keyword != "" {
-		topups, total, err = model.SearchAllTopUps(keyword, pageInfo)
+		topups, total, err = model.SearchAllTopUps(c.Request.Context(), keyword, pageInfo)
 	} else {
-		topups, total, err = model.GetAllTopUps(pageInfo)
+		topups, total, err = model.GetAllTopUps(c.Request.Context(), pageInfo)
 	}
 	if err != nil {
 		common.ApiError(c, err)
@@ -575,10 +580,10 @@ func AdminCompleteTopUp(c *gin.Context) {
 	}
 
 	// 订单级互斥，防止并发补单
-	LockOrder(req.TradeNo)
-	defer UnlockOrder(req.TradeNo)
+	LockOrder(c.Request.Context(), req.TradeNo)
+	defer UnlockOrder(c.Request.Context(), req.TradeNo)
 
-	if err := model.ManualCompleteTopUp(req.TradeNo, c.ClientIP()); err != nil {
+	if err := model.ManualCompleteTopUp(c.Request.Context(), req.TradeNo, c.ClientIP()); err != nil {
 		common.ApiError(c, err)
 		return
 	}

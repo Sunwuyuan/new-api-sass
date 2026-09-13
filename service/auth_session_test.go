@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -122,10 +123,10 @@ func TestCreateLoginSessionEnforcesActiveLimitAcrossAuthVersions(t *testing.T) {
 	}
 	require.NoError(t, model.DB.Create(&rows).Error)
 
-	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err, "49 active sessions must allow creation of the 50th")
 
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err = CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, model.ErrUserSessionLimit)
 	var count int64
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
@@ -158,10 +159,10 @@ func TestCreateLoginSessionEnforcesIssuanceLimitAcrossAllStatuses(t *testing.T) 
 	}
 	require.NoError(t, model.DB.Create(&rows).Error)
 
-	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err, "rows outside the effective issuance window must not consume the limit")
 
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err = CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, model.ErrUserSessionIssuanceLimit)
 	var count int64
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
@@ -176,11 +177,11 @@ func TestPasswordResetDoesNotClearSessionIssuanceHistory(t *testing.T) {
 	email := "session-reset@example.com"
 	require.NoError(t, model.DB.Model(user).Update("email", email).Error)
 
-	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err)
-	require.NoError(t, model.ResetUserPasswordByEmail(email, "new-password"))
+	require.NoError(t, model.ResetUserPasswordByEmail(testtenant.Context(), email, "new-password"))
 
-	_, err = CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err = CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, model.ErrUserSessionIssuanceLimit)
 }
 
@@ -201,7 +202,7 @@ func TestCreateLoginSessionFailsClosedWhenLimitCountFails(t *testing.T) {
 		}
 	})
 
-	_, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	_, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, forcedErr)
 	require.NoError(t, model.DB.Callback().Query().Remove(callbackName))
 	callbackRegistered = false
@@ -236,7 +237,7 @@ func TestCleanupAuthArtifactsAlertsBeforeDeletingHourlyIssuance(t *testing.T) {
 		common.LogWriterMu.Unlock()
 	})
 
-	cleanupAuthArtifacts()
+	cleanupAuthArtifacts(testtenant.Context())
 	assert.Empty(t, logBuffer.String(), "the hourly alert uses a strict greater-than threshold")
 	var count int64
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
@@ -252,7 +253,7 @@ func TestCleanupAuthArtifactsAlertsBeforeDeletingHourlyIssuance(t *testing.T) {
 	}
 	require.NoError(t, model.DB.Create(&exceededRows).Error)
 	logBuffer.Reset()
-	cleanupAuthArtifacts()
+	cleanupAuthArtifacts(testtenant.Context())
 	assert.Contains(t, logBuffer.String(), "hourly user session issuance exceeded alert threshold")
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&count).Error)
 	assert.Zero(t, count, "alerting must happen before expired rows are deleted")
@@ -276,7 +277,7 @@ func TestCleanupAuthArtifactsRemovesOnlyExpiredRecords(t *testing.T) {
 		ExpiresAt: now.Add(time.Minute),
 	}).Error)
 
-	cleanupAuthArtifacts()
+	cleanupAuthArtifacts(testtenant.Context())
 
 	var sessionCount int64
 	require.NoError(t, model.DB.Model(&model.UserSession{}).Count(&sessionCount).Error)
@@ -316,7 +317,7 @@ func TestCleanupAuthArtifactsContinuesWithRevokedCleanupAfterExpiredBatchFailure
 	}))
 	t.Cleanup(func() { _ = model.DB.Callback().Delete().Remove(callbackName) })
 
-	cleanupAuthArtifacts()
+	cleanupAuthArtifacts(testtenant.Context())
 
 	var expired model.UserSession
 	require.NoError(t, model.DB.First(&expired, "sid = ?", "failed-expired-cleanup").Error)
@@ -328,30 +329,30 @@ func TestLoginSessionCreateRefreshAndRevoke(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
 
-	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	bundle, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err)
 	assert.NotEmpty(t, bundle.RefreshToken)
-	identity, err := ParseAccessToken(bundle.AccessToken)
+	identity, err := ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
-	_, cachedUser, err := ValidateLoginSession(identity)
+	_, cachedUser, err := ValidateLoginSession(testtenant.Context(), identity)
 	require.NoError(t, err)
 	assert.Equal(t, user.Id, cachedUser.Id)
-	require.NoError(t, RevokeByRefreshToken(bundle.Session.SID+".wrong-refresh-secret", "", "logout"))
-	_, _, err = ValidateLoginSession(identity)
+	require.NoError(t, RevokeByRefreshToken(testtenant.Context(), bundle.Session.SID+".wrong-refresh-secret", "", "logout"))
+	_, _, err = ValidateLoginSession(testtenant.Context(), identity)
 	require.NoError(t, err, "a caller that only knows sid must not be able to revoke the session")
 
-	refreshed, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "127.0.0.2", "test-agent-2")
+	refreshed, _, err := RefreshLoginSession(testtenant.Context(), bundle.RefreshToken, bundle.Session.SID, "127.0.0.2", "test-agent-2")
 	require.NoError(t, err)
 	assert.NotEqual(t, bundle.RefreshToken, refreshed.RefreshToken)
-	recovered, _, err := RefreshLoginSession(bundle.RefreshToken, bundle.Session.SID, "127.0.0.2", "test-agent-2")
+	recovered, _, err := RefreshLoginSession(testtenant.Context(), bundle.RefreshToken, bundle.Session.SID, "127.0.0.2", "test-agent-2")
 	require.NoError(t, err)
 	assert.Equal(t, refreshed.RefreshToken, recovered.RefreshToken, "a concurrent refresh must recover the winner's rotated token")
 
-	_, _, err = RefreshLoginSession(refreshed.RefreshToken, "different-session", "127.0.0.2", "test-agent-2")
+	_, _, err = RefreshLoginSession(testtenant.Context(), refreshed.RefreshToken, "different-session", "127.0.0.2", "test-agent-2")
 	assert.ErrorIs(t, err, ErrLoginSessionMismatch)
 
-	require.NoError(t, RevokeByRefreshToken(refreshed.RefreshToken, refreshed.Session.SID, "logout"))
-	_, _, err = ValidateLoginSession(identity)
+	require.NoError(t, RevokeByRefreshToken(testtenant.Context(), refreshed.RefreshToken, refreshed.Session.SID, "logout"))
+	_, _, err = ValidateLoginSession(testtenant.Context(), identity)
 	assert.True(t, errors.Is(err, ErrLoginSessionRevoked))
 }
 
@@ -361,22 +362,22 @@ func TestIndependentRedisSessionRevokeConvergesAfterCacheTTL(t *testing.T) {
 	_, clientA, serverB, clientB := useIndependentAuthSessionRedis(t)
 
 	common.RDB = clientA
-	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "node-a")
+	bundle, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "node-a")
 	require.NoError(t, err)
-	identity, err := ParseAccessToken(bundle.AccessToken)
+	identity, err := ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
 
 	common.RDB = clientB
-	_, _, err = ValidateLoginSession(identity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), identity)
 	require.NoError(t, err)
 	assert.NotEmpty(t, cachedLoginSessionKey(t, serverB), "node B must hold its own session cache entry")
 
 	common.RDB = clientA
-	require.NoError(t, RevokeByRefreshToken(bundle.RefreshToken, bundle.Session.SID, "logout"))
+	require.NoError(t, RevokeByRefreshToken(testtenant.Context(), bundle.RefreshToken, bundle.Session.SID, "logout"))
 
 	serverB.FastForward(3 * time.Second)
 	common.RDB = clientB
-	_, _, err = ValidateLoginSession(identity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), identity)
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked)
 }
 
@@ -386,46 +387,46 @@ func TestIndependentRedisAuthVersionAdvanceConvergesAfterCacheTTL(t *testing.T) 
 	_, clientA, serverB, clientB := useIndependentAuthSessionRedis(t)
 
 	common.RDB = clientA
-	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "node-a")
+	bundle, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "node-a")
 	require.NoError(t, err)
-	oldIdentity, err := ParseAccessToken(bundle.AccessToken)
+	oldIdentity, err := ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
 
 	common.RDB = clientB
-	_, _, err = ValidateLoginSession(oldIdentity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), oldIdentity)
 	require.NoError(t, err)
 	cacheKey := cachedLoginSessionKey(t, serverB)
 	version := serverB.HGet(cacheKey, "Version")
 	assert.Equal(t, "1", version, "node B must hold the pre-rotation session version")
 
 	common.RDB = clientA
-	rotated, err := AdvanceCurrentSessionSecurity(oldIdentity, "security_update")
+	rotated, err := AdvanceCurrentSessionSecurity(testtenant.Context(), oldIdentity, "security_update")
 	require.NoError(t, err)
-	newIdentity, err := ParseAccessToken(rotated.AccessToken)
+	newIdentity, err := ParseAccessToken(testtenant.Context(), rotated.AccessToken)
 	require.NoError(t, err)
 	assert.Greater(t, newIdentity.SessionVersion, oldIdentity.SessionVersion)
 	assert.Greater(t, newIdentity.UserAuthVersion, oldIdentity.UserAuthVersion)
 
 	serverB.FastForward(3 * time.Second)
 	common.RDB = clientB
-	_, _, err = ValidateLoginSession(newIdentity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), newIdentity)
 	require.NoError(t, err)
-	_, _, err = ValidateLoginSession(oldIdentity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), oldIdentity)
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked)
 }
 
 func TestUserAuthVersionInvalidatesExistingSession(t *testing.T) {
 	useTestSessionSecret(t)
 	user := setupAuthSessionTestDB(t)
-	bundle, err := CreateLoginSession(user.Id, "password", "127.0.0.1", "test-agent")
+	bundle, err := CreateLoginSession(testtenant.Context(), user.Id, "password", "127.0.0.1", "test-agent")
 	require.NoError(t, err)
-	identity, err := ParseAccessToken(bundle.AccessToken)
+	identity, err := ParseAccessToken(testtenant.Context(), bundle.AccessToken)
 	require.NoError(t, err)
 
-	_, err = model.BumpUserAuthVersion(user.Id)
+	_, err = model.BumpUserAuthVersion(testtenant.Context(), user.Id)
 	require.NoError(t, err)
-	_, _, err = ValidateLoginSession(identity)
+	_, _, err = ValidateLoginSession(testtenant.Context(), identity)
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked)
-	_, err = CreateLoginSessionAtAuthVersion(user.Id, identity.UserAuthVersion, "2fa", "127.0.0.1", "test-agent")
+	_, err = CreateLoginSessionAtAuthVersion(testtenant.Context(), user.Id, identity.UserAuthVersion, "2fa", "127.0.0.1", "test-agent")
 	assert.ErrorIs(t, err, ErrLoginSessionRevoked, "a pending 2FA flow must not survive an auth-version change")
 }

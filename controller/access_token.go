@@ -13,7 +13,7 @@ import (
 )
 
 func GetAccessTokenStatus(c *gin.Context) {
-	status, err := model.GetUserAccessTokenStatus(c.GetInt("id"))
+	status, err := model.GetUserAccessTokenStatus(c.Request.Context(), c.GetInt("id"))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -32,7 +32,7 @@ func GenerateAccessToken(c *gin.Context) {
 		return
 	}
 	var existing int64
-	if err := model.DB.Model(&model.User{}).Where("access_token = ?", key).Count(&existing).Error; err != nil {
+	if err := model.DB.WithContext(c.Request.Context()).Model(&model.User{}).Where("access_token = ?", key).Count(&existing).Error; err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -40,7 +40,7 @@ func GenerateAccessToken(c *gin.Context) {
 		common.ApiErrorI18n(c, i18n.MsgUuidDuplicate)
 		return
 	}
-	if err := model.UpdateUserAccessToken(id, key); err != nil {
+	if err := model.UpdateUserAccessToken(c.Request.Context(), id, key); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
@@ -52,7 +52,7 @@ func RevokeAccessToken(c *gin.Context) {
 	if middleware.RequireSecurityProof(c, service.VerificationOperation{Scope: service.VerificationScopeAccessTokenRevoke}) == nil {
 		return
 	}
-	ref, err := model.RevokeUserAccessToken(c.GetInt("id"))
+	ref, err := model.RevokeUserAccessToken(c.Request.Context(), c.GetInt("id"))
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -102,7 +102,7 @@ func GetAuditLogs(c *gin.Context) {
 		success := raw == "true"
 		filter.Success = &success
 	}
-	logs, total, err := model.GetAuditLogs(filter, page.GetStartIdx(), page.GetPageSize(), viewerRole)
+	logs, total, err := model.GetAuditLogs(c.Request.Context(), filter, page.GetStartIdx(), page.GetPageSize(), viewerRole)
 	if err != nil {
 		common.ApiError(c, err)
 		return

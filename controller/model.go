@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"fmt"
 	"net/http"
@@ -138,8 +140,8 @@ func channelOwnerName(channelType int) string {
 	return strings.ToLower(constant.GetChannelTypeName(channelType))
 }
 
-func getPreferredModelOwners(modelNames []string, groups []string) map[string]string {
-	channelTypes, err := model.GetPreferredModelOwnerChannelTypes(modelNames, groups)
+func getPreferredModelOwners(tenantCtx context.Context, modelNames []string, groups []string) map[string]string {
+	channelTypes, err := model.GetPreferredModelOwnerChannelTypes(tenantCtx, modelNames, groups)
 	if err != nil {
 		common.SysLog(fmt.Sprintf("GetPreferredModelOwnerChannelTypes error: %v", err))
 		return map[string]string{}
@@ -160,7 +162,7 @@ func getPreferredModelOwners(modelNames []string, groups []string) map[string]st
 	return owners
 }
 
-func buildOpenAIModel(modelName string, ownerByModel map[string]string) dto.OpenAIModels {
+func buildOpenAIModel(tenantCtx context.Context, modelName string, ownerByModel map[string]string) dto.OpenAIModels {
 	var oaiModel dto.OpenAIModels
 	if staticModel, ok := openAIModelsMap[modelName]; ok {
 		oaiModel = staticModel
@@ -175,7 +177,7 @@ func buildOpenAIModel(modelName string, ownerByModel map[string]string) dto.Open
 	if owner, ok := ownerByModel[modelName]; ok && owner != "" {
 		oaiModel.OwnedBy = owner
 	}
-	oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(modelName)
+	oaiModel.SupportedEndpointTypes = model.GetModelSupportEndpointTypes(tenantCtx, modelName)
 	return oaiModel
 }
 
@@ -190,7 +192,7 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 	userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 	if userGroup == "" && (tokenGroup == "" || tokenGroup == "auto") {
 		var err error
-		userGroup, err = model.GetUserGroup(c.GetInt("id"), false)
+		userGroup, err = model.GetUserGroup(c.Request.Context(), c.GetInt("id"), false)
 		if err != nil {
 			return modelListGroups{}, err
 		}
@@ -216,11 +218,11 @@ func getModelListGroups(c *gin.Context) (modelListGroups, error) {
 }
 
 func ListModels(c *gin.Context, modelType int) {
-	acceptUnsetRatioModel := operation_setting.SelfUseModeEnabled
+	acceptUnsetRatioModel := operation_setting.TenantState(c.Request.Context()).SelfUseModeEnabled
 	if !acceptUnsetRatioModel {
 		userId := c.GetInt("id")
 		if userId > 0 {
-			userSettings, _ := model.GetUserSetting(userId, false)
+			userSettings, _ := model.GetUserSetting(c.Request.Context(), userId, false)
 			if userSettings.AcceptUnsetRatioModel {
 				acceptUnsetRatioModel = true
 			}
@@ -248,15 +250,15 @@ func ListModels(c *gin.Context, modelType int) {
 			tokenModelLimit = map[string]bool{}
 		}
 	}
-	models := service.GetGroupsEnabledModels(ownerGroups)
+	models := service.GetGroupsEnabledModels(c.Request.Context(), ownerGroups)
 	for _, modelName := range models {
 		if modelLimitEnable {
-			matchingName := ratio_setting.RoutingMatchModelName(modelName)
+			matchingName := ratio_setting.RoutingMatchModelName(c.Request.Context(), modelName)
 			if !tokenModelLimit[modelName] && !tokenModelLimit[matchingName] {
 				continue
 			}
 		}
-		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(modelName) {
+		if !acceptUnsetRatioModel && !helper.HasModelBillingConfig(c.Request.Context(), modelName) {
 			continue
 		}
 		userModelNames = append(userModelNames, modelName)
@@ -264,11 +266,11 @@ func ListModels(c *gin.Context, modelType int) {
 
 	ownerByModel := map[string]string{}
 	if len(ownerGroups) > 0 {
-		ownerByModel = getPreferredModelOwners(userModelNames, ownerGroups)
+		ownerByModel = getPreferredModelOwners(c.Request.Context(), userModelNames, ownerGroups)
 	}
 	userOpenAiModels := make([]dto.OpenAIModels, 0, len(userModelNames))
 	for _, modelName := range userModelNames {
-		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(modelName, ownerByModel))
+		userOpenAiModels = append(userOpenAiModels, buildOpenAIModel(c.Request.Context(), modelName, ownerByModel))
 	}
 
 	switch modelType {
@@ -328,7 +330,7 @@ func DashboardListModels(c *gin.Context) {
 		modelsByChannel[channelType] = append([]string(nil), models...)
 	}
 	for channelType := 1; channelType <= constant.ChannelTypeDummy; channelType++ {
-		if plugin, ok := jsplugin.DefaultRegistry.GetByChannelType(channelType); ok {
+		if plugin, ok := jsplugin.TenantState(c.Request.Context()).DefaultRegistry.GetByChannelType(channelType); ok {
 			modelsByChannel[channelType] = append([]string(nil), plugin.Meta.Models...)
 		}
 	}
@@ -341,7 +343,7 @@ func DashboardListModels(c *gin.Context) {
 func EnabledListModels(c *gin.Context) {
 	c.JSON(200, gin.H{
 		"success": true,
-		"data":    model.GetEnabledModels(),
+		"data":    model.GetEnabledModels(c.Request.Context()),
 	})
 }
 

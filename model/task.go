@@ -1,5 +1,7 @@
 package model
 
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"bytes"
 	"context"
@@ -48,6 +50,7 @@ const (
 const TaskRefundLegacyCutoff int64 = 1771718400 // 2026-02-22 00:00:00 UTC
 
 type Task struct {
+	tenant.Row
 	ID         int64                 `json:"id" gorm:"primary_key;AUTO_INCREMENT"`
 	CreatedAt  int64                 `json:"created_at" gorm:"index"`
 	UpdatedAt  int64                 `json:"updated_at"`
@@ -265,12 +268,12 @@ func InitTask(platform constant.TaskPlatform, relayInfo *commonRelay.RelayInfo) 
 	return t
 }
 
-func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+func TaskGetAllUserTask(tenantCtx context.Context, userId int, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
 	var tasks []*Task
 	var err error
 
 	// 初始化查询构建器
-	query := DB.Where("user_id = ?", userId)
+	query := DB.WithContext(tenantCtx).Where("user_id = ?", userId)
 
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
@@ -301,12 +304,12 @@ func TaskGetAllUserTask(userId int, startIdx int, num int, queryParams SyncTaskQ
 	return tasks
 }
 
-func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
+func TaskGetAllTasks(tenantCtx context.Context, startIdx int, num int, queryParams SyncTaskQueryParams) []*Task {
 	var tasks []*Task
 	var err error
 
 	// 初始化查询构建器
-	query := DB
+	query := DB.WithContext(tenantCtx)
 
 	// 添加过滤条件
 	if queryParams.ChannelID != "" {
@@ -346,9 +349,9 @@ func TaskGetAllTasks(startIdx int, num int, queryParams SyncTaskQueryParams) []*
 	return tasks
 }
 
-func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
+func GetTimedOutUnfinishedTasks(tenantCtx context.Context, cutoffUnix int64, limit int) []*Task {
 	var tasks []*Task
-	err := DB.Where("progress != ?", "100%").
+	err := DB.WithContext(tenantCtx).Where("progress != ?", "100%").
 		Where("status NOT IN ?", []string{TaskStatusFailure, TaskStatusSuccess}).
 		Where("submit_time < ?", cutoffUnix).
 		Order("submit_time").
@@ -360,11 +363,11 @@ func GetTimedOutUnfinishedTasks(cutoffUnix int64, limit int) []*Task {
 	return tasks
 }
 
-func GetAllUnFinishSyncTasks(limit int) []*Task {
+func GetAllUnFinishSyncTasks(tenantCtx context.Context, limit int) []*Task {
 	var tasks []*Task
 	var err error
 	// get all tasks progress is not 100%
-	err = DB.Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
+	err = DB.WithContext(tenantCtx).Where("progress != ?", "100%").Where("status != ?", TaskStatusFailure).Where("status != ?", TaskStatusSuccess).Limit(limit).Order("id").Find(&tasks).Error
 	if err != nil {
 		return nil
 	}
@@ -375,9 +378,9 @@ func GetAllUnFinishSyncTasks(limit int) []*Task {
 // still in progress. It is a cheap existence check (LIMIT 1) used to decide
 // whether the async_task_poll system task needs to run; when no task is pending
 // the scheduler skips creating a row entirely.
-func HasUnfinishedSyncTasks() bool {
+func HasUnfinishedSyncTasks(tenantCtx context.Context) bool {
 	var id int64
-	err := DB.Model(&Task{}).
+	err := DB.WithContext(tenantCtx).Model(&Task{}).
 		Where("progress != ?", "100%").
 		Where("status != ?", TaskStatusFailure).
 		Where("status != ?", TaskStatusSuccess).
@@ -386,13 +389,13 @@ func HasUnfinishedSyncTasks() bool {
 	return err == nil && id != 0
 }
 
-func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
+func GetByOnlyTaskId(tenantCtx context.Context, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
 	var task *Task
 	var err error
-	err = DB.Where("task_id = ?", taskId).First(&task).Error
+	err = DB.WithContext(tenantCtx).Where("task_id = ?", taskId).First(&task).Error
 	exist, err := RecordExist(err)
 	if err != nil {
 		return nil, false, err
@@ -404,12 +407,12 @@ func GetByOnlyTaskId(taskId string) (*Task, bool, error) {
 // row owns it. Historical task identifiers were not globally unique, so
 // capability-based reads must fail closed instead of selecting an arbitrary
 // tenant's row.
-func GetUniqueByOnlyTaskId(taskId string) (*Task, bool, error) {
+func GetUniqueByOnlyTaskId(tenantCtx context.Context, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
 	var tasks []*Task
-	if err := DB.Where("task_id = ?", taskId).Order("id").Limit(2).Find(&tasks).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("task_id = ?", taskId).Order("id").Limit(2).Find(&tasks).Error; err != nil {
 		return nil, false, err
 	}
 	if len(tasks) != 1 {
@@ -418,13 +421,13 @@ func GetUniqueByOnlyTaskId(taskId string) (*Task, bool, error) {
 	return tasks[0], true, nil
 }
 
-func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
+func GetByTaskId(tenantCtx context.Context, userId int, taskId string) (*Task, bool, error) {
 	if taskId == "" {
 		return nil, false, nil
 	}
 	var task *Task
 	var err error
-	err = DB.Where("user_id = ? and task_id = ?", userId, taskId).
+	err = DB.WithContext(tenantCtx).Where("user_id = ? and task_id = ?", userId, taskId).
 		First(&task).Error
 	exist, err := RecordExist(err)
 	if err != nil {
@@ -433,12 +436,12 @@ func GetByTaskId(userId int, taskId string) (*Task, bool, error) {
 	return task, exist, err
 }
 
-func GetByTaskIdsForPlatforms(userID int, platforms []constant.TaskPlatform, taskIDs []string) ([]*Task, error) {
+func GetByTaskIdsForPlatforms(tenantCtx context.Context, userID int, platforms []constant.TaskPlatform, taskIDs []string) ([]*Task, error) {
 	if len(platforms) == 0 || len(taskIDs) == 0 {
 		return nil, nil
 	}
 	var tasks []*Task
-	err := DB.
+	err := DB.WithContext(tenantCtx).
 		Where("user_id = ? AND platform IN ? AND task_id IN ?", userID, platforms, taskIDs).
 		Find(&tasks).Error
 	if err != nil {
@@ -455,7 +458,7 @@ func GetTaskForProtocolObservation(ctx context.Context, userID int, platform con
 		return nil, false, nil
 	}
 	var task Task
-	err := DB.WithContext(ctx).
+	err := DB.WithContext(ctx).WithContext(ctx).
 		Where("user_id = ? AND platform = ? AND task_id = ?", userID, platform, taskID).
 		First(&task).Error
 	exists, err := RecordExist(err)
@@ -465,12 +468,12 @@ func GetTaskForProtocolObservation(ctx context.Context, userID int, platform con
 	return &task, true, nil
 }
 
-func (Task *Task) Insert() error {
-	return Task.InsertWithContext(context.Background())
+func (Task *Task) Insert(tenantCtx context.Context) error {
+	return Task.InsertWithContext(tenantCtx)
 }
 
 func (Task *Task) InsertWithContext(ctx context.Context) error {
-	return DB.WithContext(ctx).Create(Task).Error
+	return DB.WithContext(ctx).WithContext(ctx).Create(Task).Error
 }
 
 type taskSnapshot struct {
@@ -511,14 +514,14 @@ func (t *Task) Snapshot() taskSnapshot {
 	}
 }
 
-func (Task *Task) Update() error {
+func (Task *Task) Update(tenantCtx context.Context) error {
 	var err error
-	err = DB.Save(Task).Error
+	err = DB.WithContext(tenantCtx).Save(Task).Error
 	return err
 }
 
-func (t *Task) UpdateQuota() error {
-	return DB.Model(t).Update("quota", t.Quota).Error
+func (t *Task) UpdateQuota(tenantCtx context.Context) error {
+	return DB.WithContext(tenantCtx).Model(t).Update("quota", t.Quota).Error
 }
 
 // UpdateWithStatus performs a conditional UPDATE guarded by fromStatus (CAS).
@@ -530,8 +533,8 @@ func (t *Task) UpdateQuota() error {
 // Uses Model().Select("*").Updates() instead of Save() because GORM's Save
 // falls back to INSERT ON CONFLICT when the WHERE-guarded UPDATE matches
 // zero rows, which silently bypasses the CAS guard.
-func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
-	result := DB.Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
+func (t *Task) UpdateWithStatus(tenantCtx context.Context, fromStatus TaskStatus) (bool, error) {
+	result := DB.WithContext(tenantCtx).Model(t).Where("status = ?", fromStatus).Select("*").Updates(t)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -543,11 +546,11 @@ func (t *Task) UpdateWithStatus(fromStatus TaskStatus) (bool, error) {
 // any concurrent status changes. DO NOT use in billing/quota lifecycle flows
 // (e.g., timeout, success, failure transitions that trigger refunds or settlements).
 // For status transitions that involve billing, use Task.UpdateWithStatus() instead.
-func TaskBulkUpdateByID(ids []int64, params map[string]any) error {
+func TaskBulkUpdateByID(tenantCtx context.Context, ids []int64, params map[string]any) error {
 	if len(ids) == 0 {
 		return nil
 	}
-	return DB.Model(&Task{}).
+	return DB.WithContext(tenantCtx).Model(&Task{}).
 		Where("id in (?)", ids).
 		Updates(params).Error
 }
@@ -558,9 +561,9 @@ type TaskQuotaUsage struct {
 }
 
 // TaskCountAllTasks returns total tasks that match the given query params (admin usage)
-func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
+func TaskCountAllTasks(tenantCtx context.Context, queryParams SyncTaskQueryParams) int64 {
 	var total int64
-	query := DB.Model(&Task{})
+	query := DB.WithContext(tenantCtx).Model(&Task{})
 	if queryParams.ChannelID != "" {
 		query = query.Where("channel_id = ?", queryParams.ChannelID)
 	}
@@ -593,9 +596,9 @@ func TaskCountAllTasks(queryParams SyncTaskQueryParams) int64 {
 }
 
 // TaskCountAllUserTask returns total tasks for given user
-func TaskCountAllUserTask(userId int, queryParams SyncTaskQueryParams) int64 {
+func TaskCountAllUserTask(tenantCtx context.Context, userId int, queryParams SyncTaskQueryParams) int64 {
 	var total int64
-	query := DB.Model(&Task{}).Where("user_id = ?", userId)
+	query := DB.WithContext(tenantCtx).Model(&Task{}).Where("user_id = ?", userId)
 	if queryParams.TaskID != "" {
 		query = query.Where("task_id = ?", queryParams.TaskID)
 	}

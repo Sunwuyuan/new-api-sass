@@ -84,13 +84,13 @@ func VideoProxy(c *gin.Context) {
 
 	var descriptor *relaychannel.TaskContentRequest
 	if taskHasPluginExecution(task) {
-		artifacts, projectionErr := projectTaskArtifacts(task)
+		artifacts, projectionErr := projectTaskArtifacts(c.Request.Context(), task)
 		if projectionErr == nil {
 			for _, artifact := range artifacts {
 				if artifact.Type != "video" {
 					continue
 				}
-				adaptor, adaptorErr := initTaskArtifactAdaptor(task)
+				adaptor, adaptorErr := initTaskArtifactAdaptor(c.Request.Context(), task)
 				if adaptorErr == nil {
 					if provider, ok := adaptor.(relaychannel.TaskContentRequestProvider); ok {
 						descriptor, adaptorErr = provider.BuildContentRequest(task, artifact.Key, relaychannel.TaskArtifactClientRequest{
@@ -207,24 +207,24 @@ func proxyTaskMedia(c *gin.Context, task *model.Task, descriptor *relaychannel.T
 		}
 	}
 
-	channel, err := model.CacheGetChannel(task.ChannelId)
+	channel, err := model.CacheGetChannel(c.Request.Context(), task.ChannelId)
 	if err != nil {
 		return &taskMediaProxyError{
 			status: http.StatusServiceUnavailable, code: "artifact_plugin_unavailable",
 			message: "Artifact channel is unavailable", err: err,
 		}
 	}
-	proxy := strings.TrimSpace(channel.GetSetting().Proxy)
-	if err := validateTaskMediaURL(rawURL, proxy); err != nil {
+	proxy := strings.TrimSpace(channel.GetSetting(c.Request.Context()).Proxy)
+	if err := validateTaskMediaURL(c.Request.Context(), rawURL, proxy); err != nil {
 		return &taskMediaProxyError{
 			status: http.StatusBadGateway, code: "artifact_request_rejected",
 			message: "Artifact request was rejected", err: err,
 		}
 	}
 
-	client := service.GetSSRFProtectedHTTPClient()
+	client := service.GetSSRFProtectedHTTPClient(c.Request.Context())
 	if proxy != "" {
-		client, err = service.GetHttpClientWithProxy(proxy)
+		client, err = service.GetHttpClientWithProxy(c.Request.Context(), proxy)
 		if err != nil {
 			return &taskMediaProxyError{
 				status: http.StatusInternalServerError, code: "artifact_internal_error",
@@ -416,7 +416,7 @@ func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, cl
 			req.URL.Host == "" || req.URL.User != nil || req.URL.Fragment != "" {
 			return fmt.Errorf("%w: invalid redirect URL", errTaskMediaRequestRejected)
 		}
-		if err := validateTaskMediaURL(req.URL.String(), proxy); err != nil {
+		if err := validateTaskMediaURL(c.Request.Context(), req.URL.String(), proxy); err != nil {
 			return fmt.Errorf("%w: %v", errTaskMediaRequestRejected, err)
 		}
 		if isSelfTaskMediaURL(c, req.URL) {
@@ -441,11 +441,11 @@ func taskMediaRedirectClient(base *http.Client, proxy string, c *gin.Context, cl
 	return &cloned
 }
 
-func validateTaskMediaURL(rawURL, proxy string) error {
+func validateTaskMediaURL(tenantCtx context.Context, rawURL, proxy string) error {
 	if proxy == "" {
-		return service.ValidateSSRFProtectedFetchURL(rawURL)
+		return service.ValidateSSRFProtectedFetchURL(tenantCtx, rawURL)
 	}
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSetting(tenantCtx)
 	return common.ValidateURLWithFetchSetting(
 		rawURL,
 		fetchSetting.EnableSSRFProtection,

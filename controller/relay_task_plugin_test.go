@@ -14,9 +14,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/types"
@@ -72,11 +75,11 @@ export function buildSubmitRequest(){return {}} export function parseSubmitRespo
 	outcome := &taskSubmissionOutcome{
 		Result:    &relay.TaskSubmitResult{},
 		Task:      task,
-		RelayInfo: &relaycommon.RelayInfo{PriceData: priceData},
+		RelayInfo: &relaycommon.RelayInfo{Context: testtenant.Context(), PriceData: priceData},
 	}
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"model"}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/vendor/jobs", strings.NewReader(`{"model":"model"}`))
 	c.Set(pluginruntime.ContextKeyPinnedRoute, pluginruntime.PinnedRoute{Plugin: plugin, Route: plugin.Meta.Routes[0]})
 	c.Set(pluginruntime.ContextKeyRouteRequest, pluginruntime.RouteRequestContext{Path: "/vendor/jobs", Method: http.MethodPost, Body: map[string]any{"kind": "json", "value": map[string]any{"model": "model"}}})
 
@@ -91,11 +94,11 @@ export function buildSubmitRequest(){return {}} export function parseSubmitRespo
 
 func TestPresentTaskSubmissionFallbackUsesPersistedPublicID(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	outcome := &taskSubmissionOutcome{
 		Result:    &relay.TaskSubmitResult{},
 		Task:      &model.Task{TaskID: "task_persisted", SubmitTime: 456},
-		RelayInfo: &relaycommon.RelayInfo{OriginModelName: "video-model"},
+		RelayInfo: &relaycommon.RelayInfo{Context: testtenant.Context(), OriginModelName: "video-model"},
 	}
 
 	presentTaskSubmission(c, outcome)
@@ -111,7 +114,7 @@ func TestPresentTaskSubmissionFallbackUsesPersistedPublicID(t *testing.T) {
 
 func TestPresentTaskSubmissionUsesHostOpenAIVideoCreateReceipt(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(pluginruntime.ContextKeyPinnedEndpoint, pluginruntime.PinnedEndpoint{
 		Protocol:  "openai_video",
 		Operation: pluginruntime.HostProtocolOperation{Name: "create"},
@@ -123,7 +126,7 @@ func TestPresentTaskSubmissionUsesHostOpenAIVideoCreateReceipt(t *testing.T) {
 		CreatedAt:  456,
 		Properties: model.Properties{OriginModelName: "video-model"},
 	}
-	outcome := &taskSubmissionOutcome{Result: &relay.TaskSubmitResult{}, Task: task, RelayInfo: &relaycommon.RelayInfo{}}
+	outcome := &taskSubmissionOutcome{Result: &relay.TaskSubmitResult{}, Task: task, RelayInfo: &relaycommon.RelayInfo{Context: testtenant.Context()}}
 
 	presentTaskSubmission(c, outcome)
 
@@ -182,9 +185,9 @@ func TestExecuteTaskSubmissionSettlementFailureStaysDurableAndWritesNothing(t *t
 func TestExecuteTaskSubmissionPersistsPinnedPluginProvenance(t *testing.T) {
 	events := make([]string, 0, 3)
 	database := setupTaskSubmissionDatabase(t, true, &events)
-	previousLogConsumeEnabled := common.LogConsumeEnabled
-	common.LogConsumeEnabled = false
-	t.Cleanup(func() { common.LogConsumeEnabled = previousLogConsumeEnabled })
+	previousLogConsumeEnabled := common.TenantState(testtenant.Context()).LogConsumeEnabled
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = false
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).LogConsumeEnabled = previousLogConsumeEnabled })
 
 	c := taskSubmissionTestContext()
 	c.Set(common.RequestIdKey, "request-public")
@@ -327,9 +330,9 @@ func TestExecuteTaskSubmissionCallerCancellationDuringSubmitRefundsBeforeDurable
 func TestExecuteTaskSubmissionDisconnectAfterDurableInsertDoesNotRefund(t *testing.T) {
 	events := make([]string, 0, 3)
 	database := setupTaskSubmissionDatabase(t, true, &events)
-	previousLogConsumeEnabled := common.LogConsumeEnabled
-	common.LogConsumeEnabled = false
-	t.Cleanup(func() { common.LogConsumeEnabled = previousLogConsumeEnabled })
+	previousLogConsumeEnabled := common.TenantState(testtenant.Context()).LogConsumeEnabled
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = false
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).LogConsumeEnabled = previousLogConsumeEnabled })
 	c := taskSubmissionTestContext()
 	requestContext, cancel := context.WithCancel(c.Request.Context())
 	c.Request = c.Request.WithContext(requestContext)
@@ -375,13 +378,13 @@ func setupTaskSubmissionDatabase(t *testing.T, migrate bool, events *[]string) *
 
 func taskSubmissionTestContext() *gin.Context {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/plugin/submit", strings.NewReader(`{}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/plugin/submit", strings.NewReader(`{}`))
 	return c
 }
 
 func taskSubmissionRelayInfo(billing relaycommon.BillingSettler) *relaycommon.RelayInfo {
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		UserId:          1,
 		UsingGroup:      "default",
 		OriginModelName: "plugin-model",
@@ -432,14 +435,14 @@ func TestImmediateTaskSettlementDatabase(t *testing.T) {
 	t.Logf("database: %s %s", dialect, version)
 	oldDB, oldLogDB := model.DB, model.LOG_DB
 	oldMain, oldLog := common.MainDatabaseType(), common.LogDatabaseType()
-	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled
+	oldRedis, oldMemory, oldBatch, oldConsume, oldExport := common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.TenantState(testtenant.Context()).LogConsumeEnabled, common.TenantState(testtenant.Context()).DataExportEnabled
 	model.DB, model.LOG_DB = db, db
 	common.SetDatabaseTypes(dialect, dialect)
-	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled = false, false, false, true, false
+	common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.TenantState(testtenant.Context()).LogConsumeEnabled, common.TenantState(testtenant.Context()).DataExportEnabled = false, false, false, true, false
 	t.Cleanup(func() {
 		model.DB, model.LOG_DB = oldDB, oldLogDB
 		common.SetDatabaseTypes(oldMain, oldLog)
-		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.LogConsumeEnabled, common.DataExportEnabled = oldRedis, oldMemory, oldBatch, oldConsume, oldExport
+		common.RedisEnabled, common.MemoryCacheEnabled, common.BatchUpdateEnabled, common.TenantState(testtenant.Context()).LogConsumeEnabled, common.TenantState(testtenant.Context()).DataExportEnabled = oldRedis, oldMemory, oldBatch, oldConsume, oldExport
 	})
 
 	const expression = `u("units") == 7 ? tier("missing", u("missing") * 1.0) : u("units") == 8 ? tier("invalid", -1.0) : u("units") > 3 ? tier("bulk", u("units") * 0.01) : tier("small", u("units") * 0.01)`
@@ -477,7 +480,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 				_, _ = w.Write(encoded)
 			}))
 			defer server.Close()
-			initial := int(20 * common.QuotaPerUnit)
+			initial := int(20 * common.TenantState(testtenant.Context()).QuotaPerUnit)
 			user := model.User{Username: fmt.Sprintf("task_user_%d", index), AffCode: fmt.Sprintf("task_aff_%d", index), Quota: initial}
 			require.NoError(t, db.Create(&user).Error)
 			ch := model.Channel{Name: "test provider", Type: constant.ChannelTypeTaskPlugin}
@@ -503,7 +506,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			outcome, taskErr := executeTaskSubmission(c, info)
 			require.Nil(t, taskErr)
 			require.NotNil(t, outcome)
-			want := common.QuotaRound(tc.count * 0.01 * common.QuotaPerUnit)
+			want := common.QuotaRound(tc.count * 0.01 * common.TenantState(testtenant.Context()).QuotaPerUnit)
 			assert.Equal(t, want, outcome.Result.Quota)
 			assert.Equal(t, want, info.PriceData.Quota)
 			var stored model.Task
@@ -511,7 +514,7 @@ export function buildQueryRequest(){throw new Error("completed submissions must 
 			assert.Equal(t, want, stored.Quota)
 			assert.Equal(t, model.TaskStatus(tc.status), stored.Status)
 			assert.Positive(t, stored.FinishTime)
-			assert.Equal(t, float64(4), info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup/(0.01*common.QuotaPerUnit))
+			assert.Equal(t, float64(4), info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup/(0.01*common.TenantState(testtenant.Context()).QuotaPerUnit))
 			if tc.status == "SUCCESS" {
 				assert.Equal(t, tc.count, stored.PrivateData.BillingContext.TieredSnapshot.UsageFacts["units"])
 			}

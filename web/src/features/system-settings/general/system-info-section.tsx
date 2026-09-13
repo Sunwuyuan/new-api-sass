@@ -32,6 +32,7 @@ import {
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { useStatus } from '@/hooks/use-status'
 
 import { FormDirtyIndicator } from '../components/form-dirty-indicator'
 import { FormNavigationGuard } from '../components/form-navigation-guard'
@@ -74,6 +75,9 @@ function normalizeValue(value: unknown): string {
 export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
   const { t } = useTranslation()
   const updateOption = useUpdateOption()
+  const { status } = useStatus()
+  const platformFooterLocked = status?.platform_footer_locked !== false
+  const platformBrandingLocked = status?.platform_branding_locked !== false
 
   const normalizedDefaults: SystemInfoFormValues = {
     SystemName: normalizeValue(defaultValues.SystemName),
@@ -120,6 +124,13 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
       defaultValues: normalizedDefaults,
       onSubmit: async (_data, changedFields) => {
         for (const [key, value] of Object.entries(changedFields)) {
+          if (key === 'Footer' && platformFooterLocked) continue
+          if (
+            (key === 'SystemName' || key === 'Logo') &&
+            platformBrandingLocked
+          ) {
+            continue
+          }
           let v = normalizeValue(value)
           if (key === 'ServerAddress' || key === 'TaskPublicAddress') {
             v = v.replace(/\/+$/, '')
@@ -154,10 +165,18 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                   <FormItem>
                     <FormLabel>{t('System Name')}</FormLabel>
                     <FormControl>
-                      <Input placeholder={t('New API')} {...field} />
+                      <Input
+                        placeholder={t('New API')}
+                        {...field}
+                        disabled={platformBrandingLocked}
+                      />
                     </FormControl>
                     <FormDescription>
-                      {t('The name displayed across the application')}
+                      {platformBrandingLocked
+                        ? t(
+                            'Custom branding requires an eligible hosting plan.'
+                          )
+                        : t('The name displayed across the application')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>
@@ -215,6 +234,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                       <Input
                         placeholder={t('https://example.com/logo.png')}
                         {...field}
+                        disabled={platformBrandingLocked}
                       />
                     </FormControl>
                     <FormDescription>
@@ -233,6 +253,7 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                     <FormLabel>{t('Footer')}</FormLabel>
                     <FormControl>
                       <Textarea
+                        disabled={platformFooterLocked}
                         placeholder={t(
                           '© 2025 Your Company. All rights reserved.'
                         )}
@@ -241,7 +262,11 @@ export function SystemInfoSection({ defaultValues }: SystemInfoSectionProps) {
                       />
                     </FormControl>
                     <FormDescription>
-                      {t('Footer text displayed at the bottom of pages')}
+                      {platformFooterLocked
+                        ? t(
+                            'Your hosting plan requires the platform footer. Contact the administrator to upgrade.'
+                          )
+                        : t('Footer text displayed at the bottom of pages')}
                     </FormDescription>
                     <FormMessage />
                   </FormItem>

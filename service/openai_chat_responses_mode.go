@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"regexp"
 	"sync"
@@ -44,9 +46,9 @@ func ShouldChatCompletionsUseResponsesPolicy(policy model_setting.ChatCompletion
 	return matchAnyModelPattern(policy.ModelPatterns, model)
 }
 
-func ShouldChatCompletionsUseResponsesGlobal(channelID int, channelType int, model string) bool {
+func ShouldChatCompletionsUseResponsesGlobal(tenantCtx context.Context, channelID int, channelType int, model string) bool {
 	return ShouldChatCompletionsUseResponsesPolicy(
-		model_setting.GetGlobalSettings().ChatCompletionsToResponsesPolicy,
+		model_setting.GetGlobalSettings(tenantCtx).ChatCompletionsToResponsesPolicy,
 		channelID,
 		channelType,
 		model,

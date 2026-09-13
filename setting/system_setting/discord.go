@@ -1,5 +1,7 @@
 package system_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type DiscordSettings struct {
@@ -16,6 +18,6 @@ func init() {
 	config.GlobalConfig.Register("discord", &defaultDiscordSettings)
 }
 
-func GetDiscordSettings() *DiscordSettings {
-	return &defaultDiscordSettings
+func GetDiscordSettings(tenantCtx context.Context) *DiscordSettings {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("discord").(*DiscordSettings)
 }

@@ -5,13 +5,14 @@ import (
 	"net/http"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestNewReplayableBodyReaderKeepsStorageLifecycleWithCaller(t *testing.T) {
 	payload := []byte(`{"model":"test-model","input":"hello"}`)
-	storage, err := CreateBodyStorage(payload)
+	storage, err := CreateBodyStorage(testtenant.Context(), payload)
 	require.NoError(t, err)
 	defer storage.Close()
 
@@ -20,7 +21,7 @@ func TestNewReplayableBodyReaderKeepsStorageLifecycleWithCaller(t *testing.T) {
 	_, exposesCloser := any(body).(io.Closer)
 	assert.False(t, exposesCloser, "the request body must not expose the storage closer")
 
-	req, err := http.NewRequest(http.MethodPost, "https://example.com", body)
+	req, err := testtenant.HTTPRequest(http.MethodPost, "https://example.com", body)
 	require.NoError(t, err)
 	require.NoError(t, req.Body.Close())
 

@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/hmac"
 	"errors"
@@ -20,12 +22,12 @@ type twoFAEnrollmentPayload struct {
 
 // CreateTwoFAEnrollment stores the pending credential, recovery codes and
 // session-bound flow atomically. Reinitialization invalidates the previous setup.
-func CreateTwoFAEnrollment(identity AuthSessionIdentity, authorization *AuthFlowAuthorization, secret string, backupCodes []string, expiresAt time.Time) (string, error) {
+func CreateTwoFAEnrollment(tenantCtx context.Context, identity AuthSessionIdentity, authorization *AuthFlowAuthorization, secret string, backupCodes []string, expiresAt time.Time) (string, error) {
 	if authorization == nil || authorization.ProofID <= 0 || authorization.AuthSessionIdentity != identity {
 		return "", ErrTwoFASetupInvalid
 	}
 	var token string
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		if err := ValidateAuthSessionWithTx(tx, identity); err != nil {
 			return err
 		}
@@ -67,12 +69,12 @@ func CreateTwoFAEnrollment(identity AuthSessionIdentity, authorization *AuthFlow
 
 // EnableTwoFAEnrollment validates and consumes one setup in the same transaction
 // as factor activation and auth_version advancement. A bad code can be retried.
-func EnableTwoFAEnrollment(identity AuthSessionIdentity, token, code string) error {
+func EnableTwoFAEnrollment(tenantCtx context.Context, identity AuthSessionIdentity, token, code string) error {
 	cleanCode, err := common.ValidateNumericCode(code)
 	if err != nil {
 		return ErrTwoFACodeInvalid
 	}
-	_, err = ConsumeAuthFlowWithAction(token, AuthFlowMatch{
+	_, err = ConsumeAuthFlowWithAction(tenantCtx, token, AuthFlowMatch{
 		Purpose: AuthFlowPurposeTwoFASetup, UserId: identity.UserID, SessionId: identity.SessionID,
 	}, func(tx *gorm.DB, flow *AuthFlow) error {
 		var payload twoFAEnrollmentPayload
@@ -110,5 +112,5 @@ func EnableTwoFAEnrollment(identity AuthSessionIdentity, token, code string) err
 	if err != nil {
 		return err
 	}
-	return PublishUserAuthCache(identity.UserID)
+	return PublishUserAuthCache(tenantCtx, identity.UserID)
 }

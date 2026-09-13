@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"context"
 	"io"
 	"net/http"
 
@@ -76,7 +77,7 @@ type TaskAdaptor interface {
 
 	// ── Polling ──────────────────────────────────────────────────────
 
-	FetchTask(baseUrl, key string, task *model.Task, proxy string) (*http.Response, error)
+	FetchTask(ctx context.Context, baseUrl, key string, task *model.Task, proxy string) (*http.Response, error)
 	ParseTaskResult(task *model.Task, resp *http.Response, respBody []byte) (*relaycommon.TaskInfo, error)
 }
 

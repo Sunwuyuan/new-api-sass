@@ -21,6 +21,7 @@ import { useEffect, useState } from 'react'
 
 import { isHttpUrl } from '@/lib/content-format'
 import { handleServerError } from '@/lib/handle-server-error'
+import { tenantStorage } from '@/lib/tenant'
 
 import { getHomePageContent } from '../api'
 import type { HomePageContentResult } from '../types'
@@ -40,7 +41,7 @@ export function useHomePageContent(): HomePageContentResult {
 
     const loadContent = async () => {
       // Load from localStorage first for immediate display
-      const cached = localStorage.getItem(STORAGE_KEY)
+      const cached = tenantStorage.getItem(STORAGE_KEY)
       if (cached && mounted) {
         setContent(cached)
       }
@@ -53,11 +54,11 @@ export function useHomePageContent(): HomePageContentResult {
 
         if (success && data) {
           setContent(data)
-          localStorage.setItem(STORAGE_KEY, data)
+          tenantStorage.setItem(STORAGE_KEY, data)
         } else {
           // Clear content if API returns empty
           setContent('')
-          localStorage.removeItem(STORAGE_KEY)
+          tenantStorage.removeItem(STORAGE_KEY)
         }
       } catch (error) {
         if (!mounted) return

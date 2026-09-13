@@ -2,8 +2,8 @@ package oauth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/QuantumNous/new-api/common"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	Register("oidc", &OIDCProvider{})
+	RegisterDefault("oidc", &OIDCProvider{})
 }
 
 // OIDCProvider implements OAuth for OIDC
@@ -40,12 +40,12 @@ type oidcUser struct {
 	Picture           string `json:"picture"`
 }
 
-func (p *OIDCProvider) GetName() string {
-	return system_setting.GetOIDCSettings().GetEffectiveDisplayName()
+func (p *OIDCProvider) GetName(tenantCtx context.Context) string {
+	return system_setting.GetOIDCSettings(tenantCtx).GetEffectiveDisplayName()
 }
 
-func (p *OIDCProvider) IsEnabled() bool {
-	return system_setting.GetOIDCSettings().Enabled
+func (p *OIDCProvider) IsEnabled(tenantCtx context.Context) bool {
+	return system_setting.GetOIDCSettings(tenantCtx).Enabled
 }
 
 func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -53,8 +53,8 @@ func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Co
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	settings := system_setting.GetOIDCSettings()
-	redirectUri := fmt.Sprintf("%s/oauth/oidc", system_setting.ServerAddress)
+	settings := system_setting.GetOIDCSettings(ctx)
+	redirectUri := fmt.Sprintf("%s/oauth/oidc", system_setting.TenantState(ctx).ServerAddress)
 	values := url.Values{}
 	values.Set("client_id", settings.ClientId)
 	values.Set("client_secret", settings.ClientSecret)
@@ -84,7 +84,7 @@ func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Co
 	logger.LogDebug(ctx, "[OAuth-OIDC] ExchangeToken response status: %d", res.StatusCode)
 
 	var oidcResponse oidcOAuthResponse
-	err = json.NewDecoder(res.Body).Decode(&oidcResponse)
+	err = common.DecodeJson(res.Body, &oidcResponse)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-OIDC] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
@@ -108,7 +108,7 @@ func (p *OIDCProvider) ExchangeToken(ctx context.Context, code string, c *gin.Co
 }
 
 func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAuthUser, error) {
-	settings := system_setting.GetOIDCSettings()
+	settings := system_setting.GetOIDCSettings(ctx)
 
 	logger.LogDebug(ctx, "[OAuth-OIDC] GetUserInfo: userinfo_endpoint=%s", settings.UserInfoEndpoint)
 
@@ -136,7 +136,7 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 	}
 
 	var oidcUser oidcUser
-	err = json.NewDecoder(res.Body).Decode(&oidcUser)
+	err = common.DecodeJson(res.Body, &oidcUser)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-OIDC] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
@@ -157,13 +157,13 @@ func (p *OIDCProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*OAu
 	}, nil
 }
 
-func (p *OIDCProvider) IsUserIDTaken(providerUserID string) bool {
-	return model.IsOidcIdAlreadyTaken(providerUserID)
+func (p *OIDCProvider) IsUserIDTaken(tenantCtx context.Context, providerUserID string) bool {
+	return model.IsOidcIdAlreadyTaken(tenantCtx, providerUserID)
 }
 
-func (p *OIDCProvider) FillUserByProviderID(user *model.User, providerUserID string) error {
+func (p *OIDCProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, providerUserID string) error {
 	user.OidcId = providerUserID
-	return user.FillUserByOidcId()
+	return user.FillUserByOidcId(tenantCtx)
 }
 
 func (p *OIDCProvider) SetProviderUserID(user *model.User, providerUserID string) {

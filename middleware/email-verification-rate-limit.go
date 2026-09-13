@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/gin-gonic/gin"
 )
@@ -44,7 +45,7 @@ func redisEmailVerificationRateLimiter(c *gin.Context) {
 }
 
 func memoryEmailVerificationRateLimiter(c *gin.Context) {
-	key := EmailVerificationRateLimitMark + ":" + c.ClientIP()
+	key := tenant.MustKey(c.Request.Context(), EmailVerificationRateLimitMark+":"+c.ClientIP())
 
 	if !inMemoryRateLimiter.Request(key, EmailVerificationMaxRequests, EmailVerificationDuration) {
 		c.JSON(http.StatusTooManyRequests, gin.H{

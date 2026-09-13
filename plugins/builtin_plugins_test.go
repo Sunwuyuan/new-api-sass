@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -13,7 +14,7 @@ import (
 var expectedKeys = []string{"alibaba", "doubao", "google", "hailuo", "jimeng", "kling", "sora", "sunoapi", "vertex-ai", "vidu"}
 
 func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing.T) {
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation()
 	require.NotNil(t, generation)
 
 	routes := []struct {
@@ -66,7 +67,7 @@ func TestBuiltInVendorPluginsDeclareNativeRoutesAndLegacyChannelTypes(t *testing
 }
 
 func TestBuiltInTaskPluginResponsesAndUsageContracts(t *testing.T) {
-	generation := jsplugin.DefaultRegistry.Generation()
+	generation := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Generation()
 	require.NotNil(t, generation)
 
 	entries, err := fs.ReadDir(taskPlugins, "tasks")

@@ -102,6 +102,8 @@ export interface SystemStatus {
     oidc_authorization_endpoint?: string
     oidc_client_id?: string
     oidc_display_name?: string
+    logto_oauth?: boolean
+    logto_display_name?: string
     linuxdo_oauth?: boolean
     linuxdo_client_id?: string
     telegram_oauth?: boolean
@@ -139,6 +141,9 @@ export interface SystemStatus {
   }
   // Allow direct access to common properties
   version?: string
+  hosted?: boolean
+  update_check_disabled?: boolean
+  platform_mail_available?: boolean
   system_name?: string
   logo?: string
   github_oauth?: boolean
@@ -149,6 +154,8 @@ export interface SystemStatus {
   oidc_authorization_endpoint?: string
   oidc_client_id?: string
   oidc_display_name?: string
+  logto_oauth?: boolean
+  logto_display_name?: string
   linuxdo_oauth?: boolean
   linuxdo_client_id?: string
   telegram_oauth?: boolean

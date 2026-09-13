@@ -1,5 +1,7 @@
 package middleware
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -52,7 +54,7 @@ func Distribute() func(c *gin.Context) {
 					pin.Source, pin.ChannelId, lost.Source, lost.ChannelId,
 				))
 			}
-			channel, err = model.CacheGetChannel(pin.ChannelId)
+			channel, err = model.CacheGetChannel(c.Request.Context(), pin.ChannelId)
 			if err != nil {
 				if pin.Source == taskdto.PinSourceOriginTask {
 					abortWithOpenAiMessage(c, http.StatusBadRequest, "origin_task_channel_disabled", types.ErrorCode("origin_task_channel_disabled"))
@@ -69,7 +71,7 @@ func Distribute() func(c *gin.Context) {
 				}
 				return
 			}
-			if ok, kind := model.ChannelSatisfiesFilters(channel, modelRequest.Model, constraints.Filters); !ok {
+			if ok, kind := model.ChannelSatisfiesFilters(c.Request.Context(), channel, modelRequest.Model, constraints.Filters); !ok {
 				if kind == taskdto.FilterTaskPluginIdentity {
 					logTaskPluginChannelDecision(c, channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
 				}
@@ -92,7 +94,7 @@ func Distribute() func(c *gin.Context) {
 				if !ok {
 					tokenModelLimit = map[string]bool{}
 				}
-				if !tokenModelLimitAllows(tokenModelLimit, modelRequest.Model) {
+				if !tokenModelLimitAllows(c.Request.Context(), tokenModelLimit, modelRequest.Model) {
 					abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorTokenModelForbidden, map[string]any{"Model": modelRequest.Model}))
 					return
 				}
@@ -114,7 +116,7 @@ func Distribute() func(c *gin.Context) {
 						return
 					}
 					if playgroundRequest.Group != "" {
-						if !service.GroupInUserUsableGroups(usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
+						if !service.GroupInUserUsableGroups(c.Request.Context(), usingGroup, playgroundRequest.Group) && playgroundRequest.Group != usingGroup {
 							abortWithOpenAiMessage(c, http.StatusForbidden, i18n.T(c, i18n.MsgDistributorGroupAccessDenied))
 							return
 						}
@@ -125,17 +127,17 @@ func Distribute() func(c *gin.Context) {
 
 				if preferredChannelID, found := service.GetPreferredChannelByAffinity(c, modelRequest.Model, usingGroup); found {
 					affinityUsable := false
-					preferred, err := model.CacheGetChannel(preferredChannelID)
+					preferred, err := model.CacheGetChannel(c.Request.Context(), preferredChannelID)
 					affinitySatisfied := false
 					if err == nil && preferred != nil && preferred.Status == common.ChannelStatusEnabled {
-						affinitySatisfied, _ = model.ChannelSatisfiesFilters(preferred, modelRequest.Model, constraints.Filters)
+						affinitySatisfied, _ = model.ChannelSatisfiesFilters(c.Request.Context(), preferred, modelRequest.Model, constraints.Filters)
 					}
 					if affinitySatisfied {
 						if usingGroup == "auto" {
 							userGroup := common.GetContextKeyString(c, constant.ContextKeyUserGroup)
 							autoGroups := service.GetRequestAutoGroups(c, userGroup)
 							for _, g := range autoGroups {
-								if model.IsChannelEnabledForGroupModel(g, modelRequest.Model, preferred.Id) {
+								if model.IsChannelEnabledForGroupModel(c.Request.Context(), g, modelRequest.Model, preferred.Id) {
 									selectGroup = g
 									common.SetContextKey(c, constant.ContextKeyAutoGroup, g)
 									channel = preferred
@@ -144,20 +146,20 @@ func Distribute() func(c *gin.Context) {
 									break
 								}
 							}
-						} else if model.IsChannelEnabledForGroupModel(usingGroup, modelRequest.Model, preferred.Id) {
+						} else if model.IsChannelEnabledForGroupModel(c.Request.Context(), usingGroup, modelRequest.Model, preferred.Id) {
 							channel = preferred
 							selectGroup = usingGroup
 							affinityUsable = true
 							service.MarkChannelAffinityUsed(c, usingGroup, preferred.Id)
 						}
 					}
-					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled() {
+					if !affinityUsable && !service.ShouldKeepChannelAffinityOnChannelDisabled(c.Request.Context()) {
 						service.ClearCurrentChannelAffinityCache(c)
 					}
 				}
 
 				if channel == nil {
-					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(&service.RetryParam{
+					channel, selectGroup, err = service.CacheGetRandomSatisfiedChannel(c.Request.Context(), &service.RetryParam{
 						Ctx:         c,
 						ModelName:   modelRequest.Model,
 						TokenGroup:  usingGroup,
@@ -186,7 +188,7 @@ func Distribute() func(c *gin.Context) {
 			}
 		}
 		if channel != nil {
-			if ok, kind := model.ChannelSatisfiesFilters(channel, modelRequest.Model, constraints.Filters); !ok {
+			if ok, kind := model.ChannelSatisfiesFilters(c.Request.Context(), channel, modelRequest.Model, constraints.Filters); !ok {
 				if kind == taskdto.FilterTaskPluginIdentity {
 					logTaskPluginChannelDecision(c, channel, modelRequest.Model, "channel_rejected", "identity_mismatch")
 				}
@@ -235,7 +237,7 @@ func channelMatchesExpectedTaskPlugin(c *gin.Context, channel *model.Channel, ex
 		}
 	}
 	if channel.Type == constant.ChannelTypeTaskPlugin {
-		return expected != "" && channel.GetSetting().TaskPluginKey == expected
+		return expected != "" && channel.GetSetting(c.Request.Context()).TaskPluginKey == expected
 	}
 	if expected == "" {
 		return true
@@ -276,7 +278,7 @@ func pinnedEndpointCandidateForChannel(c *gin.Context, channel *model.Channel, e
 			expectedOwned = true
 		}
 		if channel.Type == constant.ChannelTypeTaskPlugin {
-			if channel.GetSetting().TaskPluginKey == candidate.Plugin.Meta.Key {
+			if channel.GetSetting(c.Request.Context()).TaskPluginKey == candidate.Plugin.Meta.Key {
 				selected = candidate
 			}
 			continue
@@ -579,14 +581,14 @@ func getModelRequest(c *gin.Context) (*ModelRequest, bool, error) {
 // tokenModelLimitAllows reports whether a token model-limit map authorizes
 // model. Exact name, wildcard-normalized name, and routing-normalized name
 // (modifiers and legacy aliases stripped) are all accepted.
-func tokenModelLimitAllows(limit map[string]bool, model string) bool {
+func tokenModelLimitAllows(tenantCtx context.Context, limit map[string]bool, model string) bool {
 	if limit[model] {
 		return true
 	}
 	if formatted := ratio_setting.FormatMatchingModelName(model); limit[formatted] {
 		return true
 	}
-	return limit[ratio_setting.RoutingMatchModelName(model)]
+	return limit[ratio_setting.RoutingMatchModelName(tenantCtx, model)]
 }
 
 // 修复 #4834: GET /v1/video/generations/:task_id && /v1/video/:task_id 此前不解析 model，
@@ -604,7 +606,7 @@ func getTaskOriginModelName(c *gin.Context) string {
 	}
 
 	userId := c.GetInt("id")
-	if task, exist, err := model.GetByTaskId(userId, taskId); err == nil && exist && task != nil {
+	if task, exist, err := model.GetByTaskId(c.Request.Context(), userId, taskId); err == nil && exist && task != nil {
 		return task.Properties.OriginModelName
 	}
 	return ""
@@ -654,10 +656,10 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelName, channel.Name)
 	common.SetContextKey(c, constant.ContextKeyChannelType, channel.Type)
 	common.SetContextKey(c, constant.ContextKeyChannelCreateTime, channel.CreatedTime)
-	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting())
-	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings())
+	common.SetContextKey(c, constant.ContextKeyChannelSetting, channel.GetSetting(c.Request.Context()))
+	common.SetContextKey(c, constant.ContextKeyChannelOtherSetting, channel.GetOtherSettings(c.Request.Context()))
 	if channel.Type == constant.ChannelTypeTaskPlugin {
-		c.Set("task_plugin_key", channel.GetSetting().TaskPluginKey)
+		c.Set("task_plugin_key", channel.GetSetting(c.Request.Context()).TaskPluginKey)
 	}
 	logTaskPluginChannelDecision(c, channel, modelName, "channel_selected", "")
 	paramOverride := channel.GetParamOverride()
@@ -674,7 +676,7 @@ func SetupContextForSelectedChannel(c *gin.Context, channel *model.Channel, mode
 	common.SetContextKey(c, constant.ContextKeyChannelModelMapping, channel.GetModelMapping())
 	common.SetContextKey(c, constant.ContextKeyChannelStatusCodeMapping, channel.GetStatusCodeMapping())
 
-	key, index, newAPIError := channel.GetNextEnabledKey()
+	key, index, newAPIError := channel.GetNextEnabledKey(c.Request.Context())
 	if newAPIError != nil {
 		return newAPIError
 	}

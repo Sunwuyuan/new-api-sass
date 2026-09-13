@@ -1,11 +1,11 @@
 package common
 
 import (
-	"context"
 	"encoding/json"
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert"
 	"github.com/QuantumNous/new-api/relaykit/relayconvert/convmeta"
@@ -16,7 +16,7 @@ import (
 )
 
 func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RelayFormat:             types.RelayFormatOpenAI,
 		RequestConversionChain:  []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude},
 		FinalRequestRelayFormat: types.RelayFormatOpenAIResponses,
@@ -26,7 +26,7 @@ func TestRelayInfoGetFinalRequestRelayFormatPrefersExplicitFinal(t *testing.T) {
 }
 
 func TestRelayInfoGetFinalRequestRelayFormatFallsBackToConversionChain(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RelayFormat:            types.RelayFormatOpenAI,
 		RequestConversionChain: []types.RelayFormat{types.RelayFormatOpenAI, types.RelayFormatClaude},
 	}
@@ -35,7 +35,7 @@ func TestRelayInfoGetFinalRequestRelayFormatFallsBackToConversionChain(t *testin
 }
 
 func TestRelayInfoGetFinalRequestRelayFormatFallsBackToRelayFormat(t *testing.T) {
-	info := &RelayInfo{
+	info := &RelayInfo{Context: testtenant.Context(),
 		RelayFormat: types.RelayFormatGemini,
 	}
 
@@ -151,8 +151,8 @@ func TestGenRelayInfoCapturesRequestReasoningEffort(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-			ctx.Request = httptest.NewRequest("POST", tt.path, nil)
+			ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			ctx.Request = testtenant.NewRequest("POST", tt.path, nil)
 
 			info, err := GenRelayInfo(ctx, tt.relayFormat, tt.request, nil)
 			require.NoError(t, err)
@@ -163,8 +163,8 @@ func TestGenRelayInfoCapturesRequestReasoningEffort(t *testing.T) {
 
 func TestGenRelayInfoKeepsOriginAndLeavesBillingUnset(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = testtenant.NewRequest("POST", "/v1/chat/completions", nil)
 	const model = "qwen3.8-max@thinking:on@temperature:0.2"
 	ctx.Set("original_model", model)
 
@@ -177,8 +177,8 @@ func TestGenRelayInfoKeepsOriginAndLeavesBillingUnset(t *testing.T) {
 
 func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest("POST", "/v1/responses", nil)
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = testtenant.NewRequest("POST", "/v1/responses", nil)
 	request := &dto.OpenAIResponsesRequest{
 		Model:     "gpt-5.6-sol",
 		Reasoning: &dto.Reasoning{Effort: "max"},
@@ -197,8 +197,8 @@ func TestInitChannelMetaRestoresRequestReasoningEffortForRetry(t *testing.T) {
 
 func TestInitChannelMetaResetsPerAttemptStreamStateAndPreservesRequestState(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = testtenant.NewRequest("POST", "/v1/chat/completions", nil)
 
 	info, err := GenRelayInfo(ctx, types.RelayFormatOpenAI, &dto.GeneralOpenAIRequest{Model: "gpt-test"}, nil)
 	require.NoError(t, err)
@@ -236,7 +236,7 @@ func TestInitChannelMetaResetsPerAttemptStreamStateAndPreservesRequestState(t *t
 	info.LastError = types.NewError(assert.AnError, types.ErrorCodeBadResponseBody)
 	info.StreamStatus = NewStreamStatus()
 	info.StreamStatus.RecordError("attempt 1 soft error")
-	info.RecordConversionDiagnostics(context.Background(), []types.ConversionDiagnostic{{
+	info.RecordConversionDiagnostics(testtenant.Context(), []types.ConversionDiagnostic{{
 		Code:     "test.loss",
 		Message:  "attempt 1 conversion loss",
 		Severity: types.ConversionDiagnosticWarning,

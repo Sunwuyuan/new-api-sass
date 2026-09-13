@@ -1,7 +1,8 @@
 package setting
 
+import context "context"
+
 import (
-	"encoding/json"
 	"maps"
 	"sync"
 
@@ -14,39 +15,39 @@ var userUsableGroups = map[string]string{
 }
 var userUsableGroupsMutex sync.RWMutex
 
-func GetUserUsableGroupsCopy() map[string]string {
-	userUsableGroupsMutex.RLock()
-	defer userUsableGroupsMutex.RUnlock()
+func GetUserUsableGroupsCopy(tenantCtx context.Context) map[string]string {
+	TenantState(tenantCtx).userUsableGroupsMutex.RLock()
+	defer TenantState(tenantCtx).userUsableGroupsMutex.RUnlock()
 
 	copyUserUsableGroups := make(map[string]string)
-	maps.Copy(copyUserUsableGroups, userUsableGroups)
+	maps.Copy(copyUserUsableGroups, TenantState(tenantCtx).userUsableGroups)
 	return copyUserUsableGroups
 }
 
-func UserUsableGroups2JSONString() string {
-	userUsableGroupsMutex.RLock()
-	defer userUsableGroupsMutex.RUnlock()
+func UserUsableGroups2JSONString(tenantCtx context.Context) string {
+	TenantState(tenantCtx).userUsableGroupsMutex.RLock()
+	defer TenantState(tenantCtx).userUsableGroupsMutex.RUnlock()
 
-	jsonBytes, err := json.Marshal(userUsableGroups)
+	jsonBytes, err := common.Marshal(TenantState(tenantCtx).userUsableGroups)
 	if err != nil {
 		common.SysLog("error marshalling user groups: " + err.Error())
 	}
 	return string(jsonBytes)
 }
 
-func UpdateUserUsableGroupsByJSONString(jsonStr string) error {
-	userUsableGroupsMutex.Lock()
-	defer userUsableGroupsMutex.Unlock()
+func UpdateUserUsableGroupsByJSONString(tenantCtx context.Context, jsonStr string) error {
+	TenantState(tenantCtx).userUsableGroupsMutex.Lock()
+	defer TenantState(tenantCtx).userUsableGroupsMutex.Unlock()
 
-	userUsableGroups = make(map[string]string)
-	return json.Unmarshal([]byte(jsonStr), &userUsableGroups)
+	TenantState(tenantCtx).userUsableGroups = make(map[string]string)
+	return common.Unmarshal([]byte(jsonStr), &TenantState(tenantCtx).userUsableGroups)
 }
 
-func GetUsableGroupDescription(groupName string) string {
-	userUsableGroupsMutex.RLock()
-	defer userUsableGroupsMutex.RUnlock()
+func GetUsableGroupDescription(tenantCtx context.Context, groupName string) string {
+	TenantState(tenantCtx).userUsableGroupsMutex.RLock()
+	defer TenantState(tenantCtx).userUsableGroupsMutex.RUnlock()
 
-	if desc, ok := userUsableGroups[groupName]; ok {
+	if desc, ok := TenantState(tenantCtx).userUsableGroups[groupName]; ok {
 		return desc
 	}
 	return groupName

@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -20,8 +22,8 @@ func TestMaxTokensBounds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	newJSONContext := func(t *testing.T, body string) *gin.Context {
-		c, _ := gin.CreateTestContext(httptest.NewRecorder())
-		c.Request = httptest.NewRequest(http.MethodPost, "/relay", bytes.NewBufferString(body))
+		c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+		c.Request = testtenant.NewRequest(http.MethodPost, "/relay", bytes.NewBufferString(body))
 		c.Request.Header.Set("Content-Type", "application/json")
 		return c
 	}

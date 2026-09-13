@@ -31,7 +31,7 @@ func RefreshCodexOAuthToken(ctx context.Context, refreshToken string) (*CodexOAu
 }
 
 func RefreshCodexOAuthTokenWithProxy(ctx context.Context, refreshToken string, proxyURL string) (*CodexOAuthTokenResult, error) {
-	client, err := getCodexOAuthHTTPClient(proxyURL)
+	client, err := getCodexOAuthHTTPClient(ctx, proxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -92,8 +92,8 @@ func refreshCodexOAuthToken(
 	}, nil
 }
 
-func getCodexOAuthHTTPClient(proxyURL string) (*http.Client, error) {
-	baseClient, err := GetHttpClientWithProxy(strings.TrimSpace(proxyURL))
+func getCodexOAuthHTTPClient(tenantCtx context.Context, proxyURL string) (*http.Client, error) {
+	baseClient, err := GetHttpClientWithProxy(tenantCtx, strings.TrimSpace(proxyURL))
 	if err != nil {
 		return nil, err
 	}

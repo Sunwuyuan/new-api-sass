@@ -1,6 +1,7 @@
 package i18n
 
 import (
+	"context"
 	"embed"
 	"strings"
 	"sync"
@@ -114,10 +115,10 @@ func Translate(lang, key string, args ...map[string]any) string {
 
 // userLangLoaderFunc is a function that loads user language from database/cache
 // It's set by the model package to avoid circular imports
-var userLangLoaderFunc func(userId int) string
+var userLangLoaderFunc func(ctx context.Context, userId int) string
 
 // SetUserLangLoader sets the function to load user language (called from model package)
-func SetUserLangLoader(loader func(userId int) string) {
+func SetUserLangLoader(loader func(ctx context.Context, userId int) string) {
 	userLangLoaderFunc = loader
 }
 
@@ -146,7 +147,7 @@ func GetLangFromContext(c *gin.Context) string {
 	if userLangLoaderFunc != nil {
 		if userId, exists := c.Get("id"); exists {
 			if uid, ok := userId.(int); ok && uid > 0 {
-				lang := userLangLoaderFunc(uid)
+				lang := userLangLoaderFunc(c.Request.Context(), uid)
 				if lang != "" {
 					normalized := normalizeLang(lang)
 					if IsSupported(normalized) {

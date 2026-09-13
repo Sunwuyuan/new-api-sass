@@ -358,7 +358,7 @@ export function LogSettingsSection({
                   <FormLabel>{t('Record quota usage')}</FormLabel>
                   <FormDescription>
                     {t(
-                      'Track per-request consumption to power usage analytics. Keeping this on increases database writes.'
+                      'Track per-request consumption for usage analytics. This does not change billing or quota deduction.'
                     )}
                   </FormDescription>
                 </SettingsSwitchContent>

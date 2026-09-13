@@ -3,7 +3,6 @@ package oauth
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,7 +17,7 @@ import (
 )
 
 func init() {
-	Register("github", &GitHubProvider{})
+	RegisterDefault("github", &GitHubProvider{})
 }
 
 // GitHubProvider implements OAuth for GitHub
@@ -37,12 +36,12 @@ type gitHubUser struct {
 	Email string `json:"email"`
 }
 
-func (p *GitHubProvider) GetName() string {
+func (p *GitHubProvider) GetName(tenantCtx context.Context) string {
 	return "GitHub"
 }
 
-func (p *GitHubProvider) IsEnabled() bool {
-	return common.GitHubOAuthEnabled
+func (p *GitHubProvider) IsEnabled(tenantCtx context.Context) bool {
+	return common.TenantState(tenantCtx).GitHubOAuthEnabled
 }
 
 func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -51,11 +50,11 @@ func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.
 	}
 
 	values := map[string]string{
-		"client_id":     common.GitHubClientId,
-		"client_secret": common.GitHubClientSecret,
+		"client_id":     common.TenantState(ctx).GitHubClientId,
+		"client_secret": common.TenantState(ctx).GitHubClientSecret,
 		"code":          code,
 	}
-	jsonData, err := json.Marshal(values)
+	jsonData, err := common.Marshal(values)
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +79,7 @@ func (p *GitHubProvider) ExchangeToken(ctx context.Context, code string, c *gin.
 	logger.LogDebug(ctx, "[OAuth-GitHub] ExchangeToken response status: %d", res.StatusCode)
 
 	var oAuthResponse gitHubOAuthResponse
-	err = json.NewDecoder(res.Body).Decode(&oAuthResponse)
+	err = common.DecodeJson(res.Body, &oAuthResponse)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
@@ -133,7 +132,7 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 	}
 
 	var githubUser gitHubUser
-	err = json.NewDecoder(res.Body).Decode(&githubUser)
+	err = common.DecodeJson(res.Body, &githubUser)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-GitHub] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
@@ -158,13 +157,13 @@ func (p *GitHubProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*O
 	}, nil
 }
 
-func (p *GitHubProvider) IsUserIDTaken(providerUserID string) bool {
-	return model.IsGitHubIdAlreadyTaken(providerUserID)
+func (p *GitHubProvider) IsUserIDTaken(tenantCtx context.Context, providerUserID string) bool {
+	return model.IsGitHubIdAlreadyTaken(tenantCtx, providerUserID)
 }
 
-func (p *GitHubProvider) FillUserByProviderID(user *model.User, providerUserID string) error {
+func (p *GitHubProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, providerUserID string) error {
 	user.GitHubId = providerUserID
-	return user.FillUserByGitHubId()
+	return user.FillUserByGitHubId(tenantCtx)
 }
 
 func (p *GitHubProvider) SetProviderUserID(user *model.User, providerUserID string) {

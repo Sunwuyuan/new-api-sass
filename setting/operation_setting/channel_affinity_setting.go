@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type ChannelAffinityKeySource struct {
@@ -153,6 +155,6 @@ func init() {
 	config.GlobalConfig.Register("channel_affinity_setting", &channelAffinitySetting)
 }
 
-func GetChannelAffinitySetting() *ChannelAffinitySetting {
-	return &channelAffinitySetting
+func GetChannelAffinitySetting(tenantCtx context.Context) *ChannelAffinitySetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("channel_affinity_setting").(*ChannelAffinitySetting)
 }

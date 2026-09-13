@@ -35,6 +35,11 @@ describe('server error message mapping', () => {
 
     expect(message ?? '').toMatch(/rolling window/)
     expect(getServerErrorMessageKey({ code: 'UNKNOWN_CODE' })).toBe(null)
+    expect(
+      getServerErrorMessageKey({
+        response: { data: { code: 'tenant_context_required' } },
+      })
+    ).toBe('Open this workspace from the platform console.')
   })
 
   test('maps stable Telegram bind errors without exposing server text', () => {

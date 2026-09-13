@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"fmt"
 	"sync"
@@ -35,11 +37,11 @@ var (
 // ResolveTaskModelAlias returns the mapping-derived alias target for name
 // (exact or ASCII-folded). g is the caller's routing generation: a Number
 // mismatch or TTL expiry rebuilds the view against that generation.
-func ResolveTaskModelAlias(g *jsplugin.RoutingGeneration, name string) (TaskAliasTarget, bool) {
+func ResolveTaskModelAlias(tenantCtx context.Context, g *jsplugin.RoutingGeneration, name string) (TaskAliasTarget, bool) {
 	if g == nil || name == "" {
 		return TaskAliasTarget{}, false
 	}
-	view := loadFreshTaskAliasView(g)
+	view := loadFreshTaskAliasView(tenantCtx, g)
 	if view == nil {
 		return TaskAliasTarget{}, false
 	}
@@ -47,19 +49,19 @@ func ResolveTaskModelAlias(g *jsplugin.RoutingGeneration, name string) (TaskAlia
 	return target, ok
 }
 
-func loadFreshTaskAliasView(g *jsplugin.RoutingGeneration) *taskAliasView {
-	view := taskAliasViewPtr.Load()
+func loadFreshTaskAliasView(tenantCtx context.Context, g *jsplugin.RoutingGeneration) *taskAliasView {
+	view := TenantState(tenantCtx).taskAliasViewPtr.Load()
 	if taskAliasViewFresh(view, g.Number) {
 		return view
 	}
-	taskAliasRebuildMu.Lock()
-	defer taskAliasRebuildMu.Unlock()
-	view = taskAliasViewPtr.Load()
+	TenantState(tenantCtx).taskAliasRebuildMu.Lock()
+	defer TenantState(tenantCtx).taskAliasRebuildMu.Unlock()
+	view = TenantState(tenantCtx).taskAliasViewPtr.Load()
 	if taskAliasViewFresh(view, g.Number) {
 		return view
 	}
-	rebuilt := buildTaskAliasView(g)
-	taskAliasViewPtr.Store(rebuilt)
+	rebuilt := buildTaskAliasView(tenantCtx, g)
+	TenantState(tenantCtx).taskAliasViewPtr.Store(rebuilt)
 	return rebuilt
 }
 
@@ -67,10 +69,10 @@ func taskAliasViewFresh(view *taskAliasView, generation uint64) bool {
 	return view != nil && view.generation == generation && time.Now().Before(view.expiresAt)
 }
 
-func rebuildTaskAliasView() {
-	taskAliasRebuildMu.Lock()
-	defer taskAliasRebuildMu.Unlock()
-	taskAliasViewPtr.Store(buildTaskAliasView(jsplugin.DefaultRegistry.Generation()))
+func rebuildTaskAliasView(tenantCtx context.Context) {
+	TenantState(tenantCtx).taskAliasRebuildMu.Lock()
+	defer TenantState(tenantCtx).taskAliasRebuildMu.Unlock()
+	TenantState(tenantCtx).taskAliasViewPtr.Store(buildTaskAliasView(tenantCtx, jsplugin.TenantState(tenantCtx).DefaultRegistry.Generation()))
 }
 
 type taskAliasDraft struct {
@@ -78,7 +80,7 @@ type taskAliasDraft struct {
 	byPlugin  map[string]map[string]struct{}
 }
 
-func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
+func buildTaskAliasView(tenantCtx context.Context, generation *jsplugin.RoutingGeneration) *taskAliasView {
 	genNum := uint64(0)
 	if generation != nil {
 		genNum = generation.Number
@@ -93,7 +95,7 @@ func buildTaskAliasView(generation *jsplugin.RoutingGeneration) *taskAliasView {
 	}
 
 	var channels []Channel
-	err := DB.Select("id", "type", "models", "model_mapping").
+	err := DB.WithContext(tenantCtx).Select("id", "type", "models", "model_mapping").
 		Where("status = ?", common.ChannelStatusEnabled).
 		Find(&channels).Error
 	if err != nil {

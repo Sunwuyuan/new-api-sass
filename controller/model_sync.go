@@ -320,12 +320,12 @@ func SyncUpstreamPreview(c *gin.Context) {
 		common.ApiError(c, err)
 		return
 	}
-	locals, vendors, err := model.GetMetadataSyncState(model.DB)
+	locals, vendors, err := model.GetMetadataSyncState(model.DB.WithContext(c.Request.Context()))
 	if err != nil {
 		common.ApiError(c, err)
 		return
 	}
-	missing, err := model.GetMissingModels()
+	missing, err := model.GetMissingModels(c.Request.Context())
 	if err != nil {
 		common.ApiError(c, err)
 		return
@@ -438,7 +438,7 @@ func SyncUpstreamModels(c *gin.Context) {
 		}
 		updates = append(updates, model.MetadataSyncUpdate{MetadataSyncSelection: selection, Values: values})
 	}
-	result, err := model.ApplyMetadataSync(updates, vendors)
+	result, err := model.ApplyMetadataSync(c.Request.Context(), updates, vendors)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, model.ErrMetadataSyncConflict) {

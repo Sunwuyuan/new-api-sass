@@ -3,17 +3,16 @@ package middleware
 import (
 	"fmt"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/i18n"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/setting/model_setting"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,9 +21,9 @@ func TestChannelMatchesExpectedTaskPluginUsesGenericChannelSetting(t *testing.T)
 	channel := &model.Channel{Type: constant.ChannelTypeTaskPlugin}
 	channel.SetSetting(dto.ChannelSettings{TaskPluginKey: "generic-alpha"})
 
-	assert.True(t, channelMatchesExpectedTaskPlugin(nil, channel, "generic-alpha"))
-	assert.False(t, channelMatchesExpectedTaskPlugin(nil, channel, "generic-beta"))
-	assert.False(t, channelMatchesExpectedTaskPlugin(nil, channel, ""))
+	assert.True(t, channelMatchesExpectedTaskPlugin(testtenant.GinContext(), channel, "generic-alpha"))
+	assert.False(t, channelMatchesExpectedTaskPlugin(testtenant.GinContext(), channel, "generic-beta"))
+	assert.False(t, channelMatchesExpectedTaskPlugin(testtenant.GinContext(), channel, ""))
 }
 
 func TestChannelMatchesExpectedTaskPluginUsesPinnedLegacyIndex(t *testing.T) {
@@ -37,7 +36,7 @@ func TestChannelMatchesExpectedTaskPluginUsesPinnedLegacyIndex(t *testing.T) {
 	_, err = registry.Register(distributorTaskPluginSource("legacy-beta", constant.ChannelTypeKling), jsplugin.Options{})
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: pinnedGeneration,
 		Plugin:     alpha,
@@ -54,7 +53,7 @@ func TestChannelMatchesExpectedTaskPluginRejectsUnindexedLegacyChannel(t *testin
 	plugin, err := registry.Register(distributorTaskPluginSource("legacy-alpha", constant.ChannelTypeKling), jsplugin.Options{})
 	require.NoError(t, err)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{
 		Generation: registry.Generation(),
 		Plugin:     plugin,
@@ -63,7 +62,7 @@ func TestChannelMatchesExpectedTaskPluginRejectsUnindexedLegacyChannel(t *testin
 	assert.False(t, channelMatchesExpectedTaskPlugin(c, &model.Channel{Type: constant.ChannelTypeJimeng}, "legacy-alpha"))
 	assert.False(t, channelMatchesExpectedTaskPlugin(c, &model.Channel{Type: 0}, "legacy-alpha"))
 	assert.True(t, channelMatchesExpectedTaskPlugin(c, &model.Channel{Type: constant.ChannelTypeJimeng}, ""))
-	assert.False(t, channelMatchesExpectedTaskPlugin(nil, &model.Channel{Type: constant.ChannelTypeKling}, "legacy-alpha"))
+	assert.False(t, channelMatchesExpectedTaskPlugin(testtenant.GinContext(), &model.Channel{Type: constant.ChannelTypeKling}, "legacy-alpha"))
 
 	c.Set("expected_task_plugin_key", "legacy-alpha")
 	setupErr := SetupContextForSelectedChannel(c, &model.Channel{Type: constant.ChannelTypeJimeng}, "task-model")
@@ -80,7 +79,7 @@ func TestSharedEndpointRebindsToSelectedLegacyProvider(t *testing.T) {
 	candidates := registry.Generation().LookupEndpointCandidates("POST", "/v1/responses", "task-model")
 	require.Len(t, candidates, 2)
 
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Generation: registry.Generation(), Plugin: candidates[0].Plugin})
 	c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{
 		Generation: registry.Generation(),
@@ -155,28 +154,28 @@ export const protocols = {openai_responses: {
 
 func TestTokenModelLimitAllowsLegacyAliasAndModifierVariant(t *testing.T) {
 	aliasOnly := map[string]bool{"claude-3-7-sonnet-thinking": true}
-	assert.True(t, tokenModelLimitAllows(aliasOnly, "claude-3-7-sonnet-thinking"))
-	assert.False(t, tokenModelLimitAllows(aliasOnly, "claude-3-7-sonnet"))
+	assert.True(t, tokenModelLimitAllows(testtenant.Context(), aliasOnly, "claude-3-7-sonnet-thinking"))
+	assert.False(t, tokenModelLimitAllows(testtenant.Context(), aliasOnly, "claude-3-7-sonnet"))
 
 	baseOnly := map[string]bool{"claude-3-7-sonnet": true}
-	assert.True(t, tokenModelLimitAllows(baseOnly, "claude-3-7-sonnet@thinking:on"))
-	assert.True(t, tokenModelLimitAllows(baseOnly, "claude-3-7-sonnet-thinking"))
+	assert.True(t, tokenModelLimitAllows(testtenant.Context(), baseOnly, "claude-3-7-sonnet@thinking:on"))
+	assert.True(t, tokenModelLimitAllows(testtenant.Context(), baseOnly, "claude-3-7-sonnet-thinking"))
 
 	wildcard := map[string]bool{"gemini-2.5-flash-thinking-*": true}
-	assert.True(t, tokenModelLimitAllows(wildcard, "gemini-2.5-flash-thinking-8192"))
+	assert.True(t, tokenModelLimitAllows(testtenant.Context(), wildcard, "gemini-2.5-flash-thinking-8192"))
 }
 
 func TestTokenModelLimitAllowsExemptAtNameByFullName(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = original })
 	settings.ThinkingModelBlacklist = append(original, "re:.*@sha256:.*")
 
 	fullOnly := map[string]bool{"opaque@sha256:deadbeef": true}
-	assert.True(t, tokenModelLimitAllows(fullOnly, "opaque@sha256:deadbeef"))
+	assert.True(t, tokenModelLimitAllows(testtenant.Context(), fullOnly, "opaque@sha256:deadbeef"))
 
 	baseOnly := map[string]bool{"opaque": true}
-	assert.False(t, tokenModelLimitAllows(baseOnly, "opaque@sha256:deadbeef"))
+	assert.False(t, tokenModelLimitAllows(testtenant.Context(), baseOnly, "opaque@sha256:deadbeef"))
 }
 
 func TestNoAvailableChannelMessageNamesClaimingTaskPlugin(t *testing.T) {
@@ -185,8 +184,8 @@ func TestNoAvailableChannelMessageNamesClaimingTaskPlugin(t *testing.T) {
 	plugin, err := registry.Register(distributorTaskPluginSource("claimer", constant.ChannelTypeKling), jsplugin.Options{})
 	require.NoError(t, err)
 
-	pinned, _ := gin.CreateTestContext(nil)
-	pinned.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	pinned, _ := testtenant.CreateTestContext(nil)
+	pinned.Request = testtenant.NewRequest(http.MethodPost, "/v1/videos", nil)
 	pinned.Request.Header.Set("Accept-Language", "en")
 	pinned.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Generation: registry.Generation(), Plugin: plugin})
 	message := noAvailableChannelMessage(pinned, "default", "kling-v1")
@@ -194,8 +193,8 @@ func TestNoAvailableChannelMessageNamesClaimingTaskPlugin(t *testing.T) {
 	assert.Contains(t, message, "disable or override")
 	assert.Contains(t, message, "kling-v1")
 
-	plain, _ := gin.CreateTestContext(nil)
-	plain.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	plain, _ := testtenant.CreateTestContext(nil)
+	plain.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	plain.Request.Header.Set("Accept-Language", "en")
 	generic := noAvailableChannelMessage(plain, "default", "gpt-4o")
 	assert.NotContains(t, generic, "task plugin")
@@ -212,7 +211,7 @@ func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {
 	generation := registry.Generation()
 	candidates := generation.LookupEndpointCandidates("POST", "/v1/responses", "task-model")
 	require.Len(t, candidates, 2)
-	c, _ := gin.CreateTestContext(nil)
+	c, _ := testtenant.CreateTestContext(nil)
 	c.Set(jsplugin.ContextKeyPinnedPlugin, jsplugin.PinnedPlugin{Generation: generation, Plugin: candidates[0].Plugin})
 	c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{Generation: generation, Plugin: candidates[0].Plugin, Protocol: candidates[0].Protocol, Operation: candidates[0].Operation, Model: "task-model", Candidates: candidates})
 	c.Set("expected_task_plugin_key", "alpha")
@@ -225,6 +224,6 @@ func TestSharedEndpointRebindsToSelectedType61Plugin(t *testing.T) {
 	assert.Equal(t, "beta", c.GetString("expected_task_plugin_key"))
 	assert.Equal(t, "beta", c.MustGet(jsplugin.ContextKeyPinnedEndpoint).(jsplugin.PinnedEndpoint).Plugin.Meta.Key)
 	require.NoError(t, i18n.Init())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	assert.Contains(t, noAvailableChannelMessage(c, "default", "task-model"), "alpha, beta")
 }

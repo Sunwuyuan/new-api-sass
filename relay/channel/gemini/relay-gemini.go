@@ -542,8 +542,8 @@ type GeminiModelsResponse struct {
 	NextPageToken string            `json:"nextPageToken"`
 }
 
-func FetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
-	client, err := service.GetHttpClientWithProxy(proxyURL)
+func FetchGeminiModels(tenantCtx context.Context, baseURL, apiKey, proxyURL string) ([]string, error) {
+	client, err := service.GetHttpClientWithProxy(tenantCtx, proxyURL)
 	if err != nil {
 		return nil, fmt.Errorf("创建HTTP客户端失败: %v", err)
 	}
@@ -558,7 +558,7 @@ func FetchGeminiModels(baseURL, apiKey, proxyURL string) ([]string, error) {
 			url = fmt.Sprintf("%s?pageToken=%s", url, nextPageToken)
 		}
 
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(tenantCtx, 30*time.Second)
 		request, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			cancel()

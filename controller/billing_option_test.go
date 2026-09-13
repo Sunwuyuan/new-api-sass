@@ -7,10 +7,10 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/setting/config"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -29,9 +29,9 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(pluginKey) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(pluginKey) })
 
 	tests := []struct {
 		name       string
@@ -60,8 +60,8 @@ export function parseTaskResult() { return {}; }
 			})
 			require.NoError(t, marshalErr)
 			recorder := httptest.NewRecorder()
-			context, _ := gin.CreateTestContext(recorder)
-			context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
+			context, _ := testtenant.CreateTestContext(recorder)
+			context.Request = testtenant.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
 
 			UpdateOption(context)
 
@@ -85,8 +85,8 @@ func TestUpdateOptionRejectsUsageExpressionWithoutTaskPlugin(t *testing.T) {
 	})
 	require.NoError(t, err)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(
 		http.MethodPut,
 		"/api/option/",
 		strings.NewReader(string(body)),
@@ -117,9 +117,9 @@ export function parseSubmitResponse() { return {}; }
 export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `
-	_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(pluginKey) })
+	t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(pluginKey) })
 
 	mapping := `{"alias-model":"declared-model"}`
 	require.NoError(t, model.DB.Create(&model.Channel{
@@ -132,15 +132,15 @@ export function parseTaskResult() { return {}; }
 		Models:       "alias-model,declared-model",
 		ModelMapping: &mapping,
 	}).Error)
-	model.InitChannelCache()
+	model.InitChannelCache(testtenant.Context())
 
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
 
 	putExpr := func(modelName, expression string) *httptest.ResponseRecorder {
@@ -153,8 +153,8 @@ export function parseTaskResult() { return {}; }
 		})
 		require.NoError(t, marshalErr)
 		recorder := httptest.NewRecorder()
-		context, _ := gin.CreateTestContext(recorder)
-		context.Request = httptest.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
+		context, _ := testtenant.CreateTestContext(recorder)
+		context.Request = testtenant.NewRequest(http.MethodPut, "/api/option/", strings.NewReader(string(body)))
 		UpdateOption(context)
 		return recorder
 	}

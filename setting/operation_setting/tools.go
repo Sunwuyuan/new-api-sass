@@ -1,5 +1,7 @@
 package operation_setting
 
+import context "context"
+
 import (
 	"encoding/json"
 	"fmt"
@@ -63,7 +65,6 @@ var toolPriceSetting = ToolPriceSetting{
 
 func init() {
 	config.GlobalConfig.Register("tool_price_setting", &toolPriceSetting)
-	RebuildToolPriceIndex()
 }
 
 // ---------------------------------------------------------------------------
@@ -134,22 +135,22 @@ func ValidateToolPricesJSON(value string) error {
 // LoadToolPricesFromJSONString replaces the complete operator price map.
 // Invalid legacy entries are ignored individually so valid sibling overrides
 // survive, while missing built-in keys continue to use hardcoded fallbacks.
-func LoadToolPricesFromJSONString(value string) {
+func LoadToolPricesFromJSONString(tenantCtx context.Context, value string) {
 	prices, err := decodeToolPricesJSON(value, true)
 	if err != nil {
 		common.SysError("加载工具价格失败，将使用硬编码兜底: " + err.Error())
 		prices = make(map[string]float64)
 	}
-	toolPriceSetting.Prices = prices
-	RebuildToolPriceIndex()
+	(*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices = prices
+	RebuildToolPriceIndex(tenantCtx)
 }
 
 // RebuildToolPriceIndex rebuilds the lookup index from the current config.
 // Called on init and after config updates. Not on the billing hot path.
-func RebuildToolPriceIndex() {
-	merged := make(map[string]float64, 9+len(toolPriceSetting.Prices))
+func RebuildToolPriceIndex(tenantCtx context.Context) {
+	merged := make(map[string]float64, 9+len((*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices))
 	seedHardcodedToolPrices(merged)
-	for k, v := range toolPriceSetting.Prices {
+	for k, v := range (*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices {
 		if !isValidToolPrice(v) {
 			continue
 		}
@@ -184,16 +185,16 @@ func RebuildToolPriceIndex() {
 		idx.prefixes[tool] = entries
 	}
 
-	currentIndex.Store(idx)
+	TenantState(tenantCtx).currentIndex.Store(idx)
 }
 
 // GetToolPriceForModel returns the price ($/1K calls) for a tool given a model name.
 // Lookup: longest prefix match → tool default → 0.
-func GetToolPriceForModel(toolName, modelName string) float64 {
-	idx := currentIndex.Load()
+func GetToolPriceForModel(tenantCtx context.Context, toolName, modelName string) float64 {
+	idx := TenantState(tenantCtx).currentIndex.Load()
 	if idx == nil {
-		RebuildToolPriceIndex()
-		idx = currentIndex.Load()
+		RebuildToolPriceIndex(tenantCtx)
+		idx = TenantState(tenantCtx).currentIndex.Load()
 		if idx == nil {
 			return 0
 		}
@@ -214,23 +215,23 @@ func GetToolPriceForModel(toolName, modelName string) float64 {
 }
 
 // GetToolPrice is a convenience wrapper when no model name is needed.
-func GetToolPrice(toolName string) float64 {
-	return GetToolPriceForModel(toolName, "")
+func GetToolPrice(tenantCtx context.Context, toolName string) float64 {
+	return GetToolPriceForModel(tenantCtx, toolName, "")
 }
 
 // SetToolPriceForTest injects a tool price and rebuilds the lookup index. Tests only.
-func SetToolPriceForTest(name string, price float64) {
-	if toolPriceSetting.Prices == nil {
-		toolPriceSetting.Prices = make(map[string]float64)
+func SetToolPriceForTest(tenantCtx context.Context, name string, price float64) {
+	if (*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices == nil {
+		(*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices = make(map[string]float64)
 	}
-	toolPriceSetting.Prices[name] = price
-	RebuildToolPriceIndex()
+	(*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices[name] = price
+	RebuildToolPriceIndex(tenantCtx)
 }
 
 // DeleteToolPriceForTest removes an injected tool price and rebuilds the index. Tests only.
-func DeleteToolPriceForTest(name string) {
-	delete(toolPriceSetting.Prices, name)
-	RebuildToolPriceIndex()
+func DeleteToolPriceForTest(tenantCtx context.Context, name string) {
+	delete((*(config.GlobalConfig.ForTenant(tenantCtx).Get("tool_price_setting").(*ToolPriceSetting))).Prices, name)
+	RebuildToolPriceIndex(tenantCtx)
 }
 
 // ---------------------------------------------------------------------------

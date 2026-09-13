@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/require"
 )
 
@@ -242,28 +243,28 @@ func newTestTLSCertificate() (tls.Certificate, error) {
 
 func withSMTPSettings(t *testing.T) {
 	t.Helper()
-	originalSMTPServer := SMTPServer
-	originalSMTPPort := SMTPPort
-	originalSMTPSSLEnabled := SMTPSSLEnabled
-	originalSMTPStartTLSEnabled := SMTPStartTLSEnabled
-	originalSMTPInsecureSkipVerify := SMTPInsecureSkipVerify
-	originalSMTPForceAuthLogin := SMTPForceAuthLogin
-	originalSMTPAccount := SMTPAccount
-	originalSMTPFrom := SMTPFrom
-	originalSMTPToken := SMTPToken
-	originalSystemName := SystemName
+	originalSMTPServer := TenantState(testtenant.Context()).SMTPServer
+	originalSMTPPort := TenantState(testtenant.Context()).SMTPPort
+	originalSMTPSSLEnabled := TenantState(testtenant.Context()).SMTPSSLEnabled
+	originalSMTPStartTLSEnabled := TenantState(testtenant.Context()).SMTPStartTLSEnabled
+	originalSMTPInsecureSkipVerify := TenantState(testtenant.Context()).SMTPInsecureSkipVerify
+	originalSMTPForceAuthLogin := TenantState(testtenant.Context()).SMTPForceAuthLogin
+	originalSMTPAccount := TenantState(testtenant.Context()).SMTPAccount
+	originalSMTPFrom := TenantState(testtenant.Context()).SMTPFrom
+	originalSMTPToken := TenantState(testtenant.Context()).SMTPToken
+	originalSystemName := TenantState(testtenant.Context()).SystemName
 
 	t.Cleanup(func() {
-		SMTPServer = originalSMTPServer
-		SMTPPort = originalSMTPPort
-		SMTPSSLEnabled = originalSMTPSSLEnabled
-		SMTPStartTLSEnabled = originalSMTPStartTLSEnabled
-		SMTPInsecureSkipVerify = originalSMTPInsecureSkipVerify
-		SMTPForceAuthLogin = originalSMTPForceAuthLogin
-		SMTPAccount = originalSMTPAccount
-		SMTPFrom = originalSMTPFrom
-		SMTPToken = originalSMTPToken
-		SystemName = originalSystemName
+		TenantState(testtenant.Context()).SMTPServer = originalSMTPServer
+		TenantState(testtenant.Context()).SMTPPort = originalSMTPPort
+		TenantState(testtenant.Context()).SMTPSSLEnabled = originalSMTPSSLEnabled
+		TenantState(testtenant.Context()).SMTPStartTLSEnabled = originalSMTPStartTLSEnabled
+		TenantState(testtenant.Context()).SMTPInsecureSkipVerify = originalSMTPInsecureSkipVerify
+		TenantState(testtenant.Context()).SMTPForceAuthLogin = originalSMTPForceAuthLogin
+		TenantState(testtenant.Context()).SMTPAccount = originalSMTPAccount
+		TenantState(testtenant.Context()).SMTPFrom = originalSMTPFrom
+		TenantState(testtenant.Context()).SMTPToken = originalSMTPToken
+		TenantState(testtenant.Context()).SystemName = originalSystemName
 	})
 }
 
@@ -272,18 +273,18 @@ func TestSendEmailUsesExplicitStartTLSWithInsecureCertificate(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -300,18 +301,18 @@ func TestSendEmailExplicitStartTLSRequiresServerSupport(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "STARTTLS")
 }
@@ -321,18 +322,18 @@ func TestSendEmailDoesNotAutoUpgradeWhenStartTLSDisabled(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = false
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = false
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -354,22 +355,22 @@ func TestSMTPPlainAuthRejectsRemotePlaintextConnection(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = "smtp.example.com"
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
+	TenantState(testtenant.Context()).SMTPServer = "smtp.example.com"
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = false
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = false
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
 
 	conn, err := net.Dial("tcp", net.JoinHostPort(server.host, strconv.Itoa(server.port)))
 	require.NoError(t, err)
-	client, err := smtp.NewClient(conn, SMTPServer)
+	client, err := smtp.NewClient(conn, TenantState(testtenant.Context()).SMTPServer)
 	require.NoError(t, err)
 
-	err = client.Auth(getSMTPAuth())
+	err = client.Auth(getSMTPAuth(testtenant.Context()))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unencrypted connection")
 
@@ -385,13 +386,13 @@ func TestNewSMTPClientHonorsExplicitStartTLSWhenPortIs465(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = 465
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = 465
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
 
-	client, err := newSMTPClient(fmt.Sprintf("%s:%d", server.host, server.port))
+	client, err := newSMTPClient(testtenant.Context(), fmt.Sprintf("%s:%d", server.host, server.port))
 	require.NoError(t, err)
 	defer client.Close()
 
@@ -408,13 +409,13 @@ func TestNewSMTPClientKeepsImplicitTLSForLegacyPort465(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = 465
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = 465
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = false
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
 
-	client, err := newSMTPClient(fmt.Sprintf("%s:%d", server.host, server.port))
+	client, err := newSMTPClient(testtenant.Context(), fmt.Sprintf("%s:%d", server.host, server.port))
 	require.NoError(t, err)
 	defer client.Close()
 }
@@ -424,18 +425,18 @@ func TestSendEmailSkipsAuthWhenCredentialsAreEmpty(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = ""
-	SMTPFrom = "sender@example.com"
-	SMTPToken = ""
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = false
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = false
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = ""
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = ""
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -457,18 +458,18 @@ func TestSendEmailSkipsAuthWhenCredentialsAreIncomplete(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = false
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = ""
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = false
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = false
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = ""
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -491,18 +492,18 @@ func TestSendEmailUsesNTLMWhenServerOnlySupportsNTLM(t *testing.T) {
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "no-reply"
-	SMTPFrom = "no-reply@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "no-reply"
+	TenantState(testtenant.Context()).SMTPFrom = "no-reply@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -519,18 +520,18 @@ func TestSendEmailUsesNTLMForMicrosoftAccountWhenServerOnlySupportsNTLM(t *testi
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = true
-	SMTPForceAuthLogin = false
-	SMTPAccount = "no-reply@contoso.onmicrosoft.com"
-	SMTPFrom = "no-reply@contoso.onmicrosoft.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = true
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "no-reply@contoso.onmicrosoft.com"
+	TenantState(testtenant.Context()).SMTPFrom = "no-reply@contoso.onmicrosoft.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.NoError(t, err)
 
 	select {
@@ -546,18 +547,18 @@ func TestSendEmailExplicitStartTLSRejectsUntrustedCertificateByDefault(t *testin
 	defer server.close()
 	withSMTPSettings(t)
 
-	SMTPServer = server.host
-	SMTPPort = server.port
-	SMTPSSLEnabled = false
-	SMTPStartTLSEnabled = true
-	SMTPInsecureSkipVerify = false
-	SMTPForceAuthLogin = false
-	SMTPAccount = "sender@example.com"
-	SMTPFrom = "sender@example.com"
-	SMTPToken = "secret"
-	SystemName = "New API"
+	TenantState(testtenant.Context()).SMTPServer = server.host
+	TenantState(testtenant.Context()).SMTPPort = server.port
+	TenantState(testtenant.Context()).SMTPSSLEnabled = false
+	TenantState(testtenant.Context()).SMTPStartTLSEnabled = true
+	TenantState(testtenant.Context()).SMTPInsecureSkipVerify = false
+	TenantState(testtenant.Context()).SMTPForceAuthLogin = false
+	TenantState(testtenant.Context()).SMTPAccount = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPFrom = "sender@example.com"
+	TenantState(testtenant.Context()).SMTPToken = "secret"
+	TenantState(testtenant.Context()).SystemName = "New API"
 
-	err := SendEmail("Verification", "receiver@example.com", "<p>123456</p>")
+	err := SendEmail(testtenant.Context(), "Verification", "receiver@example.com", "<p>123456</p>")
 	require.Error(t, err)
 	require.Contains(t, fmt.Sprint(err), "certificate")
 }

@@ -99,10 +99,10 @@ func applyDeepSeekV4OpenAIThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
-	if model_setting.ShouldPreserveThinkingSuffix(modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+	if model_setting.ShouldPreserveThinkingSuffix(info.Context, modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.Context, info.OriginModelName) {
 		return nil
 	}
-	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	baseModel, thinkingType, effort, ok := reasoning.TenantState(info.Context).ParseDeepSeekV4ThinkingSuffix(modelName)
 	if !ok {
 		return nil
 	}
@@ -129,10 +129,10 @@ func applyDeepSeekV4ClaudeThinkingSuffix(info *relaycommon.RelayInfo, request *d
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
-	if model_setting.ShouldPreserveThinkingSuffix(modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+	if model_setting.ShouldPreserveThinkingSuffix(info.Context, modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.Context, info.OriginModelName) {
 		return nil
 	}
-	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	baseModel, thinkingType, effort, ok := reasoning.TenantState(info.Context).ParseDeepSeekV4ThinkingSuffix(modelName)
 	if !ok {
 		return nil
 	}
@@ -177,10 +177,10 @@ func applyDeepSeekV4ResponsesThinkingSuffix(info *relaycommon.RelayInfo, request
 	if info != nil && info.ChannelMeta != nil && info.UpstreamModelName != "" {
 		modelName = info.UpstreamModelName
 	}
-	if model_setting.ShouldPreserveThinkingSuffix(modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.OriginModelName) {
+	if model_setting.ShouldPreserveThinkingSuffix(info.Context, modelName) || info != nil && model_setting.ShouldPreserveThinkingSuffix(info.Context, info.OriginModelName) {
 		return
 	}
-	baseModel, thinkingType, effort, ok := reasoning.ParseDeepSeekV4ThinkingSuffix(modelName)
+	baseModel, thinkingType, effort, ok := reasoning.TenantState(info.Context).ParseDeepSeekV4ThinkingSuffix(modelName)
 	if ok {
 		if thinkingType == "disabled" {
 			effort = "none"

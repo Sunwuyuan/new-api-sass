@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
@@ -30,8 +31,8 @@ func newAuthzTestDB(t *testing.T) *gorm.DB {
 func TestInitSeedsBuiltInRolesAndPoliciesOnce(t *testing.T) {
 	db := newAuthzTestDB(t)
 
-	require.NoError(t, Init(db))
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
 	// root is a superuser role and is granted everything implicitly, so only the
 	// admin baseline is written as explicit policy rows.
@@ -45,12 +46,12 @@ func TestInitSeedsBuiltInRolesAndPoliciesOnce(t *testing.T) {
 	assert.Equal(t, BuiltInRoleRoot, roles[0].Key)
 	assert.Equal(t, BuiltInRoleAdmin, roles[1].Key)
 
-	assert.True(t, Can(1, common.RoleRootUser, ChannelSensitiveWrite))
-	assert.True(t, Can(2, common.RoleAdminUser, ChannelRead))
-	assert.True(t, Can(2, common.RoleAdminUser, ChannelOperate))
-	assert.True(t, Can(2, common.RoleAdminUser, ChannelWrite))
-	assert.False(t, Can(2, common.RoleAdminUser, ChannelSensitiveWrite))
-	assert.False(t, Can(3, common.RoleCommonUser, ChannelRead))
+	assert.True(t, Can(testtenant.Context(), 1, common.RoleRootUser, ChannelSensitiveWrite))
+	assert.True(t, Can(testtenant.Context(), 2, common.RoleAdminUser, ChannelRead))
+	assert.True(t, Can(testtenant.Context(), 2, common.RoleAdminUser, ChannelOperate))
+	assert.True(t, Can(testtenant.Context(), 2, common.RoleAdminUser, ChannelWrite))
+	assert.False(t, Can(testtenant.Context(), 2, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 3, common.RoleCommonUser, ChannelRead))
 }
 
 func TestInitOnSlaveOnlyLoadsPolicies(t *testing.T) {
@@ -66,7 +67,7 @@ func TestInitOnSlaveOnlyLoadsPolicies(t *testing.T) {
 	sqlDB.SetMaxOpenConns(1)
 	require.NoError(t, db.AutoMigrate(&model.CasbinRule{}, &model.AuthzRole{}))
 
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
 	var roleCount int64
 	require.NoError(t, db.Model(&model.AuthzRole{}).Count(&roleCount).Error)
@@ -74,14 +75,14 @@ func TestInitOnSlaveOnlyLoadsPolicies(t *testing.T) {
 	var policyCount int64
 	require.NoError(t, db.Model(&model.CasbinRule{}).Count(&policyCount).Error)
 	assert.Equal(t, int64(0), policyCount)
-	assert.False(t, Can(2, common.RoleAdminUser, ChannelRead))
+	assert.False(t, Can(testtenant.Context(), 2, common.RoleAdminUser, ChannelRead))
 }
 
 func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
-	require.NoError(t, SetUserPermissions(42, PermissionsMap{
+	require.NoError(t, SetUserPermissions(testtenant.Context(), 42, PermissionsMap{
 		ResourceChannel: {
 			ActionRead:           true,
 			ActionOperate:        true,
@@ -95,8 +96,8 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 		},
 	}))
 
-	assert.True(t, Can(42, common.RoleAdminUser, ChannelSensitiveWrite))
-	assert.False(t, Can(42, common.RoleAdminUser, ChannelWrite))
+	assert.True(t, Can(testtenant.Context(), 42, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 42, common.RoleAdminUser, ChannelWrite))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
 			ActionRead:           true,
@@ -109,26 +110,26 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionBind: false,
 		},
 		ResourceAudit: {ActionRead: false},
-	}, ExplicitUserPermissions(42))
+	}, ExplicitUserPermissions(testtenant.Context(), 42))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
 			ActionSensitiveWrite: true,
 			ActionWrite:          false,
 		},
-	}, ExplicitUserOverrides(42))
+	}, ExplicitUserOverrides(testtenant.Context(), 42))
 
 	var userPolicyCount int64
 	require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ?", UserSubject(42)).Count(&userPolicyCount).Error)
 	assert.Equal(t, int64(2), userPolicyCount)
 
-	require.NoError(t, SetUserPermissions(42, PermissionsMap{ResourceChannel: {
+	require.NoError(t, SetUserPermissions(testtenant.Context(), 42, PermissionsMap{ResourceChannel: {
 		ActionRead:           true,
 		ActionOperate:        true,
 		ActionWrite:          true,
 		ActionSensitiveWrite: false,
 		ActionSecretView:     false,
 	}}))
-	assert.False(t, Can(42, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 42, common.RoleAdminUser, ChannelSensitiveWrite))
 	assert.Equal(t, PermissionsMap{
 		ResourceChannel: {
 			ActionRead:           true,
@@ -141,36 +142,36 @@ func TestSetUserPermissionsStoresOnlyOverrides(t *testing.T) {
 			ActionBind: false,
 		},
 		ResourceAudit: {ActionRead: false},
-	}, ExplicitUserPermissions(42))
-	assert.Empty(t, ExplicitUserOverrides(42))
+	}, ExplicitUserPermissions(testtenant.Context(), 42))
+	assert.Empty(t, ExplicitUserOverrides(testtenant.Context(), 42))
 }
 
 func TestClearUserAuthorizationRemovesOverrides(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
-	require.NoError(t, SetUserPermissions(90, PermissionsMap{ResourceChannel: {
+	require.NoError(t, SetUserPermissions(testtenant.Context(), 90, PermissionsMap{ResourceChannel: {
 		ActionWrite:          false,
 		ActionSensitiveWrite: true,
 	}}))
 
-	assert.True(t, Can(90, common.RoleAdminUser, ChannelSensitiveWrite))
-	assert.False(t, Can(90, common.RoleAdminUser, ChannelWrite))
+	assert.True(t, Can(testtenant.Context(), 90, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 90, common.RoleAdminUser, ChannelWrite))
 
-	require.NoError(t, ClearUserAuthorization(90))
+	require.NoError(t, ClearUserAuthorization(testtenant.Context(), 90))
 
-	assert.Empty(t, ExplicitUserOverrides(90))
-	assert.True(t, Can(90, common.RoleAdminUser, ChannelRead))
-	assert.True(t, Can(90, common.RoleAdminUser, ChannelWrite))
-	assert.False(t, Can(90, common.RoleAdminUser, ChannelSensitiveWrite))
-	assert.False(t, Can(90, common.RoleCommonUser, ChannelRead))
+	assert.Empty(t, ExplicitUserOverrides(testtenant.Context(), 90))
+	assert.True(t, Can(testtenant.Context(), 90, common.RoleAdminUser, ChannelRead))
+	assert.True(t, Can(testtenant.Context(), 90, common.RoleAdminUser, ChannelWrite))
+	assert.False(t, Can(testtenant.Context(), 90, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 90, common.RoleCommonUser, ChannelRead))
 }
 
 func TestSetUserPermissionsInTxDoesNotMutateEnforcerBeforeReload(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
-	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
+	require.NoError(t, db.WithContext(testtenant.Context()).Transaction(func(tx *gorm.DB) error {
 		return SetUserPermissionsInTx(tx, 42, PermissionsMap{ResourceChannel: {
 			ActionRead:           true,
 			ActionOperate:        true,
@@ -180,24 +181,24 @@ func TestSetUserPermissionsInTxDoesNotMutateEnforcerBeforeReload(t *testing.T) {
 		}})
 	}))
 
-	assert.False(t, Can(42, common.RoleAdminUser, ChannelSensitiveWrite))
-	require.NoError(t, ReloadPolicy())
-	assert.True(t, Can(42, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 42, common.RoleAdminUser, ChannelSensitiveWrite))
+	require.NoError(t, ReloadPolicy(testtenant.Context()))
+	assert.True(t, Can(testtenant.Context(), 42, common.RoleAdminUser, ChannelSensitiveWrite))
 }
 
 func TestSetUserPermissionsInTxRollbackLeavesNoPolicy(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
-	tx := db.Begin()
+	tx := db.WithContext(testtenant.Context()).Begin()
 	require.NoError(t, tx.Error)
 	require.NoError(t, SetUserPermissionsInTx(tx, 43, PermissionsMap{ResourceChannel: {
 		ActionSensitiveWrite: true,
 	}}))
 	require.NoError(t, tx.Rollback().Error)
-	require.NoError(t, ReloadPolicy())
+	require.NoError(t, ReloadPolicy(testtenant.Context()))
 
-	assert.False(t, Can(43, common.RoleAdminUser, ChannelSensitiveWrite))
+	assert.False(t, Can(testtenant.Context(), 43, common.RoleAdminUser, ChannelSensitiveWrite))
 	var count int64
 	require.NoError(t, db.Model(&model.CasbinRule{}).Where("v0 = ?", UserSubject(43)).Count(&count).Error)
 	assert.Equal(t, int64(0), count)
@@ -225,9 +226,9 @@ func TestAdapterAddPolicyIsIdempotent(t *testing.T) {
 
 func TestCapabilitiesUseCatalogShape(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
-	capabilities := Capabilities(7, common.RoleAdminUser)
+	capabilities := Capabilities(testtenant.Context(), 7, common.RoleAdminUser)
 
 	assert.True(t, capabilities[ResourceChannel][ActionRead])
 	assert.True(t, capabilities[ResourceChannel][ActionOperate])
@@ -239,7 +240,7 @@ func TestCapabilitiesUseCatalogShape(t *testing.T) {
 
 func TestTaskPluginBindIsRootOnlyUntilGranted(t *testing.T) {
 	db := newAuthzTestDB(t)
-	require.NoError(t, Init(db))
+	require.NoError(t, Init(db.WithContext(testtenant.Context())))
 
 	var bindAction *ActionDefinition
 	for _, resource := range Catalog() {
@@ -258,16 +259,16 @@ func TestTaskPluginBindIsRootOnlyUntilGranted(t *testing.T) {
 	assert.Equal(t, "List registered task plugins and bind them when creating or editing task plugin channels.", bindAction.DescriptionKey)
 	assert.Empty(t, bindAction.DefaultRoles)
 
-	assert.False(t, Can(2, common.RoleAdminUser, TaskPluginBind))
-	assert.True(t, Can(1, common.RoleRootUser, TaskPluginBind))
+	assert.False(t, Can(testtenant.Context(), 2, common.RoleAdminUser, TaskPluginBind))
+	assert.True(t, Can(testtenant.Context(), 1, common.RoleRootUser, TaskPluginBind))
 
-	enforcer := currentEnforcer()
+	enforcer := currentEnforcer(testtenant.Context())
 	require.NotNil(t, enforcer)
-	_, err := enforcer.AddPolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
+	_, err := TenantState(testtenant.Context()).enforcer.AddPolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
 	require.NoError(t, err)
-	assert.True(t, Can(2, common.RoleAdminUser, TaskPluginBind))
+	assert.True(t, Can(testtenant.Context(), 2, common.RoleAdminUser, TaskPluginBind))
 
-	_, err = enforcer.RemovePolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
+	_, err = TenantState(testtenant.Context()).enforcer.RemovePolicy(RoleSubject(BuiltInRoleAdmin), ResourceTaskPlugin, ActionBind, EffectAllow)
 	require.NoError(t, err)
-	assert.False(t, Can(2, common.RoleAdminUser, TaskPluginBind))
+	assert.False(t, Can(testtenant.Context(), 2, common.RoleAdminUser, TaskPluginBind))
 }

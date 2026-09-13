@@ -56,6 +56,13 @@ function AdminSystemUpdateAction(props: SystemUpdateActionProps) {
   const compact = props.compact ?? true
   const versionPresentation = props.presentation === 'version'
   const version = update.currentVersion?.trim() || t('Unknown version')
+  if (update.hosted && !versionPresentation) {
+    return (
+      <p className='text-muted-foreground text-sm'>
+        {t('Updates are managed by the platform.')}
+      </p>
+    )
+  }
   const label = update.shouldNotify
     ? t('Update available')
     : t('Check for updates')

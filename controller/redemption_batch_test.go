@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/middleware"
 	"github.com/QuantumNous/new-api/model"
-	"github.com/gin-gonic/gin"
 	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -104,7 +104,7 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			codes[15].Name = "unselected"
 			codes[15].Status = common.RedemptionCodeStatusDisabled
 			require.NoError(t, model.DB.Create(&codes).Error)
-			router := gin.New()
+			router := testtenant.NewRouter()
 			router.Use(middleware.RequestId())
 			router.POST("/api/redemption/batch", middleware.AdminAuth(), DeleteRedemptionBatch)
 
@@ -117,7 +117,7 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			for _, body := range []string{"{}", `{"ids":[]}`, `{"ids":null}`, `{"ids":[0]}`, `{"ids":[1,-1]}`, `{"ids":["1"]}`, "{", string(oversized)} {
 				t.Run("invalid_"+body[:min(len(body), 30)], func(t *testing.T) {
 					response := httptest.NewRecorder()
-					request := httptest.NewRequest(http.MethodPost, "/api/redemption/batch", bytes.NewBufferString(body))
+					request := testtenant.NewRequest(http.MethodPost, "/api/redemption/batch", bytes.NewBufferString(body))
 					request.Header.Set("Authorization", "Bearer "+token)
 					router.ServeHTTP(response, request)
 					var result struct {
@@ -135,7 +135,7 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 					assert.Equal(t, "redemption.delete_batch", events[0].Action)
 				})
 			}
-			_, err = model.BatchDeleteRedemptions(nil)
+			_, err = model.BatchDeleteRedemptions(testtenant.Context(), nil)
 			require.Error(t, err)
 			requestedIDs := make([]int, 0, 17)
 			for _, code := range codes[:15] {
@@ -146,7 +146,7 @@ func TestDeleteRedemptionBatch(t *testing.T) {
 			require.NoError(t, err)
 			for _, expectedCount := range []int64{15, 0} {
 				response := httptest.NewRecorder()
-				request := httptest.NewRequest(http.MethodPost, "/api/redemption/batch", bytes.NewReader(payload))
+				request := testtenant.NewRequest(http.MethodPost, "/api/redemption/batch", bytes.NewReader(payload))
 				request.Header.Set("Authorization", "Bearer "+token)
 				router.ServeHTTP(response, request)
 				assert.Equal(t, http.StatusOK, response.Code)

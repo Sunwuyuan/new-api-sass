@@ -8,9 +8,12 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
@@ -60,15 +63,15 @@ func newTaskSubmitContext(t *testing.T, originalModel, mapping string) (*gin.Con
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/videos", nil)
 	common.SetContextKey(c, constant.ContextKeyOriginalModel, originalModel)
 	common.SetContextKey(c, constant.ContextKeyChannelBaseUrl, "https://provider.example")
 	if mapping != "" {
 		c.Set("model_mapping", mapping)
 	}
 	c.Set("task_request", map[string]any{"prompt": "p"})
-	return c, &relaycommon.RelayInfo{TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	return c, &relaycommon.RelayInfo{Context: testtenant.Context(), TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 }
 
 func TestRelayTaskSubmitMapsBeforeValidateWhenOriginSet(t *testing.T) {
@@ -141,12 +144,12 @@ export function parseTaskResult(){return {status:"SUCCESS"};}
 func saveBillingConfig(t *testing.T) {
 	t.Helper()
 	saved := map[string]string{}
-	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).SaveToDB(func(key, value string) error {
 		saved[key] = value
 		return nil
 	}))
 	t.Cleanup(func() {
-		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+		require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(saved))
 	})
 }
 
@@ -201,15 +204,15 @@ export function extractUsage(){return {old_units:2};}
 				require.NoError(t, marshalErr)
 				exprJSON, marshalErr := common.Marshal(testCase.exprs)
 				require.NoError(t, marshalErr)
-				require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+				require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 					"billing_setting.billing_mode": string(modeJSON),
 					"billing_setting.billing_expr": string(exprJSON),
 				}))
 				if testCase.wantExpr == aliasExpr {
-					require.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode("alias-model"))
+					require.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(testtenant.Context(), "alias-model"))
 				} else {
-					require.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode("alias-model"))
-					require.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode("declared-model"))
+					require.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(testtenant.Context(), "alias-model"))
+					require.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(testtenant.Context(), "declared-model"))
 				}
 			}
 
@@ -241,7 +244,7 @@ export function extractUsage(){return {old_units:2};}
 				assert.Equal(t, billingexpr.ExprHashString(testCase.wantExpr), info.TieredBillingSnapshot.ExprHash)
 				assert.NotEqual(t, "model_price_error", taskErr.Code)
 				if testCase.wantExpr == legacyExpr {
-					assert.Equal(t, 4*common.QuotaPerUnit, info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup)
+					assert.Equal(t, 4*common.TenantState(testtenant.Context()).QuotaPerUnit, info.TieredBillingSnapshot.EstimatedQuotaBeforeGroup)
 				}
 			} else {
 				assert.Nil(t, info.TieredBillingSnapshot)
@@ -290,7 +293,7 @@ func TestSharedTaskBillingExpressionSelectionAndFrozenSettlement(t *testing.T) {
 			require.NoError(t, err)
 			expressions, err := common.Marshal(map[string]string{"declared-model": tc.modelExpr})
 			require.NoError(t, err)
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 				billing_setting.PluginBillingExprOption: string(rawVariants), "billing_setting.billing_mode": string(modes), "billing_setting.billing_expr": string(expressions),
 			}))
 			c, info := newTaskSubmitContext(t, tc.model, tc.mapping)
@@ -312,7 +315,7 @@ func TestSharedTaskBillingExpressionSelectionAndFrozenSettlement(t *testing.T) {
 			require.NotNil(t, info.TieredBillingSnapshot, "submission error: %+v", taskErr)
 			assert.Equal(t, tc.wantExpr, info.TieredBillingSnapshot.ExprString)
 			assert.NotEqual(t, "model_price_error", taskErr.Code)
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: `{}`, "billing_setting.billing_expr": `{}`}))
+			require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: `{}`, "billing_setting.billing_expr": `{}`}))
 			field := "seconds"
 			if tc.plugin == "billing-beta" {
 				field = "credits"

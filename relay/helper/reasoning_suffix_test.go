@@ -7,11 +7,15 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+
 	kitreasoning "github.com/QuantumNous/new-api/relaykit/relayconvert/reasoning"
 	"github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/QuantumNous/new-api/setting/model_setting"
+
 	hostreasoning "github.com/QuantumNous/new-api/setting/reasoning"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -25,7 +29,7 @@ func mustApplyReasoningModelSuffix(t *testing.T, info *relaycommon.RelayInfo, ou
 }
 
 func TestApplyReasoningModelSuffixTrimsUpstreamAndAttachesState(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-3-7-sonnet-thinking",
@@ -39,7 +43,7 @@ func TestApplyReasoningModelSuffixTrimsUpstreamAndAttachesState(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixRetryKeepsEquivalentState(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-opus-4-8-high",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-opus-4-8-high",
@@ -62,7 +66,7 @@ func TestApplyReasoningModelSuffixRetryKeepsEquivalentState(t *testing.T) {
 func TestApplyReasoningModelSuffixRetryClearsStateWhenNewChannelHasNoSuffix(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	req := &dto.ClaudeRequest{Model: "claude-3-7-sonnet"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet",
 		Request:         req,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -73,8 +77,8 @@ func TestApplyReasoningModelSuffixRetryClearsStateWhenNewChannelHasNoSuffix(t *t
 	mustApplyReasoningModelSuffix(t, info)
 	require.NotNil(t, info.ReasoningState())
 
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
-	ctx.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	ctx.Request = testtenant.NewRequest("POST", "/v1/messages", nil)
 	common.SetContextKey(ctx, constant.ContextKeyOriginalModel, "claude-3-7-sonnet")
 	common.SetContextKey(ctx, constant.ContextKeyChannelType, constant.ChannelTypeAnthropic)
 	info.InitChannelMeta(ctx)
@@ -85,12 +89,12 @@ func TestApplyReasoningModelSuffixRetryClearsStateWhenNewChannelHasNoSuffix(t *t
 }
 
 func TestApplyReasoningModelSuffixPassThroughDoesNotTrim(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := settings.PassThroughRequestEnabled
 	t.Cleanup(func() { settings.PassThroughRequestEnabled = original })
 	settings.PassThroughRequestEnabled = true
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-3-7-sonnet-thinking",
@@ -103,12 +107,12 @@ func TestApplyReasoningModelSuffixPassThroughDoesNotTrim(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixBlacklistDoesNotTrim(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = original })
 	settings.ThinkingModelBlacklist = append(settings.ThinkingModelBlacklist, "claude-3-7-sonnet-thinking")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "claude-3-7-sonnet-thinking",
@@ -121,7 +125,7 @@ func TestApplyReasoningModelSuffixBlacklistDoesNotTrim(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixModifierOverridesExplicitConflict(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "claude-3-7-sonnet-thinking",
 		Request: &dto.ClaudeRequest{
 			Model:    "claude-3-7-sonnet-thinking",
@@ -142,12 +146,12 @@ func TestApplyReasoningModelSuffixModifierOverridesExplicitConflict(t *testing.T
 }
 
 func TestApplyReasoningModelSuffixGeminiNoThinkingWhenAdapterEnabled(t *testing.T) {
-	settings := model_setting.GetGeminiSettings()
+	settings := model_setting.GetGeminiSettings(testtenant.Context())
 	original := settings.ThinkingAdapterEnabled
 	t.Cleanup(func() { settings.ThinkingAdapterEnabled = original })
 	settings.ThinkingAdapterEnabled = true
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gemini-2.5-flash-nothinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "gemini-2.5-flash-nothinking",
@@ -162,7 +166,7 @@ func TestApplyReasoningModelSuffixGeminiNoThinkingWhenAdapterEnabled(t *testing.
 }
 
 func TestApplyReasoningModelSuffixPreservesEffortTailModelID(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "qwen-max",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "qwen-max",
@@ -175,7 +179,7 @@ func TestApplyReasoningModelSuffixPreservesEffortTailModelID(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixLeavesDeepSeekV4SuffixForAdaptor(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "deepseek-v4-chat-max",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:       constant.ChannelTypeDeepSeek,
@@ -189,7 +193,7 @@ func TestApplyReasoningModelSuffixLeavesDeepSeekV4SuffixForAdaptor(t *testing.T)
 }
 
 func TestApplyReasoningModelSuffixLeavesVolcengineDeepSeekThinkingForAdaptor(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "deepseek-r1-thinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:       constant.ChannelTypeVolcEngine,
@@ -203,7 +207,7 @@ func TestApplyReasoningModelSuffixLeavesVolcengineDeepSeekThinkingForAdaptor(t *
 }
 
 func TestApplyReasoningModelSuffixStillParsesOpenAIEffortTail(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1-high",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:       constant.ChannelTypeOpenAI,
@@ -219,7 +223,7 @@ func TestApplyReasoningModelSuffixStillParsesOpenAIEffortTail(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixLeavesUnknownOpenRouterThinkingModel(t *testing.T) {
-	openRouter := &relaycommon.RelayInfo{
+	openRouter := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "some-model-thinking",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelType:       constant.ChannelTypeOpenRouter,
@@ -232,7 +236,7 @@ func TestApplyReasoningModelSuffixLeavesUnknownOpenRouterThinkingModel(t *testin
 }
 
 func TestApplyReasoningModelSuffixLeavesVersionedQwenMaxUntouched(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "qwen3.8-max",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "qwen3.8-max",
@@ -247,7 +251,7 @@ func TestApplyReasoningModelSuffixLeavesVersionedQwenMaxUntouched(t *testing.T) 
 
 func TestApplyReasoningModelSuffixTreatsCloudflareAtAsModelName(t *testing.T) {
 	const model = "@cf/meta/llama-3.1-8b-instruct"
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		ChannelMeta:     &relaycommon.ChannelMeta{UpstreamModelName: model},
 	}
@@ -266,7 +270,7 @@ func TestApplyReasoningModelSuffixAppliesExplicitModifierChain(t *testing.T) {
 		Temperature:     &temperature,
 		TopP:            &topP,
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -294,7 +298,7 @@ func TestApplyReasoningModelSuffixAppliesExplicitModifierChain(t *testing.T) {
 
 func TestApplyReasoningModelSuffixRejectsUnknownModifierKey(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "m@thinkin:on"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -314,7 +318,7 @@ func TestApplyReasoningModelSuffixRejectsUnknownModifierKey(t *testing.T) {
 
 func TestApplyReasoningModelSuffixThinkingOnOnly(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@thinking:on"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -332,7 +336,7 @@ func TestApplyReasoningModelSuffixThinkingOnOnly(t *testing.T) {
 
 func TestApplyReasoningModelSuffixThinkingOff(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@thinking:off"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -349,7 +353,7 @@ func TestApplyReasoningModelSuffixThinkingOff(t *testing.T) {
 
 func TestApplyReasoningModelSuffixThinkingLegacyValuesRejected(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@thinking:enabled"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -370,7 +374,7 @@ func TestApplyReasoningModelSuffixThinkingLegacyValuesRejected(t *testing.T) {
 
 func TestApplyReasoningModelSuffixDuplicateModifierLastWins(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@thinking:on@thinking:off"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -392,13 +396,13 @@ func TestApplyReasoningModelSuffixDuplicateModifierLastWins(t *testing.T) {
 
 func TestApplyReasoningModelSuffixExactExemptionKeepsOpaqueName(t *testing.T) {
 	const model = "opaque@sha256:abc"
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = original })
 	settings.ThinkingModelBlacklist = append(original, model)
 
 	request := &dto.GeneralOpenAIRequest{Model: model}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -415,13 +419,13 @@ func TestApplyReasoningModelSuffixExactExemptionKeepsOpaqueName(t *testing.T) {
 
 func TestApplyReasoningModelSuffixRegexExemptionKeepsOpaqueName(t *testing.T) {
 	const model = "m@sha256:abc"
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := append([]string(nil), settings.ThinkingModelBlacklist...)
 	t.Cleanup(func() { settings.ThinkingModelBlacklist = original })
 	settings.ThinkingModelBlacklist = append(original, "re:.*@sha256:.*")
 
 	request := &dto.GeneralOpenAIRequest{Model: model}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -438,7 +442,7 @@ func TestApplyReasoningModelSuffixRegexExemptionKeepsOpaqueName(t *testing.T) {
 
 func TestApplyReasoningModelSuffixEffortNoneDisables(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@effort:none"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -454,7 +458,7 @@ func TestApplyReasoningModelSuffixEffortNoneDisables(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixPassThroughKeepsModifierBodyVerbatim(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := settings.PassThroughRequestEnabled
 	t.Cleanup(func() { settings.PassThroughRequestEnabled = original })
 	settings.PassThroughRequestEnabled = true
@@ -462,11 +466,11 @@ func TestApplyReasoningModelSuffixPassThroughKeepsModifierBodyVerbatim(t *testin
 	gin.SetMode(gin.TestMode)
 	const model = "qwen3.8-max@thinking:on@effort:high@temperature:0.2@topp:0.8"
 	body := `{"model":"` + model + `","messages":[],"vendor_extension":{"keep":true}}`
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	request := &dto.GeneralOpenAIRequest{Model: model}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		Request:         request,
 		RelayFormat:     types.RelayFormatOpenAI,
@@ -491,11 +495,11 @@ func TestApplyReasoningModelSuffixChannelPassThroughKeepsModifierBodyVerbatim(t 
 	gin.SetMode(gin.TestMode)
 	const model = "qwen3.8-max@thinking:on"
 	body := `{"model":"` + model + `","messages":[]}`
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	request := &dto.GeneralOpenAIRequest{Model: model}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -515,14 +519,14 @@ func TestApplyReasoningModelSuffixChannelPassThroughKeepsModifierBodyVerbatim(t 
 }
 
 func TestApplyReasoningModelSuffixPassThroughAllowsUnknownModifier(t *testing.T) {
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	original := settings.PassThroughRequestEnabled
 	t.Cleanup(func() { settings.PassThroughRequestEnabled = original })
 	settings.PassThroughRequestEnabled = true
 
 	const model = "m@sha256:abc"
 	request := &dto.GeneralOpenAIRequest{Model: model}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -537,7 +541,7 @@ func TestApplyReasoningModelSuffixPassThroughAllowsUnknownModifier(t *testing.T)
 
 func TestApplyReasoningModelSuffixAppliesModifiersWhenPassThroughOff(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "qwen3.8-max@thinking:on@effort:high"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -554,7 +558,7 @@ func TestApplyReasoningModelSuffixAppliesModifiersWhenPassThroughOff(t *testing.
 
 func TestApplyReasoningModelSuffixThinkingMinusOnePassthrough(t *testing.T) {
 	request := &dto.GeneralOpenAIRequest{Model: "m@thinking:-1"}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -574,7 +578,7 @@ func TestApplyReasoningModelSuffixThinkingMinusOnePassthrough(t *testing.T) {
 }
 
 func TestApplyReasoningModelSuffixPreservesGpt51CodexMax(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-5.1-codex-max",
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "gpt-5.1-codex-max",
@@ -584,5 +588,5 @@ func TestApplyReasoningModelSuffixPreservesGpt51CodexMax(t *testing.T) {
 	mustApplyReasoningModelSuffix(t, info)
 	assert.Equal(t, "gpt-5.1-codex-max", info.UpstreamModelName)
 	assert.Nil(t, info.ReasoningConversion)
-	assert.Equal(t, "gpt-5.1-codex-max", hostreasoning.BaseModelName("gpt-5.1-codex-max"))
+	assert.Equal(t, "gpt-5.1-codex-max", hostreasoning.BaseModelName(testtenant.Context(), "gpt-5.1-codex-max"))
 }

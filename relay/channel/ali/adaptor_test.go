@@ -15,9 +15,13 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	rootconstant "github.com/QuantumNous/new-api/constant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/constant"
+
 	relayhelper "github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
@@ -48,13 +52,13 @@ func TestAliMultipartEditsUseValidatedProviderQuantity(t *testing.T) {
 			_, err = part.Write([]byte("fixture image"))
 			require.NoError(t, err)
 			require.NoError(t, writer.Close())
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/edits", &body)
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/edits", &body)
 			c.Request.Header.Set("Content-Type", writer.FormDataContentType())
 			common.SetContextKey(c, rootconstant.ContextKeyChannelType, rootconstant.ChannelTypeAli)
 			request, err := relayhelper.GetAndValidOpenAIImageRequest(c, constant.RelayModeImagesEdits)
 			require.NoError(t, err)
-			info := &relaycommon.RelayInfo{Request: request}
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), Request: request}
 			converted, err := tc.convert(c, info, *request)
 			require.NoError(t, err)
 			require.NotNil(t, converted.Parameters.N)
@@ -107,7 +111,7 @@ func TestConvertOpenAIRequestFiltersThinkingBudgetByUpstreamModel(t *testing.T) 
 				EnableThinking: json.RawMessage(`true`),
 				ThinkingBudget: json.RawMessage(tt.budget),
 			}
-			info := &relaycommon.RelayInfo{
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				ChannelMeta: &relaycommon.ChannelMeta{
 					UpstreamModelName: tt.upstreamModel,
 				},
@@ -143,7 +147,7 @@ func TestConvertOpenAIRequestPreservesExplicitZeroForMappedQwenModel(t *testing.
 		upstreamModel = "Qwen/Qwen3-235B-A22B-Thinking-2507"
 	)
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	c.Set("model_mapping", `{"customer-model":"Qwen/Qwen3-235B-A22B-Thinking-2507"}`)
 
 	request := &dto.GeneralOpenAIRequest{
@@ -151,7 +155,7 @@ func TestConvertOpenAIRequestPreservesExplicitZeroForMappedQwenModel(t *testing.
 		EnableThinking: json.RawMessage(`true`),
 		ThinkingBudget: json.RawMessage(`0`),
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: clientModel,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: clientModel,
@@ -179,10 +183,10 @@ func TestConvertOpenAIRequestPreservesExplicitZeroForMappedQwenModel(t *testing.
 }
 
 func TestMappedAliImageModelUsesUpstreamProtocol(t *testing.T) {
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayMode:       constant.RelayModeImagesGenerations,
 		OriginModelName: "customer-image-model",
 		ChannelMeta: &relaycommon.ChannelMeta{
@@ -210,9 +214,9 @@ func TestMappedAliImageModelUsesUpstreamProtocol(t *testing.T) {
 }
 
 func TestAliImageCountMatchesLegacyReservation(t *testing.T) {
-	saved := ratio_setting.ModelPrice2JSONString()
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{"z-image":0.04}`))
-	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(saved)) })
+	saved := ratio_setting.ModelPrice2JSONString(testtenant.Context())
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), `{"z-image":0.04}`))
+	t.Cleanup(func() { require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), saved)) })
 	for _, tc := range []struct {
 		name, body string
 		count      int
@@ -225,16 +229,16 @@ func TestAliImageCountMatchesLegacyReservation(t *testing.T) {
 		{"prompt extension", `{"model":"z-image","parameters":{"n":3,"prompt_extend":true}}`, 3, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(tc.body))
 			c.Request.Header.Set("Content-Type", "application/json")
 			common.SetContextKey(c, rootconstant.ContextKeyChannelType, rootconstant.ChannelTypeAli)
 			request, err := relayhelper.GetAndValidOpenAIImageRequest(c, constant.RelayModeImagesGenerations)
 			require.NoError(t, err)
-			info := &relaycommon.RelayInfo{Request: request, OriginModelName: request.Model, UserGroup: "default", UsingGroup: "default"}
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(), Request: request, OriginModelName: request.Model, UserGroup: "default", UsingGroup: "default"}
 			price, err := relayhelper.ModelPriceHelper(c, info, 0, request.GetTokenCountMeta())
 			require.NoError(t, err)
-			assert.Equal(t, common.QuotaFromFloat(0.04*float64(tc.count)*tc.multiplier*common.QuotaPerUnit), price.QuotaToPreConsume)
+			assert.Equal(t, common.QuotaFromFloat(0.04*float64(tc.count)*tc.multiplier*common.TenantState(testtenant.Context()).QuotaPerUnit), price.QuotaToPreConsume)
 			info.ChannelMeta = &relaycommon.ChannelMeta{ChannelType: rootconstant.ChannelTypeAli, UpstreamModelName: request.Model}
 			converted, err := oaiImage2AliImageRequest(info, *request, true)
 			require.NoError(t, err)
@@ -255,7 +259,7 @@ func TestAliImageHandlerHonorsRequestResponseFormat(t *testing.T) {
 	}))
 	t.Cleanup(imageServer.Close)
 
-	fetchSetting := system_setting.GetFetchSetting()
+	fetchSetting := system_setting.GetFetchSetting(testtenant.Context())
 	require.NotNil(t, fetchSetting)
 	originalFetchSetting := *fetchSetting
 	fetchSetting.EnableSSRFProtection = false
@@ -267,7 +271,7 @@ func TestAliImageHandlerHonorsRequestResponseFormat(t *testing.T) {
 	t.Cleanup(func() {
 		rootconstant.MaxFileDownloadMB = originalMaxFileDownloadMB
 	})
-	service.InitHttpClient()
+	service.InitHttpClient(testtenant.Context())
 
 	tests := []struct {
 		name           string
@@ -294,8 +298,8 @@ func TestAliImageHandlerHonorsRequestResponseFormat(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			downloads.Store(0)
 			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			info := &relaycommon.RelayInfo{
+			c, _ := testtenant.CreateTestContext(recorder)
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				RelayMode: constant.RelayModeImagesGenerations,
 				StartTime: time.Unix(1, 0),
 				Request: &dto.ImageRequest{

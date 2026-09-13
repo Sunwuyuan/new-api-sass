@@ -17,7 +17,9 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { persist, createJSONStorage } from 'zustand/middleware'
+
+import { tenantStorage } from '@/lib/tenant'
 
 export type PricingCurrencyPreference = 'USD' | 'site'
 
@@ -33,6 +35,7 @@ export const usePricingPreferencesStore = create<PricingPreferences>()(
       setCurrency: (currency) => set({ currency }),
     }),
     {
+      storage: createJSONStorage(() => tenantStorage),
       name: 'model-pricing-preferences',
       partialize: (state) => ({ currency: state.currency }),
     }

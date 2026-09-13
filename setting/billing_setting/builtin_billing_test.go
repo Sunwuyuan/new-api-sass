@@ -6,6 +6,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/controller"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -13,27 +14,27 @@ import (
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestGPT6AstraBuiltinBilling(t *testing.T) {
-	settings := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+	settings := config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting").(*billing_setting.BillingSetting)
 	saved := *settings
-	savedRatios, savedPrices := ratio_setting.ModelRatio2JSONString(), ratio_setting.ModelPrice2JSONString()
-	savedOptions := common.OptionMap
+	savedRatios, savedPrices := ratio_setting.ModelRatio2JSONString(testtenant.Context()), ratio_setting.ModelPrice2JSONString(testtenant.Context())
+	savedOptions := common.TenantState(testtenant.Context()).OptionMap
 	t.Cleanup(func() {
-		*settings, common.OptionMap = saved, savedOptions
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		*settings, common.TenantState(testtenant.Context()).OptionMap = saved, savedOptions
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), savedPrices))
 	})
-	common.OptionMap = map[string]string{"billing_setting.billing_mode": `{}`, "billing_setting.billing_expr": `{}`}
-	require.NoError(t, config.GlobalConfig.LoadFromDB(common.OptionMap))
-	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-	assert.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode("gpt-6-astra"))
-	expression, ok := billing_setting.GetBillingExpr("gpt-6-astra")
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{"billing_setting.billing_mode": `{}`, "billing_setting.billing_expr": `{}`}
+	require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(common.TenantState(testtenant.Context()).OptionMap))
+	settings = config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting").(*billing_setting.BillingSetting)
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{}`))
+	require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), `{}`))
+	assert.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(testtenant.Context(), "gpt-6-astra"))
+	expression, ok := billing_setting.GetBillingExpr(testtenant.Context(), "gpt-6-astra")
 	require.True(t, ok)
 
 	for _, tc := range []struct {
@@ -63,7 +64,7 @@ func TestGPT6AstraBuiltinBilling(t *testing.T) {
 
 	t.Run("admin options expose defaults without persisting them", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		ctx, _ := gin.CreateTestContext(recorder)
+		ctx, _ := testtenant.CreateTestContext(recorder)
 		controller.GetOptions(ctx)
 		var response struct {
 			Success bool
@@ -73,12 +74,12 @@ func TestGPT6AstraBuiltinBilling(t *testing.T) {
 		require.True(t, response.Success)
 		found := map[string]string{}
 		for _, option := range response.Data {
-			if _, ok := common.OptionMap[option.Key]; ok {
+			if _, ok := common.TenantState(testtenant.Context()).OptionMap[option.Key]; ok {
 				assert.NotContains(t, found, option.Key)
 				var values map[string]string
 				require.NoError(t, common.UnmarshalJsonStr(option.Value, &values))
 				found[option.Key] = values["gpt-6-astra"]
-				assert.Equal(t, `{}`, common.OptionMap[option.Key])
+				assert.Equal(t, `{}`, common.TenantState(testtenant.Context()).OptionMap[option.Key])
 			}
 		}
 		assert.Equal(t, map[string]string{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": expression}, found)
@@ -100,10 +101,10 @@ func TestGPT6AstraBuiltinBilling(t *testing.T) {
 			if tc.expr != "" {
 				settings.BillingExpr["gpt-6-astra"] = tc.expr
 			}
-			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(tc.ratios))
-			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(tc.prices))
-			assert.Equal(t, tc.wantMode, billing_setting.GetBillingMode("gpt-6-astra"))
-			actual, ok := billing_setting.GetBillingExpr("gpt-6-astra")
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), tc.ratios))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), tc.prices))
+			assert.Equal(t, tc.wantMode, billing_setting.GetBillingMode(testtenant.Context(), "gpt-6-astra"))
+			actual, ok := billing_setting.GetBillingExpr(testtenant.Context(), "gpt-6-astra")
 			assert.Equal(t, tc.expr, actual)
 			assert.Equal(t, tc.expr != "", ok)
 		})
@@ -111,20 +112,20 @@ func TestGPT6AstraBuiltinBilling(t *testing.T) {
 }
 
 func TestImageModelBuiltinPricesAndOverrides(t *testing.T) {
-	settings := config.GlobalConfig.Get("billing_setting").(*billing_setting.BillingSetting)
+	settings := config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting").(*billing_setting.BillingSetting)
 	saved := *settings
-	savedRatios, savedPrices := ratio_setting.ModelRatio2JSONString(), ratio_setting.ModelPrice2JSONString()
+	savedRatios, savedPrices := ratio_setting.ModelRatio2JSONString(testtenant.Context()), ratio_setting.ModelPrice2JSONString(testtenant.Context())
 	t.Cleanup(func() {
 		*settings = saved
-		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(savedRatios))
-		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(savedPrices))
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), savedRatios))
+		require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), savedPrices))
 	})
 	for _, name := range []string{"gpt-image-2", "gpt-image-2.5-sunburst", "gpt-image-2.5-flare"} {
 		t.Run(name, func(t *testing.T) {
 			*settings = billing_setting.BillingSetting{BillingMode: map[string]string{}, BillingExpr: map[string]string{}}
-			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(`{}`))
-			expression, ok := billing_setting.GetBillingExpr(name)
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{}`))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), `{}`))
+			expression, ok := billing_setting.GetBillingExpr(testtenant.Context(), name)
 			require.True(t, ok)
 			usage := &dto.Usage{PromptTokens: 1000, CompletionTokens: 100, PromptTokensDetails: dto.InputTokenDetails{
 				CachedTokens: 300, ImageTokens: 600, CachedTokensDetails: &dto.CachedTokenDetails{ImageTokens: common.GetPointer(200)},
@@ -135,14 +136,14 @@ func TestImageModelBuiltinPricesAndOverrides(t *testing.T) {
 			assert.Equal(t, 4113, result.ActualQuotaAfterGroup)
 			encoded, err := common.Marshal(map[string]float64{name: 0})
 			require.NoError(t, err)
-			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(string(encoded)))
-			assert.Equal(t, "ratio", billing_setting.GetBillingMode(name))
-			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(`{}`))
-			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(string(encoded)))
-			assert.Equal(t, "ratio", billing_setting.GetBillingMode(name))
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), string(encoded)))
+			assert.Equal(t, "ratio", billing_setting.GetBillingMode(testtenant.Context(), name))
+			require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(testtenant.Context(), `{}`))
+			require.NoError(t, ratio_setting.UpdateModelPriceByJSONString(testtenant.Context(), string(encoded)))
+			assert.Equal(t, "ratio", billing_setting.GetBillingMode(testtenant.Context(), name))
 			settings.BillingMode[name] = "tiered_expr"
 			settings.BillingExpr[name] = `tier("custom", p * 7)`
-			actual, ok := billing_setting.GetBillingExpr(name)
+			actual, ok := billing_setting.GetBillingExpr(testtenant.Context(), name)
 			require.True(t, ok)
 			assert.Equal(t, settings.BillingExpr[name], actual)
 		})

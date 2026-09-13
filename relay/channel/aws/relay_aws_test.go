@@ -12,8 +12,11 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream"
@@ -74,13 +77,13 @@ func newAwsTestClient(httpClient bedrockruntime.HTTPClient) *bedrockruntime.Clie
 }
 
 func newAwsTestContext(writer http.ResponseWriter, requestContext context.Context) *gin.Context {
-	c, _ := gin.CreateTestContext(writer)
+	c, _ := testtenant.CreateTestContext(writer)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil).WithContext(requestContext)
 	return c
 }
 
 func newAwsTestRelayInfo() *relaycommon.RelayInfo {
-	return &relaycommon.RelayInfo{
+	return &relaycommon.RelayInfo{Context: testtenant.Context(),
 		StartTime:          time.Now(),
 		IsStream:           true,
 		OriginModelName:    awsTestModel,
@@ -146,10 +149,10 @@ func TestDoAwsClientRequest_AppliesRuntimeHeaderOverrideToAnthropicBeta(t *testi
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/messages", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName:           "claude-3-5-sonnet-20240620",
 		IsStream:                  false,
 		UseRuntimeHeadersOverride: true,
@@ -200,7 +203,7 @@ func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			common.RelayTimeout = test.relayTimeout
-			parent, cancelParent := context.WithCancel(context.Background())
+			parent, cancelParent := context.WithCancel(testtenant.Context())
 			invokeContext, cancelInvoke := newAwsInvokeContext(parent)
 			defer cancelInvoke()
 
@@ -214,7 +217,7 @@ func TestNewAwsInvokeContextInheritsParent(t *testing.T) {
 }
 
 func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
-	canceledContext, cancel := context.WithCancel(context.Background())
+	canceledContext, cancel := context.WithCancel(testtenant.Context())
 	cancel()
 
 	tests := []struct {
@@ -231,13 +234,13 @@ func TestNewAwsInvokeErrorSkipsRetryOnlyForClientCancellation(t *testing.T) {
 		},
 		{
 			name:           "relay timeout with live client context",
-			requestContext: context.Background(),
+			requestContext: testtenant.Context(),
 			err:            context.DeadlineExceeded,
 			wantSkipRetry:  false,
 		},
 		{
 			name:           "upstream error with live client context",
-			requestContext: context.Background(),
+			requestContext: testtenant.Context(),
 			err:            errors.New("upstream failed"),
 			wantSkipRetry:  false,
 		},
@@ -270,7 +273,7 @@ func TestAwsHandlersCancelSdkRequestAndSkipRetry(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			requestContext, cancelRequest := context.WithCancel(context.Background())
+			requestContext, cancelRequest := context.WithCancel(testtenant.Context())
 			t.Cleanup(cancelRequest)
 
 			upstreamContexts := make(chan context.Context, 1)
@@ -344,7 +347,7 @@ func TestAwsStreamHandlerUsesFinalUpstreamUsage(t *testing.T) {
 	}))
 	adaptor := &Adaptor{AwsClient: client, AwsReq: newAwsStreamInput()}
 	recorder := httptest.NewRecorder()
-	c := newAwsTestContext(recorder, context.Background())
+	c := newAwsTestContext(recorder, testtenant.Context())
 
 	handlerErr, usage := awsStreamHandler(c, newAwsTestRelayInfo(), adaptor)
 
@@ -364,7 +367,7 @@ func TestAwsStreamHandlerStopsAtClientCancellation(t *testing.T) {
 		common.RelayTimeout = originalRelayTimeout
 	})
 
-	requestContext, cancelRequest := context.WithCancel(context.Background())
+	requestContext, cancelRequest := context.WithCancel(testtenant.Context())
 	t.Cleanup(cancelRequest)
 	releaseFinal := make(chan struct{})
 	var releaseFinalOnce sync.Once

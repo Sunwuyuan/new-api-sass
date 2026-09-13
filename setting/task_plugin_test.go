@@ -4,35 +4,36 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func setupTaskPluginDisabledFactoryKeysTest(t *testing.T) {
 	t.Helper()
-	originalMap := common.OptionMap
-	common.OptionMapRWMutex.Lock()
-	common.OptionMap = map[string]string{}
-	common.OptionMapRWMutex.Unlock()
+	originalMap := common.TenantState(testtenant.Context()).OptionMap
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	t.Cleanup(func() {
-		common.OptionMapRWMutex.Lock()
-		common.OptionMap = originalMap
-		common.OptionMapRWMutex.Unlock()
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
+		common.TenantState(testtenant.Context()).OptionMap = originalMap
+		common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 	})
 }
 
 func TestTaskPluginDisabledFactoryKeysRoundTripAndDedupe(t *testing.T) {
 	setupTaskPluginDisabledFactoryKeysTest(t)
 
-	assert.Empty(t, GetTaskPluginDisabledFactoryKeys())
-	assert.False(t, IsTaskPluginFactoryDisabled("kling"))
+	assert.Empty(t, GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+	assert.False(t, IsTaskPluginFactoryDisabled(testtenant.Context(), "kling"))
 
-	require.NoError(t, SetTaskPluginDisabledFactoryKeysOption([]string{"kling", "sora", "kling", " hailuo "}))
-	assert.Equal(t, []string{"hailuo", "kling", "sora"}, GetTaskPluginDisabledFactoryKeys())
-	assert.Equal(t, `["hailuo","kling","sora"]`, common.OptionMap[TaskPluginDisabledFactoryKeysKey])
-	assert.True(t, IsTaskPluginFactoryDisabled("kling"))
-	assert.True(t, IsTaskPluginFactoryDisabled("hailuo"))
-	assert.False(t, IsTaskPluginFactoryDisabled("google"))
+	require.NoError(t, SetTaskPluginDisabledFactoryKeysOption(testtenant.Context(), []string{"kling", "sora", "kling", " hailuo "}))
+	assert.Equal(t, []string{"hailuo", "kling", "sora"}, GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+	assert.Equal(t, `["hailuo","kling","sora"]`, common.TenantState(testtenant.Context()).OptionMap[TaskPluginDisabledFactoryKeysKey])
+	assert.True(t, IsTaskPluginFactoryDisabled(testtenant.Context(), "kling"))
+	assert.True(t, IsTaskPluginFactoryDisabled(testtenant.Context(), "hailuo"))
+	assert.False(t, IsTaskPluginFactoryDisabled(testtenant.Context(), "google"))
 }
 
 func TestTaskPluginDisabledFactoryKeysBadJSONReturnsEmpty(t *testing.T) {
@@ -50,16 +51,16 @@ func TestTaskPluginDisabledFactoryKeysBadJSONReturnsEmpty(t *testing.T) {
 		{name: "not json", raw: "kling"},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			common.OptionMapRWMutex.Lock()
+			common.TenantState(testtenant.Context()).OptionMapRWMutex.Lock()
 			if testCase.raw == "" {
-				delete(common.OptionMap, TaskPluginDisabledFactoryKeysKey)
+				delete(common.TenantState(testtenant.Context()).OptionMap, TaskPluginDisabledFactoryKeysKey)
 			} else {
-				common.OptionMap[TaskPluginDisabledFactoryKeysKey] = testCase.raw
+				common.TenantState(testtenant.Context()).OptionMap[TaskPluginDisabledFactoryKeysKey] = testCase.raw
 			}
-			common.OptionMapRWMutex.Unlock()
+			common.TenantState(testtenant.Context()).OptionMapRWMutex.Unlock()
 
-			assert.Empty(t, GetTaskPluginDisabledFactoryKeys())
-			assert.False(t, IsTaskPluginFactoryDisabled("kling"))
+			assert.Empty(t, GetTaskPluginDisabledFactoryKeys(testtenant.Context()))
+			assert.False(t, IsTaskPluginFactoryDisabled(testtenant.Context(), "kling"))
 		})
 	}
 }

@@ -5,12 +5,12 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/gin-gonic/gin"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestHostProtocolRegistryDrivesProtocolRoutesOnce(t *testing.T) {
-	engine := gin.New()
+	engine := testtenant.NewRouter()
 	SetTaskPluginProtocolRouter(engine)
 
 	expected := []string{

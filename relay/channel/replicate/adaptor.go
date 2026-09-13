@@ -1,8 +1,9 @@
 package replicate
 
+import context "context"
+
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -111,7 +112,7 @@ func (a *Adaptor) ConvertImageRequest(c *gin.Context, info *relaycommon.RelayInf
 
 	if len(request.OutputFormat) > 0 {
 		var outputFormat string
-		if err := json.Unmarshal(request.OutputFormat, &outputFormat); err == nil && strings.TrimSpace(outputFormat) != "" {
+		if err := common.Unmarshal(request.OutputFormat, &outputFormat); err == nil && strings.TrimSpace(outputFormat) != "" {
 			inputPayload["output_format"] = outputFormat
 		}
 	}
@@ -255,7 +256,7 @@ func (a *Adaptor) DoResponse(c *gin.Context, resp *http.Response, info *relaycom
 	}
 
 	if wantsBase64 {
-		converted, convErr := downloadImagesToBase64(urls)
+		converted, convErr := downloadImagesToBase64(c.Request.Context(), urls)
 		if convErr != nil {
 			return nil, types.NewError(convErr, types.ErrorCodeBadResponse)
 		}
@@ -299,13 +300,13 @@ func (a *Adaptor) GetChannelName() string {
 	return ChannelName
 }
 
-func downloadImagesToBase64(urls []string) ([]string, error) {
+func downloadImagesToBase64(tenantCtx context.Context, urls []string) ([]string, error) {
 	results := make([]string, 0, len(urls))
 	for _, url := range urls {
 		if strings.TrimSpace(url) == "" {
 			continue
 		}
-		_, data, err := service.GetImageFromUrl(url)
+		_, data, err := service.GetImageFromUrl(tenantCtx, url)
 		if err != nil {
 			return nil, fmt.Errorf("replicate adaptor: failed to download image from %s: %w", url, err)
 		}
@@ -478,7 +479,7 @@ func uploadFileFromForm(c *gin.Context, info *relaycommon.RelayInfo, fieldCandid
 	req.Header.Set("Content-Type", formContentType)
 	req.Header.Set("Authorization", "Bearer "+info.ApiKey)
 
-	resp, err := service.GetHttpClient().Do(req)
+	resp, err := service.GetHttpClient(c.Request.Context()).Do(req)
 	if err != nil {
 		return "", fmt.Errorf("replicate adaptor: upload image failed: %w", err)
 	}

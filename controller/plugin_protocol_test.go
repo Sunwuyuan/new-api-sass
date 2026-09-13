@@ -14,9 +14,12 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 	"github.com/QuantumNous/new-api/dto"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/QuantumNous/new-api/relay"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/gin-gonic/gin"
@@ -150,9 +153,9 @@ func TestServeTaskPluginProtocolDisconnectDuringSubmissionFinishesDurableWithout
 func TestServeTaskPluginProtocolDisconnectBeforeDurableBarrierPersistsAndSettlesWithoutRefund(t *testing.T) {
 	events := make([]string, 0, 3)
 	database := setupTaskSubmissionDatabase(t, true, &events)
-	previousLogConsumeEnabled := common.LogConsumeEnabled
-	common.LogConsumeEnabled = false
-	t.Cleanup(func() { common.LogConsumeEnabled = previousLogConsumeEnabled })
+	previousLogConsumeEnabled := common.TenantState(testtenant.Context()).LogConsumeEnabled
+	common.TenantState(testtenant.Context()).LogConsumeEnabled = false
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).LogConsumeEnabled = previousLogConsumeEnabled })
 
 	pinned := compilePluginProtocolTestEndpoint(t, "disconnect-before-durable", `
 		export const protocols = {openai_responses: {
@@ -293,7 +296,7 @@ func TestServeTaskPluginProtocolDisconnectDuringTerminalSettlementStopsOnlyObser
 		release: releaseSettlement,
 	}
 	previousAdaptorFactory := service.GetTaskAdaptorFunc
-	service.GetTaskAdaptorFunc = func(constant.TaskPlatform) service.TaskPollingAdaptor {
+	service.GetTaskAdaptorFunc = func(context.Context, constant.TaskPlatform) service.TaskPollingAdaptor {
 		return adaptor
 	}
 	t.Cleanup(func() { service.GetTaskAdaptorFunc = previousAdaptorFactory })
@@ -318,7 +321,7 @@ func TestServeTaskPluginProtocolDisconnectDuringTerminalSettlementStopsOnlyObser
 		<-observationStarted
 		defer close(pollingDone)
 		service.DispatchPlatformUpdate(
-			context.Background(),
+			testtenant.Context(),
 			task.Platform,
 			map[int][]string{channel.Id: {"upstream-terminal"}},
 			map[string]*model.Task{"upstream-terminal": &task},
@@ -366,7 +369,7 @@ type terminalSettlementPollingAdaptor struct {
 
 func (a *terminalSettlementPollingAdaptor) Init(*relaycommon.RelayInfo) {}
 
-func (a *terminalSettlementPollingAdaptor) FetchTask(string, string, *model.Task, string) (*http.Response, error) {
+func (a *terminalSettlementPollingAdaptor) FetchTask(context.Context, string, string, *model.Task, string) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Body:       io.NopCloser(strings.NewReader(`{}`)),
@@ -394,7 +397,7 @@ func TestPluginProtocolBridgeBoundsDatabaseReadBelowHeartbeat(t *testing.T) {
 		tickInterval:       time.Second,
 		heartbeatInterval:  4 * time.Second,
 		admissionTimeout:   time.Second,
-	}.withDefaults()
+	}.withDefaults(testtenant.Context())
 
 	assert.Equal(t, 2*time.Second, deps.loadTimeout)
 }
@@ -610,8 +613,8 @@ func TestServeTaskPluginProtocolStreamInjectsHostArtifactCapabilities(t *testing
 
 func TestTaskPluginProtocolHeartbeatDoesNotDispatchEmptySDKEvent(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 
 	require.NoError(t, writeTaskPluginProtocolHeartbeat(c))
 
@@ -1455,8 +1458,8 @@ func compilePluginProtocolTestEndpointWithOptions(
 
 func newPluginProtocolTestContext(stream, requestBodyStream bool) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{}`))
 	common.SetContextKey(c, constant.ContextKeyUserId, 71)
 	common.SetContextKey(c, constant.ContextKeyTokenId, 81)
 	common.SetContextKey(c, constant.ContextKeyUsingGroup, "default")
@@ -1552,8 +1555,8 @@ func logsAppender(logs *[]string) pluginruntime.Options {
 
 func newPluginProtocolRetrieveContext(responseID string) (*gin.Context, *httptest.ResponseRecorder) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses/"+responseID, nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodGet, "/v1/responses/"+responseID, nil)
 	c.Params = gin.Params{{Key: "response_id", Value: responseID}}
 	common.SetContextKey(c, constant.ContextKeyUserId, 71)
 	common.SetContextKey(c, constant.ContextKeyTokenId, 81)

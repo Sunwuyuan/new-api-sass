@@ -17,6 +17,8 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 
+import { tenantKey, tenantSessionStorage } from '@/lib/tenant'
+
 const OAUTH_POPUP_FLOW_KEY_PREFIX = 'oauth_popup_flow:'
 
 export function rememberOAuthLoginRedirect(
@@ -25,7 +27,7 @@ export function rememberOAuthLoginRedirect(
 ): void {
   if (!redirect) return
   try {
-    window.sessionStorage.setItem(`oauth_login_redirect:${state}`, redirect)
+    tenantSessionStorage.setItem(`oauth_login_redirect:${state}`, redirect)
   } catch {
     // Login can still complete using the default destination.
   }
@@ -34,8 +36,8 @@ export function rememberOAuthLoginRedirect(
 export function consumeOAuthLoginRedirect(state: string): string | null {
   try {
     const key = `oauth_login_redirect:${state}`
-    const redirect = window.sessionStorage.getItem(key)
-    window.sessionStorage.removeItem(key)
+    const redirect = tenantSessionStorage.getItem(key)
+    tenantSessionStorage.removeItem(key)
     return redirect
   } catch {
     return null
@@ -73,7 +75,12 @@ export function getOAuthSessionStorage(
   owner: OAuthSessionStorageOwner | null | undefined
 ): OAuthModeStorage | null {
   try {
-    return owner?.sessionStorage ?? null
+    const storage = owner?.sessionStorage
+    if (!storage) return null
+    return {
+      getItem: (key) => storage.getItem(tenantKey(key)),
+      setItem: (key, value) => storage.setItem(tenantKey(key), value),
+    }
   } catch {
     return null
   }

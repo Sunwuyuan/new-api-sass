@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"time"
 
@@ -20,8 +22,8 @@ type UserVerificationState struct {
 	HasPasskey  bool
 }
 
-func GetUserVerificationState(userID int) (*UserVerificationState, error) {
-	return getUserVerificationState(DB, userID, false)
+func GetUserVerificationState(tenantCtx context.Context, userID int) (*UserVerificationState, error) {
+	return getUserVerificationState(DB.WithContext(tenantCtx), userID, false)
 }
 
 func getUserVerificationState(tx *gorm.DB, userID int, forUpdate bool) (*UserVerificationState, error) {
@@ -48,12 +50,12 @@ func getUserVerificationState(tx *gorm.DB, userID int, forUpdate bool) (*UserVer
 // CreateUserSessionFromLoginFlow commits the one-time login authorization and
 // the resulting session together. The user lock serializes credential changes
 // and session issuance, including the per-user session limits.
-func CreateUserSessionFromLoginFlow(token string, session *UserSession, validate func(*AuthFlow, *UserVerificationState) error) error {
+func CreateUserSessionFromLoginFlow(tenantCtx context.Context, token string, session *UserSession, validate func(*AuthFlow, *UserVerificationState) error) error {
 	if session == nil || validate == nil {
 		return ErrUserSessionInvalid
 	}
 	cacheDeadline := userSessionCacheDeadline()
-	_, err := ConsumeAuthFlowWithAction(token, AuthFlowMatch{
+	_, err := ConsumeAuthFlowWithAction(tenantCtx, token, AuthFlowMatch{
 		Purpose: AuthFlowPurposeLoginVerification, UserId: session.UserID,
 	}, func(tx *gorm.DB, flow *AuthFlow) error {
 		state, err := getUserVerificationState(tx, session.UserID, true)
@@ -85,5 +87,5 @@ func CreateUserSessionFromLoginFlow(token string, session *UserSession, validate
 	if err != nil {
 		return err
 	}
-	return publishCreatedUserSession(session, cacheDeadline)
+	return publishCreatedUserSession(tenantCtx, session, cacheDeadline)
 }

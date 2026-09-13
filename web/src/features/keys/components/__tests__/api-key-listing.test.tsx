@@ -45,6 +45,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
 import zh from '@/i18n/locales/zh.json'
 import { api } from '@/lib/api'
+import { tenantStorage } from '@/lib/tenant'
 import {
   DEFAULT_CURRENCY_CONFIG,
   useSystemConfigStore,
@@ -369,7 +370,7 @@ it('combines creation and last use while keeping expiry, models and IP restricti
 })
 
 it('restores dates hidden by the old default and preserves unrelated column preferences', async () => {
-  localStorage.setItem(
+  tenantStorage.setItem(
     'api-keys:column-visibility',
     JSON.stringify({
       created_time: false,

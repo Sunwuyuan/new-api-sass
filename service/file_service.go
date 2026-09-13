@@ -1,5 +1,7 @@
 package service
 
+import context "context"
+
 import (
 	"bytes"
 	"encoding/base64"
@@ -80,6 +82,9 @@ func LoadFileSource(c *gin.Context, source types.FileSource, reason ...string) (
 
 	switch s := source.(type) {
 	case *types.URLSource:
+		if c == nil || c.Request == nil {
+			return nil, fmt.Errorf("workspace request context is required to download media")
+		}
 		if c != nil {
 			contextKey = getContextCacheKey(s.URL)
 			if cached, exists := c.Get(contextKey); exists {
@@ -100,7 +105,11 @@ func LoadFileSource(c *gin.Context, source types.FileSource, reason ...string) (
 				return data, nil
 			}
 		}
-		cachedData, err = loadFromBase64(s.Base64Data, s.MimeType)
+		var sourceCtx context.Context
+		if c != nil && c.Request != nil {
+			sourceCtx = c.Request.Context()
+		}
+		cachedData, err = loadFromBase64(sourceCtx, s.Base64Data, s.MimeType)
 	default:
 		return nil, fmt.Errorf("unsupported file source type: %T", source)
 	}
@@ -161,7 +170,7 @@ func loadFromURL(c *gin.Context, url string, reason ...string) (*types.CachedFil
 	if common.DebugEnabled {
 		logger.LogDebug(c, "loadFromURL: initiating download")
 	}
-	resp, err := DoDownloadRequest(url, reason...)
+	resp, err := DoDownloadRequest(c.Request.Context(), url, reason...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to download file from %s: %w", url, err)
 	}
@@ -195,7 +204,7 @@ func loadFromURL(c *gin.Context, url string, reason ...string) (*types.CachedFil
 
 	if shouldUseDiskCache(base64Size) {
 		// 使用磁盘缓存
-		diskPath, err := writeToDiskCache(base64Data)
+		diskPath, err := writeToDiskCache(c.Request.Context(), base64Data)
 		if err != nil {
 			// 磁盘缓存失败，回退到内存
 			logger.LogWarn(c, fmt.Sprintf("Failed to write to disk cache, falling back to memory: %v", err))
@@ -241,8 +250,8 @@ func shouldUseDiskCache(dataSize int64) bool {
 }
 
 // writeToDiskCache 将数据写入磁盘缓存
-func writeToDiskCache(base64Data string) (string, error) {
-	return common.WriteDiskCacheFileString(common.DiskCacheTypeFile, base64Data)
+func writeToDiskCache(tenantCtx context.Context, base64Data string) (string, error) {
+	return common.WriteDiskCacheFileString(tenantCtx, common.DiskCacheTypeFile, base64Data)
 }
 
 // smartDetectMimeType 智能检测 MIME 类型
@@ -316,7 +325,7 @@ func smartDetectMimeType(resp *http.Response, url string, fileBytes []byte) stri
 }
 
 // loadFromBase64 从 base64 字符串加载文件
-func loadFromBase64(base64String string, providedMimeType string) (*types.CachedFileData, error) {
+func loadFromBase64(tenantCtx context.Context, base64String string, providedMimeType string) (*types.CachedFileData, error) {
 	var mimeType string
 	var cleanBase64 string
 
@@ -353,8 +362,8 @@ func loadFromBase64(base64String string, providedMimeType string) (*types.Cached
 	base64Size := int64(len(cleanBase64))
 	var cachedData *types.CachedFileData
 
-	if shouldUseDiskCache(base64Size) {
-		diskPath, err := writeToDiskCache(cleanBase64)
+	if tenantCtx != nil && shouldUseDiskCache(base64Size) {
+		diskPath, err := writeToDiskCache(tenantCtx, cleanBase64)
 		if err != nil {
 			cachedData = types.NewMemoryCachedData(cleanBase64, mimeType, int64(len(decodedData)))
 		} else {

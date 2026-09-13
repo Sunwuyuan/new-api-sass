@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -67,10 +68,10 @@ var DB *gorm.DB
 
 var LOG_DB *gorm.DB
 
-func createRootAccountIfNeed() error {
+func createRootAccountIfNeed(tenantCtx context.Context) error {
 	var user User
 	//if user.Status != common.UserStatusEnabled {
-	if err := DB.First(&user).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).First(&user).Error; err != nil {
 		common.SysLog("no user exists, create a root user for you: username is root, password is 123456")
 		hashedPassword, err := common.Password2Hash("123456")
 		if err != nil {
@@ -85,23 +86,23 @@ func createRootAccountIfNeed() error {
 			AccessToken: nil,
 			Quota:       100000000,
 		}
-		DB.Create(&rootUser)
+		DB.WithContext(tenantCtx).Create(&rootUser)
 	}
 	return nil
 }
 
-func CheckSetup() {
-	setup := GetSetup()
+func CheckSetup(tenantCtx context.Context) {
+	setup := GetSetup(tenantCtx)
 	if setup == nil {
 		// No setup record exists, check if we have a root user
-		if RootUserExists() {
+		if RootUserExists(tenantCtx) {
 			common.SysLog("system is not initialized, but root user exists")
 			// Create setup record
 			newSetup := Setup{
 				Version:       common.Version,
 				InitializedAt: time.Now().Unix(),
 			}
-			err := DB.Create(&newSetup).Error
+			err := DB.WithContext(tenantCtx).Create(&newSetup).Error
 			if err != nil {
 				common.SysLog("failed to create setup record: " + err.Error())
 			}
@@ -233,7 +234,7 @@ func InitLogDB() (err error) {
 		common.SetLogDatabaseType(common.MainDatabaseType())
 		initCol()
 		if common.IsMasterNode {
-			return MigrateAuditLogs()
+			return MigrateAuditLogs(context.Background())
 		}
 		return
 	}
@@ -318,20 +319,14 @@ func is64BitIntegerType(dbType common.DatabaseType, dataType string) bool {
 }
 
 func migrateDB() error {
-	if err := migrateTokenKeyUniqueness(DB); err != nil {
-		return err
-	}
-	if err := migratePrefillGroupUniqueness(DB); err != nil {
-		return err
-	}
 	// Migrate price_amount column from float/double to decimal for existing tables
 	migrateSubscriptionPlanPriceAmount()
 	// Migrate model_limits column from varchar to text for existing tables
 	if err := migrateTokenModelLimitsToText(); err != nil {
 		return err
 	}
-	if err := migrateOptionPrimaryKey(DB); err != nil {
-		common.SysError("failed to migrate options primary key: " + err.Error())
+	if err := MigrateTenantSchema(DB, BusinessModels()); err != nil {
+		return err
 	}
 
 	err := DB.AutoMigrate(
@@ -374,12 +369,6 @@ func migrateDB() error {
 	if err != nil {
 		return err
 	}
-	if err := InitializeUserAuthVersions(); err != nil {
-		return err
-	}
-	if err := InitializeExternalIdentityClaims(); err != nil {
-		return err
-	}
 	if common.UsingMainDatabase(common.DatabaseTypeSQLite) {
 		if err := ensureSubscriptionPlanTableSQLite(); err != nil {
 			return err
@@ -393,7 +382,12 @@ func migrateDB() error {
 }
 
 func migrateLOGDB() error {
-	if err := MigrateAuditLogs(); err != nil {
+	if !common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
+		if err := MigrateTenantSchema(LOG_DB, []any{&Log{}, &AuditLog{}}); err != nil {
+			return err
+		}
+	}
+	if err := MigrateAuditLogs(context.Background()); err != nil {
 		return err
 	}
 	if common.UsingLogDatabase(common.DatabaseTypeClickHouse) {
@@ -405,6 +399,9 @@ func migrateLOGDB() error {
 func migrateClickHouseLogDB() error {
 	ttlDays := clickHouseLogTTLDays()
 	if err := LOG_DB.Exec(clickHouseLogCreateTableSQL(ttlDays)).Error; err != nil {
+		return err
+	}
+	if err := LOG_DB.Exec("ALTER TABLE logs ADD COLUMN IF NOT EXISTS tenant_id Int64 DEFAULT 1").Error; err != nil {
 		return err
 	}
 	return syncClickHouseLogTTL(ttlDays)
@@ -436,6 +433,7 @@ func clickHouseLogTTLClause(ttlDays int) string {
 func clickHouseLogCreateTableSQL(ttlDays int) string {
 	return fmt.Sprintf(`
 CREATE TABLE IF NOT EXISTS logs (
+	tenant_id Int64,
 	id Int64 DEFAULT 0,
 	user_id Int32 DEFAULT 0,
 	created_at Int64 DEFAULT 0,
@@ -459,7 +457,7 @@ CREATE TABLE IF NOT EXISTS logs (
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(toDateTime(created_at))
-ORDER BY (created_at, request_id)%s`, clickHouseLogTTLClause(ttlDays))
+ORDER BY (tenant_id, created_at, request_id)%s`, clickHouseLogTTLClause(ttlDays))
 }
 
 func syncClickHouseLogTTL(ttlDays int) error {
@@ -504,6 +502,7 @@ func ensureSubscriptionPlanTableSQLite() error {
 	if !DB.Migrator().HasTable(tableName) {
 		createSQL := `CREATE TABLE ` + "`" + tableName + "`" + ` (
 ` + "`id`" + ` integer,
+` + "`tenant_id`" + ` bigint NOT NULL,
 ` + "`title`" + ` varchar(128) NOT NULL,
 ` + "`subtitle`" + ` varchar(255) DEFAULT '',
 ` + "`price_amount`" + ` decimal(10,6) NOT NULL,
@@ -541,6 +540,7 @@ PRIMARY KEY (` + "`id`" + `)
 		existing[c.Name] = struct{}{}
 	}
 	required := []sqliteColumnDef{
+		{Name: "tenant_id", DDL: "`tenant_id` bigint NOT NULL DEFAULT 1"},
 		{Name: "title", DDL: "`title` varchar(128) NOT NULL"},
 		{Name: "subtitle", DDL: "`subtitle` varchar(255) DEFAULT ''"},
 		{Name: "price_amount", DDL: "`price_amount` decimal(10,6) NOT NULL"},

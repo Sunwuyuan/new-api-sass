@@ -8,8 +8,10 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -32,10 +34,10 @@ func TestTaskPluginSubmitDiagnosticsArePluginOnlyAndDoNotLogPayloads(t *testing.
 		common.LogWriterMu.Unlock()
 	})
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/tasks/debug-plugin", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/tasks/debug-plugin", nil)
 	c.Set(common.RequestIdKey, "plugin-submit-request")
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "safe-model",
 		TaskRelayInfo:   &relaycommon.TaskRelayInfo{Action: "https://private-action.invalid/?key=hidden"},
 	}

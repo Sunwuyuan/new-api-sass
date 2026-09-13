@@ -2,8 +2,8 @@ package oauth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"github.com/QuantumNous/new-api/common"
 	"net/http"
 	"net/url"
 	"strings"
@@ -17,7 +17,7 @@ import (
 )
 
 func init() {
-	Register("discord", &DiscordProvider{})
+	RegisterDefault("discord", &DiscordProvider{})
 }
 
 // DiscordProvider implements OAuth for Discord
@@ -38,12 +38,12 @@ type discordUser struct {
 	Name string `json:"global_name"`
 }
 
-func (p *DiscordProvider) GetName() string {
+func (p *DiscordProvider) GetName(tenantCtx context.Context) string {
 	return "Discord"
 }
 
-func (p *DiscordProvider) IsEnabled() bool {
-	return system_setting.GetDiscordSettings().Enabled
+func (p *DiscordProvider) IsEnabled(tenantCtx context.Context) bool {
+	return system_setting.GetDiscordSettings(tenantCtx).Enabled
 }
 
 func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin.Context) (*OAuthToken, error) {
@@ -51,8 +51,8 @@ func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin
 		return nil, NewOAuthError(i18n.MsgOAuthInvalidCode, nil)
 	}
 
-	settings := system_setting.GetDiscordSettings()
-	redirectUri := fmt.Sprintf("%s/oauth/discord", system_setting.ServerAddress)
+	settings := system_setting.GetDiscordSettings(ctx)
+	redirectUri := fmt.Sprintf("%s/oauth/discord", system_setting.TenantState(ctx).ServerAddress)
 	values := url.Values{}
 	values.Set("client_id", settings.ClientId)
 	values.Set("client_secret", settings.ClientSecret)
@@ -82,7 +82,7 @@ func (p *DiscordProvider) ExchangeToken(ctx context.Context, code string, c *gin
 	logger.LogDebug(ctx, "[OAuth-Discord] ExchangeToken response status: %d", res.StatusCode)
 
 	var discordResponse discordOAuthResponse
-	err = json.NewDecoder(res.Body).Decode(&discordResponse)
+	err = common.DecodeJson(res.Body, &discordResponse)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Discord] ExchangeToken decode error: %s", err.Error()))
 		return nil, err
@@ -132,7 +132,7 @@ func (p *DiscordProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	}
 
 	var discordUser discordUser
-	err = json.NewDecoder(res.Body).Decode(&discordUser)
+	err = common.DecodeJson(res.Body, &discordUser)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("[OAuth-Discord] GetUserInfo decode error: %s", err.Error()))
 		return nil, err
@@ -152,13 +152,13 @@ func (p *DiscordProvider) GetUserInfo(ctx context.Context, token *OAuthToken) (*
 	}, nil
 }
 
-func (p *DiscordProvider) IsUserIDTaken(providerUserID string) bool {
-	return model.IsDiscordIdAlreadyTaken(providerUserID)
+func (p *DiscordProvider) IsUserIDTaken(tenantCtx context.Context, providerUserID string) bool {
+	return model.IsDiscordIdAlreadyTaken(tenantCtx, providerUserID)
 }
 
-func (p *DiscordProvider) FillUserByProviderID(user *model.User, providerUserID string) error {
+func (p *DiscordProvider) FillUserByProviderID(tenantCtx context.Context, user *model.User, providerUserID string) error {
 	user.DiscordId = providerUserID
-	return user.FillUserByDiscordId()
+	return user.FillUserByDiscordId(tenantCtx)
 }
 
 func (p *DiscordProvider) SetProviderUserID(user *model.User, providerUserID string) {

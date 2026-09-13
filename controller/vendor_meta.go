@@ -16,7 +16,7 @@ func GetAllVendors(c *gin.Context) { SearchVendors(c) }
 
 func SearchVendors(c *gin.Context) {
 	pageInfo := common.GetPageQuery(c)
-	vendors, total, err := model.SearchVendors(c.Query("keyword"), pageInfo.GetStartIdx(), pageInfo.GetPageSize(), c.Query("association"))
+	vendors, total, err := model.SearchVendors(c.Request.Context(), c.Query("keyword"), pageInfo.GetStartIdx(), pageInfo.GetPageSize(), c.Query("association"))
 	if err != nil {
 		vendorAPIError(c, err)
 		return
@@ -34,7 +34,7 @@ func GetVendorMeta(c *gin.Context) {
 		vendorAPIError(c, err)
 		return
 	}
-	v, err := model.GetVendorByID(id)
+	v, err := model.GetVendorByID(c.Request.Context(), id)
 	if err != nil {
 		vendorAPIError(c, err)
 		return
@@ -49,7 +49,7 @@ func CreateVendorMeta(c *gin.Context) {
 		vendorAPIError(c, err)
 		return
 	}
-	if err := v.Insert(); err != nil {
+	if err := v.Insert(c.Request.Context()); err != nil {
 		vendorAPIError(c, err)
 		return
 	}
@@ -68,7 +68,7 @@ func UpdateVendorMeta(c *gin.Context) {
 		common.ApiErrorMsg(c, "缺少供应商 ID")
 		return
 	}
-	if err := v.Update(); err != nil {
+	if err := v.Update(c.Request.Context()); err != nil {
 		vendorAPIError(c, err)
 		return
 	}
@@ -84,7 +84,7 @@ func DeleteVendorMeta(c *gin.Context) {
 		vendorAPIError(c, err)
 		return
 	}
-	if err := model.DeleteVendors([]int{id}); err != nil {
+	if err := model.DeleteVendors(c.Request.Context(), []int{id}); err != nil {
 		vendorAPIError(c, err)
 		return
 	}
@@ -114,7 +114,7 @@ func PreviewVendorOperation(c *gin.Context) {
 		vendorAPIError(c, err)
 		return
 	}
-	preview, err := model.PreviewVendorOperation(request)
+	preview, err := model.PreviewVendorOperation(c.Request.Context(), request)
 	if err != nil {
 		vendorAPIError(c, err)
 		return
@@ -128,7 +128,7 @@ func ApplyVendorOperation(c *gin.Context) {
 		vendorAPIError(c, err)
 		return
 	}
-	result, err := model.ApplyVendorOperation(request)
+	result, err := model.ApplyVendorOperation(c.Request.Context(), request)
 	if err != nil {
 		vendorAPIError(c, err)
 		return

@@ -44,8 +44,8 @@ type StripeAdaptor struct {
 }
 
 func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
-	if req.Amount < getStripeMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup())})
+	if req.Amount < getStripeMinTopup(c.Request.Context()) {
+		c.JSON(http.StatusOK, gin.H{"message": "error", "data": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup(c.Request.Context()))})
 		return
 	}
 	if req.Amount > 10000 {
@@ -53,15 +53,15 @@ func (*StripeAdaptor) RequestAmount(c *gin.Context, req *StripePayRequest) {
 		return
 	}
 	id := c.GetInt("id")
-	group, err := model.GetUserGroup(id, true)
+	group, err := model.GetUserGroup(c.Request.Context(), id, true)
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "获取用户分组失败"})
 		return
 	}
-	if rejectInvalidCreditedQuota(c, id, getStripeCreditedQuota(req.Amount, group)) {
+	if rejectInvalidCreditedQuota(c, id, getStripeCreditedQuota(c.Request.Context(), req.Amount, group)) {
 		return
 	}
-	payMoney := getStripePayMoney(float64(req.Amount), group)
+	payMoney := getStripePayMoney(c.Request.Context(), float64(req.Amount), group)
 	if payMoney <= 0.01 {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "充值金额过低"})
 		return
@@ -74,8 +74,8 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "不支持的支付渠道"})
 		return
 	}
-	if req.Amount < getStripeMinTopup() {
-		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup()), "data": 10})
+	if req.Amount < getStripeMinTopup(c.Request.Context()) {
+		c.JSON(http.StatusOK, gin.H{"message": fmt.Sprintf("充值数量不能小于 %d", getStripeMinTopup(c.Request.Context())), "data": 10})
 		return
 	}
 	if req.Amount > 10000 {
@@ -94,14 +94,14 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	}
 
 	id := c.GetInt("id")
-	user, err := model.GetUserById(id, false)
+	user, err := model.GetUserById(c.Request.Context(), id, false)
 	if err != nil || user == nil {
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "用户不存在"})
 		return
 	}
-	chargedMoney := GetChargedAmount(float64(req.Amount), *user)
+	chargedMoney := GetChargedAmount(c.Request.Context(), float64(req.Amount), *user)
 	if rejectInvalidCreditedQuota(c, id,
-		decimal.NewFromFloat(chargedMoney).Mul(decimal.NewFromFloat(common.QuotaPerUnit)),
+		decimal.NewFromFloat(chargedMoney).Mul(decimal.NewFromFloat(common.TenantState(c.Request.Context()).QuotaPerUnit)),
 	) {
 		return
 	}
@@ -109,7 +109,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 	reference := fmt.Sprintf("new-api-ref-%d-%d-%s", user.Id, time.Now().UnixMilli(), randstr.String(4))
 	referenceId := "ref_" + common.Sha1([]byte(reference))
 
-	payLink, err := genStripeLink(referenceId, user.StripeCustomer, user.Email, req.Amount, req.SuccessURL, req.CancelURL)
+	payLink, err := genStripeLink(c.Request.Context(), referenceId, user.StripeCustomer, user.Email, req.Amount, req.SuccessURL, req.CancelURL)
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建 Checkout Session 失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "拉起支付失败"})
@@ -126,7 +126,7 @@ func (*StripeAdaptor) RequestPay(c *gin.Context, req *StripePayRequest) {
 		CreateTime:      time.Now().Unix(),
 		Status:          common.TopUpStatusPending,
 	}
-	err = topUp.Insert()
+	err = topUp.Insert(c.Request.Context())
 	if err != nil {
 		logger.LogError(c.Request.Context(), fmt.Sprintf("Stripe 创建充值订单失败 user_id=%d trade_no=%s amount=%d error=%q", id, referenceId, req.Amount, err.Error()))
 		c.JSON(http.StatusOK, gin.H{"message": "error", "data": "创建订单失败"})
@@ -163,7 +163,7 @@ func RequestStripePay(c *gin.Context) {
 
 func StripeWebhook(c *gin.Context) {
 	ctx := c.Request.Context()
-	if !isStripeWebhookEnabled() {
+	if !isStripeWebhookEnabled(c.Request.Context()) {
 		logger.LogWarn(ctx, fmt.Sprintf("Stripe webhook 被拒绝 reason=webhook_disabled path=%q client_ip=%s", c.Request.RequestURI, c.ClientIP()))
 		c.AbortWithStatus(http.StatusForbidden)
 		return
@@ -178,7 +178,7 @@ func StripeWebhook(c *gin.Context) {
 
 	signature := c.GetHeader("Stripe-Signature")
 	logger.LogInfo(ctx, fmt.Sprintf("Stripe webhook 收到请求 path=%q client_ip=%s signature=%q body=%q", c.Request.RequestURI, c.ClientIP(), signature, string(payload)))
-	event, err := webhook.ConstructEventWithOptions(payload, signature, setting.StripeWebhookSecret, webhook.ConstructEventOptions{
+	event, err := webhook.ConstructEventWithOptions(payload, signature, setting.TenantState(c.Request.Context()).StripeWebhookSecret, webhook.ConstructEventOptions{
 		IgnoreAPIVersionMismatch: true,
 	})
 
@@ -245,10 +245,10 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 		return
 	}
 
-	LockOrder(referenceId)
-	defer UnlockOrder(referenceId)
+	LockOrder(ctx, referenceId)
+	defer UnlockOrder(ctx, referenceId)
 
-	topUp := model.GetTopUpByTradeNo(referenceId)
+	topUp := model.GetTopUpByTradeNo(ctx, referenceId)
 	if topUp == nil {
 		logger.LogWarn(ctx, fmt.Sprintf("Stripe 异步支付失败但本地订单不存在 trade_no=%s client_ip=%s", referenceId, callerIp))
 		return
@@ -265,7 +265,7 @@ func sessionAsyncPaymentFailed(ctx context.Context, event stripe.Event, callerIp
 	}
 
 	topUp.Status = common.TopUpStatusFailed
-	if err := topUp.Update(); err != nil {
+	if err := topUp.Update(ctx); err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe 标记充值订单失败状态失败 trade_no=%s client_ip=%s error=%q", referenceId, callerIp, err.Error()))
 		return
 	}
@@ -279,15 +279,15 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return
 	}
 
-	LockOrder(referenceId)
-	defer UnlockOrder(referenceId)
+	LockOrder(ctx, referenceId)
+	defer UnlockOrder(ctx, referenceId)
 	payload := map[string]any{
 		"customer":     customerId,
 		"amount_total": event.GetObjectValue("amount_total"),
 		"currency":     strings.ToUpper(event.GetObjectValue("currency")),
 		"event_type":   string(event.Type),
 	}
-	if err := model.CompleteSubscriptionOrder(referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
+	if err := model.CompleteSubscriptionOrder(ctx, referenceId, common.GetJsonString(payload), model.PaymentProviderStripe, ""); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单处理成功 trade_no=%s event_type=%s client_ip=%s", referenceId, string(event.Type), callerIp))
 		return
 	} else if err != nil && !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
@@ -295,7 +295,7 @@ func fulfillOrder(ctx context.Context, event stripe.Event, referenceId string, c
 		return
 	}
 
-	err := model.Recharge(referenceId, customerId, callerIp)
+	err := model.Recharge(ctx, referenceId, customerId, callerIp)
 	if err != nil {
 		logger.LogError(ctx, fmt.Sprintf("Stripe 充值处理失败 trade_no=%s event_type=%s client_ip=%s error=%q", referenceId, string(event.Type), callerIp, err.Error()))
 		return
@@ -320,9 +320,9 @@ func sessionExpired(ctx context.Context, event stripe.Event) {
 	}
 
 	// Subscription order expiration
-	LockOrder(referenceId)
-	defer UnlockOrder(referenceId)
-	if err := model.ExpireSubscriptionOrder(referenceId, model.PaymentProviderStripe); err == nil {
+	LockOrder(ctx, referenceId)
+	defer UnlockOrder(ctx, referenceId)
+	if err := model.ExpireSubscriptionOrder(ctx, referenceId, model.PaymentProviderStripe); err == nil {
 		logger.LogInfo(ctx, fmt.Sprintf("Stripe 订阅订单已过期 trade_no=%s", referenceId))
 		return
 	} else if err != nil && !errors.Is(err, model.ErrSubscriptionOrderNotFound) {
@@ -330,7 +330,7 @@ func sessionExpired(ctx context.Context, event stripe.Event) {
 		return
 	}
 
-	err := model.UpdatePendingTopUpStatus(referenceId, model.PaymentProviderStripe, common.TopUpStatusExpired)
+	err := model.UpdatePendingTopUpStatus(ctx, referenceId, model.PaymentProviderStripe, common.TopUpStatusExpired)
 	if errors.Is(err, model.ErrTopUpNotFound) {
 		logger.LogWarn(ctx, fmt.Sprintf("Stripe 充值订单不存在，无法标记过期 trade_no=%s", referenceId))
 		return
@@ -355,19 +355,19 @@ func sessionExpired(ctx context.Context, event stripe.Event) {
 //   - cancelURL: custom URL to redirect when payment is canceled (empty for default)
 //
 // Returns the checkout session URL or an error if the session creation fails.
-func genStripeLink(referenceId string, customerId string, email string, amount int64, successURL string, cancelURL string) (string, error) {
-	if !strings.HasPrefix(setting.StripeApiSecret, "sk_") && !strings.HasPrefix(setting.StripeApiSecret, "rk_") {
+func genStripeLink(tenantCtx context.Context, referenceId string, customerId string, email string, amount int64, successURL string, cancelURL string) (string, error) {
+	if !strings.HasPrefix(setting.TenantState(tenantCtx).StripeApiSecret, "sk_") && !strings.HasPrefix(setting.TenantState(tenantCtx).StripeApiSecret, "rk_") {
 		return "", fmt.Errorf("无效的Stripe API密钥")
 	}
 
-	stripe.Key = setting.StripeApiSecret
+	stripeSession := session.Client{B: stripe.GetBackend(stripe.APIBackend), Key: setting.TenantState(tenantCtx).StripeApiSecret}
 
 	// Use custom URLs if provided, otherwise use defaults
 	if successURL == "" {
-		successURL = paymentReturnPath("/usage-logs")
+		successURL = paymentReturnPath(tenantCtx, "/usage-logs")
 	}
 	if cancelURL == "" {
-		cancelURL = paymentReturnPath("/wallet")
+		cancelURL = paymentReturnPath(tenantCtx, "/wallet")
 	}
 
 	params := &stripe.CheckoutSessionParams{
@@ -376,12 +376,12 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 		CancelURL:         stripe.String(cancelURL),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
-				Price:    stripe.String(setting.StripePriceId),
+				Price:    stripe.String(setting.TenantState(tenantCtx).StripePriceId),
 				Quantity: stripe.Int64(amount),
 			},
 		},
 		Mode:                stripe.String(string(stripe.CheckoutSessionModePayment)),
-		AllowPromotionCodes: stripe.Bool(setting.StripePromotionCodesEnabled),
+		AllowPromotionCodes: stripe.Bool(setting.TenantState(tenantCtx).StripePromotionCodesEnabled),
 	}
 
 	if "" == customerId {
@@ -394,7 +394,7 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 		params.Customer = stripe.String(customerId)
 	}
 
-	result, err := session.New(params)
+	result, err := stripeSession.New(params)
 	if err != nil {
 		return "", err
 	}
@@ -402,8 +402,8 @@ func genStripeLink(referenceId string, customerId string, email string, amount i
 	return result.URL, nil
 }
 
-func GetChargedAmount(count float64, user model.User) float64 {
-	topUpGroupRatio := common.GetTopupGroupRatio(user.Group)
+func GetChargedAmount(tenantCtx context.Context, count float64, user model.User) float64 {
+	topUpGroupRatio := common.GetTopupGroupRatio(tenantCtx, user.Group)
 	if topUpGroupRatio == 0 {
 		topUpGroupRatio = 1
 	}
@@ -411,41 +411,41 @@ func GetChargedAmount(count float64, user model.User) float64 {
 	return count * topUpGroupRatio
 }
 
-func getStripeCreditedQuota(amount int64, group string) decimal.Decimal {
-	topUpGroupRatio := common.GetTopupGroupRatio(group)
+func getStripeCreditedQuota(tenantCtx context.Context, amount int64, group string) decimal.Decimal {
+	topUpGroupRatio := common.GetTopupGroupRatio(tenantCtx, group)
 	if topUpGroupRatio == 0 {
 		topUpGroupRatio = 1
 	}
 	return decimal.NewFromInt(amount).
 		Mul(decimal.NewFromFloat(topUpGroupRatio)).
-		Mul(decimal.NewFromFloat(common.QuotaPerUnit))
+		Mul(decimal.NewFromFloat(common.TenantState(tenantCtx).QuotaPerUnit))
 }
 
-func getStripePayMoney(amount float64, group string) float64 {
+func getStripePayMoney(tenantCtx context.Context, amount float64, group string) float64 {
 	originalAmount := amount
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		amount = amount / common.QuotaPerUnit
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
+		amount = amount / common.TenantState(tenantCtx).QuotaPerUnit
 	}
 	// Using float64 for monetary calculations is acceptable here due to the small amounts involved
-	topupGroupRatio := common.GetTopupGroupRatio(group)
+	topupGroupRatio := common.GetTopupGroupRatio(tenantCtx, group)
 	if topupGroupRatio == 0 {
 		topupGroupRatio = 1
 	}
 	// apply optional preset discount by the original request amount (if configured), default 1.0
 	discount := 1.0
-	if ds, ok := operation_setting.GetPaymentSetting().AmountDiscount[int(originalAmount)]; ok {
+	if ds, ok := operation_setting.GetPaymentSetting(tenantCtx).AmountDiscount[int(originalAmount)]; ok {
 		if ds > 0 {
 			discount = ds
 		}
 	}
-	payMoney := amount * setting.StripeUnitPrice * topupGroupRatio * discount
+	payMoney := amount * setting.TenantState(tenantCtx).StripeUnitPrice * topupGroupRatio * discount
 	return payMoney
 }
 
-func getStripeMinTopup() int64 {
-	minTopup := setting.StripeMinTopUp
-	if operation_setting.GetQuotaDisplayType() == operation_setting.QuotaDisplayTypeTokens {
-		minTopup = minTopup * int(common.QuotaPerUnit)
+func getStripeMinTopup(tenantCtx context.Context) int64 {
+	minTopup := setting.TenantState(tenantCtx).StripeMinTopUp
+	if operation_setting.GetQuotaDisplayType(tenantCtx) == operation_setting.QuotaDisplayTypeTokens {
+		minTopup = minTopup * int(common.TenantState(tenantCtx).QuotaPerUnit)
 	}
 	return int64(minTopup)
 }

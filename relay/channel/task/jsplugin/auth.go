@@ -1,7 +1,9 @@
 package jsplugin
 
 import (
+	"context"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +21,12 @@ type cachedAuth struct {
 var pluginAuthCache sync.Map
 var acquireAccessToken = vertexcore.AcquireAccessToken
 
-func resolveAuth(meta pluginruntime.AuthMeta, apiKey, proxy string) (map[string]any, error) {
+func resolveAuth(ctx context.Context, meta pluginruntime.AuthMeta, apiKey, proxy string) (map[string]any, error) {
 	typeName := strings.TrimSpace(meta.Type)
 	if typeName == "" || typeName == "none" || typeName == "api_key" {
 		return map[string]any{"authHeader": apiKey}, nil
 	}
-	cacheKey := apiKey + "\x00" + proxy
+	cacheKey := tenant.MustKey(ctx, common.GenerateHMAC(apiKey+"\x00"+proxy))
 	if value, ok := pluginAuthCache.Load(cacheKey); ok {
 		entry := value.(cachedAuth)
 		if time.Now().Before(entry.expiresAt) {
@@ -35,7 +37,7 @@ func resolveAuth(meta pluginruntime.AuthMeta, apiKey, proxy string) (map[string]
 	if err := common.Unmarshal([]byte(apiKey), &credentials); err != nil {
 		return nil, fmt.Errorf("decode oauth2_jwt credentials: %w", err)
 	}
-	token, err := acquireAccessToken(credentials, proxy)
+	token, err := acquireAccessToken(ctx, credentials, proxy)
 	if err != nil {
 		return nil, err
 	}

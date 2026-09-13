@@ -1,5 +1,7 @@
 package common
 
+import context "context"
+
 import (
 	"bytes"
 	"fmt"
@@ -124,9 +126,9 @@ type diskStorage struct {
 	mu       sync.Mutex
 }
 
-func newDiskStorage(data []byte, cachePath string) (*diskStorage, error) {
+func newDiskStorage(tenantCtx context.Context, data []byte, cachePath string) (*diskStorage, error) {
 	// 使用统一的缓存目录管理
-	filePath, file, err := CreateDiskCacheFile(DiskCacheTypeBody)
+	filePath, file, err := CreateDiskCacheFile(tenantCtx, DiskCacheTypeBody)
 	if err != nil {
 		return nil, err
 	}
@@ -156,9 +158,9 @@ func newDiskStorage(data []byte, cachePath string) (*diskStorage, error) {
 	}, nil
 }
 
-func newDiskStorageFromReader(reader io.Reader, maxBytes int64, cachePath string) (*diskStorage, error) {
+func newDiskStorageFromReader(tenantCtx context.Context, reader io.Reader, maxBytes int64, cachePath string) (*diskStorage, error) {
 	// 使用统一的缓存目录管理
-	filePath, file, err := CreateDiskCacheFile(DiskCacheTypeBody)
+	filePath, file, err := CreateDiskCacheFile(tenantCtx, DiskCacheTypeBody)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +285,7 @@ func (d *diskStorage) IsDisk() bool {
 }
 
 // CreateBodyStorage 根据数据大小创建合适的存储
-func CreateBodyStorage(data []byte) (BodyStorage, error) {
+func CreateBodyStorage(tenantCtx context.Context, data []byte) (BodyStorage, error) {
 	size := int64(len(data))
 	threshold := GetDiskCacheThresholdBytes()
 
@@ -291,7 +293,7 @@ func CreateBodyStorage(data []byte) (BodyStorage, error) {
 	if IsDiskCacheEnabled() &&
 		size >= threshold &&
 		IsDiskCacheAvailable(size) {
-		storage, err := newDiskStorage(data, GetDiskCachePath())
+		storage, err := newDiskStorage(tenantCtx, data, GetDiskCachePath())
 		if err != nil {
 			// 如果磁盘存储失败，回退到内存存储
 			SysError(fmt.Sprintf("failed to create disk storage, falling back to memory: %v", err))
@@ -304,7 +306,7 @@ func CreateBodyStorage(data []byte) (BodyStorage, error) {
 }
 
 // CreateBodyStorageFromReader 从 Reader 创建存储（用于大请求的流式处理）
-func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes int64) (BodyStorage, error) {
+func CreateBodyStorageFromReader(tenantCtx context.Context, reader io.Reader, contentLength int64, maxBytes int64) (BodyStorage, error) {
 	threshold := GetDiskCacheThresholdBytes()
 
 	// 如果启用了磁盘缓存且内容长度超过阈值，直接使用磁盘存储
@@ -312,7 +314,7 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 		contentLength > 0 &&
 		contentLength >= threshold &&
 		IsDiskCacheAvailable(contentLength) {
-		storage, err := newDiskStorageFromReader(reader, maxBytes, GetDiskCachePath())
+		storage, err := newDiskStorageFromReader(tenantCtx, reader, maxBytes, GetDiskCachePath())
 		if err != nil {
 			if IsRequestBodyTooLargeError(err) {
 				return nil, err
@@ -334,7 +336,7 @@ func CreateBodyStorageFromReader(reader io.Reader, contentLength int64, maxBytes
 		return nil, ErrRequestBodyTooLarge
 	}
 
-	storage, err := CreateBodyStorage(data)
+	storage, err := CreateBodyStorage(tenantCtx, data)
 	if err != nil {
 		return nil, err
 	}

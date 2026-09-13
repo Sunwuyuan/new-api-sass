@@ -1,5 +1,7 @@
 package controller
 
+import context "context"
+
 import (
 	"strings"
 
@@ -7,104 +9,104 @@ import (
 	"github.com/QuantumNous/new-api/setting/operation_setting"
 )
 
-func isPaymentComplianceConfirmed() bool {
-	return operation_setting.IsPaymentComplianceConfirmed()
+func isPaymentComplianceConfirmed(tenantCtx context.Context) bool {
+	return operation_setting.IsPaymentComplianceConfirmed(tenantCtx)
 }
 
-func isStripeTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
+func isStripeTopUpEnabled(tenantCtx context.Context) bool {
+	if !isPaymentComplianceConfirmed(tenantCtx) {
 		return false
 	}
-	return strings.TrimSpace(setting.StripeApiSecret) != "" &&
-		strings.TrimSpace(setting.StripeWebhookSecret) != "" &&
-		strings.TrimSpace(setting.StripePriceId) != ""
+	return strings.TrimSpace(setting.TenantState(tenantCtx).StripeApiSecret) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).StripeWebhookSecret) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).StripePriceId) != ""
 }
 
-func isStripeWebhookConfigured() bool {
-	return strings.TrimSpace(setting.StripeWebhookSecret) != ""
+func isStripeWebhookConfigured(tenantCtx context.Context) bool {
+	return strings.TrimSpace(setting.TenantState(tenantCtx).StripeWebhookSecret) != ""
 }
 
-func isStripeWebhookEnabled() bool {
-	return isStripeTopUpEnabled()
+func isStripeWebhookEnabled(tenantCtx context.Context) bool {
+	return isStripeTopUpEnabled(tenantCtx)
 }
 
-func isCreemTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
+func isCreemTopUpEnabled(tenantCtx context.Context) bool {
+	if !isPaymentComplianceConfirmed(tenantCtx) {
 		return false
 	}
-	products := strings.TrimSpace(setting.CreemProducts)
-	return strings.TrimSpace(setting.CreemApiKey) != "" &&
+	products := strings.TrimSpace(setting.TenantState(tenantCtx).CreemProducts)
+	return strings.TrimSpace(setting.TenantState(tenantCtx).CreemApiKey) != "" &&
 		products != "" &&
 		products != "[]"
 }
 
-func isCreemWebhookConfigured() bool {
-	return strings.TrimSpace(setting.CreemWebhookSecret) != ""
+func isCreemWebhookConfigured(tenantCtx context.Context) bool {
+	return strings.TrimSpace(setting.TenantState(tenantCtx).CreemWebhookSecret) != ""
 }
 
-func isCreemWebhookEnabled() bool {
-	return isCreemTopUpEnabled() && isCreemWebhookConfigured()
+func isCreemWebhookEnabled(tenantCtx context.Context) bool {
+	return isCreemTopUpEnabled(tenantCtx) && isCreemWebhookConfigured(tenantCtx)
 }
 
-func isWaffoTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
+func isWaffoTopUpEnabled(tenantCtx context.Context) bool {
+	if !isPaymentComplianceConfirmed(tenantCtx) {
 		return false
 	}
-	if !setting.WaffoEnabled {
+	if !setting.TenantState(tenantCtx).WaffoEnabled {
 		return false
 	}
 
-	return isWaffoWebhookConfigured()
+	return isWaffoWebhookConfigured(tenantCtx)
 }
 
-func isWaffoWebhookConfigured() bool {
-	if setting.WaffoSandbox {
-		return strings.TrimSpace(setting.WaffoSandboxApiKey) != "" &&
-			strings.TrimSpace(setting.WaffoSandboxPrivateKey) != "" &&
-			strings.TrimSpace(setting.WaffoSandboxPublicCert) != ""
+func isWaffoWebhookConfigured(tenantCtx context.Context) bool {
+	if setting.TenantState(tenantCtx).WaffoSandbox {
+		return strings.TrimSpace(setting.TenantState(tenantCtx).WaffoSandboxApiKey) != "" &&
+			strings.TrimSpace(setting.TenantState(tenantCtx).WaffoSandboxPrivateKey) != "" &&
+			strings.TrimSpace(setting.TenantState(tenantCtx).WaffoSandboxPublicCert) != ""
 	}
 
-	return strings.TrimSpace(setting.WaffoApiKey) != "" &&
-		strings.TrimSpace(setting.WaffoPrivateKey) != "" &&
-		strings.TrimSpace(setting.WaffoPublicCert) != ""
+	return strings.TrimSpace(setting.TenantState(tenantCtx).WaffoApiKey) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).WaffoPrivateKey) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).WaffoPublicCert) != ""
 }
 
-func isWaffoWebhookEnabled() bool {
-	return isWaffoTopUpEnabled()
+func isWaffoWebhookEnabled(tenantCtx context.Context) bool {
+	return isWaffoTopUpEnabled(tenantCtx)
 }
 
-func isWaffoPancakeTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
+func isWaffoPancakeTopUpEnabled(tenantCtx context.Context) bool {
+	if !isPaymentComplianceConfirmed(tenantCtx) {
 		return false
 	}
 	// Presence-of-credentials = enabled. Webhook public keys ship inside
 	// the SDK; mode (test/prod) is read from each event.
-	return strings.TrimSpace(setting.WaffoPancakeMerchantID) != "" &&
-		strings.TrimSpace(setting.WaffoPancakePrivateKey) != "" &&
-		strings.TrimSpace(setting.WaffoPancakeProductID) != ""
+	return strings.TrimSpace(setting.TenantState(tenantCtx).WaffoPancakeMerchantID) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).WaffoPancakePrivateKey) != "" &&
+		strings.TrimSpace(setting.TenantState(tenantCtx).WaffoPancakeProductID) != ""
 }
 
-func isWaffoPancakeWebhookConfigured() bool {
-	return isWaffoPancakeTopUpEnabled()
+func isWaffoPancakeWebhookConfigured(tenantCtx context.Context) bool {
+	return isWaffoPancakeTopUpEnabled(tenantCtx)
 }
 
-func isWaffoPancakeWebhookEnabled() bool {
-	return isWaffoPancakeTopUpEnabled()
+func isWaffoPancakeWebhookEnabled(tenantCtx context.Context) bool {
+	return isWaffoPancakeTopUpEnabled(tenantCtx)
 }
 
-func isEpayTopUpEnabled() bool {
-	if !isPaymentComplianceConfirmed() {
+func isEpayTopUpEnabled(tenantCtx context.Context) bool {
+	if !isPaymentComplianceConfirmed(tenantCtx) {
 		return false
 	}
-	return isEpayWebhookConfigured() && len(operation_setting.PayMethods) > 0
+	return isEpayWebhookConfigured(tenantCtx) && len(operation_setting.TenantState(tenantCtx).PayMethods) > 0
 }
 
-func isEpayWebhookConfigured() bool {
-	return strings.TrimSpace(operation_setting.PayAddress) != "" &&
-		strings.TrimSpace(operation_setting.EpayId) != "" &&
-		strings.TrimSpace(operation_setting.EpayKey) != ""
+func isEpayWebhookConfigured(tenantCtx context.Context) bool {
+	return strings.TrimSpace(operation_setting.TenantState(tenantCtx).PayAddress) != "" &&
+		strings.TrimSpace(operation_setting.TenantState(tenantCtx).EpayId) != "" &&
+		strings.TrimSpace(operation_setting.TenantState(tenantCtx).EpayKey) != ""
 }
 
-func isEpayWebhookEnabled() bool {
-	return isEpayTopUpEnabled()
+func isEpayWebhookEnabled(tenantCtx context.Context) bool {
+	return isEpayTopUpEnabled(tenantCtx)
 }

@@ -40,6 +40,7 @@ import {
   type ModelRatioData,
 } from '@/features/system-settings/models/model-pricing-sheet'
 import { api } from '@/lib/api'
+import { tenantStorage } from '@/lib/tenant'
 import { usePricingPreferencesStore } from '@/stores/pricing-preferences-store'
 import {
   DEFAULT_CURRENCY_CONFIG,
@@ -606,10 +607,10 @@ it('defaults to USD, remembers a currency choice and restores it when reopened',
   expect(screen.getByRole('textbox', { name: 'Input price' })).toHaveValue('14')
   editor.unmount()
   // Rehydrate from browser storage, rather than relying on the live store.
-  const stored = localStorage.getItem('model-pricing-preferences') ?? ''
+  const stored = tenantStorage.getItem('model-pricing-preferences') ?? ''
   expect(stored).not.toBe('')
   usePricingPreferencesStore.setState({ currency: 'USD' })
-  localStorage.setItem('model-pricing-preferences', stored)
+  tenantStorage.setItem('model-pricing-preferences', stored)
   await usePricingPreferencesStore.persist.rehydrate()
   renderEditor()
   expect(

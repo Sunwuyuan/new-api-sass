@@ -10,11 +10,17 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	openaichannel "github.com/QuantumNous/new-api/relay/channel/openai"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+
 	relaytypes "github.com/QuantumNous/new-api/relaykit/types"
+
 	hosttypes "github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +47,7 @@ func TestIsResponsesEventStreamContentType(t *testing.T) {
 }
 
 func TestRecalcQuotaFromRatiosIgnoresInvalidMultipliers(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		PriceData: hosttypes.PriceData{
 			Quota: 100,
 		},
@@ -62,7 +68,7 @@ func TestRecalcQuotaFromRatiosIgnoresInvalidMultipliers(t *testing.T) {
 }
 
 func TestRecalcQuotaFromRatiosRejectsAllInvalidAdjustedRatios(t *testing.T) {
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		PriceData: hosttypes.PriceData{
 			Quota: 100,
 		},
@@ -108,11 +114,11 @@ func TestTextRequestViaResponsesConvertsClaudeDirectly(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c, _ := testtenant.CreateTestContext(recorder)
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/messages", nil)
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayMode:              relayconstant.RelayModeChatCompletions,
 		RelayFormat:            relaytypes.RelayFormatClaude,
 		OriginModelName:        "gpt-5.6-sol",
@@ -190,9 +196,9 @@ func TestApplySystemPromptIfNeededSkipsToolLoadingMessages(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			gin.SetMode(gin.TestMode)
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-			info := &relaycommon.RelayInfo{
+			c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+			c.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+			info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 				ChannelMeta: &relaycommon.ChannelMeta{
 					ChannelSetting: dto.ChannelSettings{
 						SystemPrompt:         "Answer in English.",

@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -12,9 +14,10 @@ import (
 )
 
 type Redemption struct {
+	TenantID     int64          `json:"-" gorm:"not null;index;uniqueIndex:tenant_redemption_key,priority:1"`
 	Id           int            `json:"id"`
 	UserId       int            `json:"user_id"`
-	Key          string         `json:"key" gorm:"type:char(32);uniqueIndex"`
+	Key          string         `json:"key" gorm:"type:char(32);uniqueIndex:tenant_redemption_key"`
 	Status       int            `json:"status" gorm:"default:1"`
 	Name         string         `json:"name" gorm:"index"`
 	Quota        int            `json:"quota" gorm:"default:100"`
@@ -26,9 +29,9 @@ type Redemption struct {
 	ExpiredTime  int64          `json:"expired_time" gorm:"bigint"` // 过期时间，0 表示不过期
 }
 
-func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+func GetAllRedemptions(tenantCtx context.Context, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
 	// 开始事务
-	tx := DB.Begin()
+	tx := DB.WithContext(tenantCtx).Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
 	}
@@ -60,8 +63,8 @@ func GetAllRedemptions(startIdx int, num int) (redemptions []*Redemption, total 
 	return redemptions, total, nil
 }
 
-func SearchRedemptions(keyword string, status string, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
-	tx := DB.Begin()
+func SearchRedemptions(tenantCtx context.Context, keyword string, status string, startIdx int, num int) (redemptions []*Redemption, total int64, err error) {
+	tx := DB.WithContext(tenantCtx).Begin()
 	if tx.Error != nil {
 		return nil, 0, tx.Error
 	}
@@ -124,17 +127,17 @@ func SearchRedemptions(keyword string, status string, startIdx int, num int) (re
 	return redemptions, total, nil
 }
 
-func GetRedemptionById(id int) (*Redemption, error) {
+func GetRedemptionById(tenantCtx context.Context, id int) (*Redemption, error) {
 	if id == 0 {
 		return nil, errors.New("id 为空！")
 	}
 	redemption := Redemption{Id: id}
 	var err error = nil
-	err = DB.First(&redemption, "id = ?", id).Error
+	err = DB.WithContext(tenantCtx).First(&redemption, "id = ?", id).Error
 	return &redemption, err
 }
 
-func Redeem(key string, userId int) (quota int, err error) {
+func Redeem(tenantCtx context.Context, key string, userId int) (quota int, err error) {
 	if key == "" {
 		return 0, errors.New("未提供兑换码")
 	}
@@ -148,7 +151,7 @@ func Redeem(key string, userId int) (quota int, err error) {
 		keyCol = `"key"`
 	}
 	common.RandomSleep()
-	err = DB.Transaction(func(tx *gorm.DB) error {
+	err = DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		err := lockForUpdate(tx).Where(keyCol+" = ?", key).First(redemption).Error
 		if err != nil {
 			return errors.New("无效的兑换码")
@@ -181,12 +184,12 @@ func Redeem(key string, userId int) (quota int, err error) {
 		common.SysError("redemption failed: " + err.Error())
 		return 0, ErrRedeemFailed
 	}
-	syncCreditUserQuotaCache(userId, redemption.Quota, "redemption")
-	RecordLog(userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(redemption.Quota), redemption.Id))
+	syncCreditUserQuotaCache(tenantCtx, userId, redemption.Quota, "redemption")
+	RecordLog(tenantCtx, userId, LogTypeTopup, fmt.Sprintf("通过兑换码充值 %s，兑换码ID %d", logger.LogQuota(tenantCtx, redemption.Quota), redemption.Id))
 	return redemption.Quota, nil
 }
 
-func (redemption *Redemption) Insert() error {
+func (redemption *Redemption) Insert(tenantCtx context.Context) error {
 	if redemption.Quota <= 0 {
 		return errors.New("redemption quota must be positive")
 	}
@@ -194,17 +197,17 @@ func (redemption *Redemption) Insert() error {
 		return err
 	}
 	var err error
-	err = DB.Create(redemption).Error
+	err = DB.WithContext(tenantCtx).Create(redemption).Error
 	return err
 }
 
-func (redemption *Redemption) SelectUpdate() error {
+func (redemption *Redemption) SelectUpdate(tenantCtx context.Context) error {
 	// This can update zero values
-	return DB.Model(redemption).Select("redeemed_time", "status").Updates(redemption).Error
+	return DB.WithContext(tenantCtx).Model(redemption).Select("redeemed_time", "status").Updates(redemption).Error
 }
 
 // Update Make sure your token's fields is completed, because this will update non-zero values
-func (redemption *Redemption) Update() error {
+func (redemption *Redemption) Update(tenantCtx context.Context) error {
 	if redemption.Quota <= 0 {
 		return errors.New("redemption quota must be positive")
 	}
@@ -212,36 +215,36 @@ func (redemption *Redemption) Update() error {
 		return err
 	}
 	var err error
-	err = DB.Model(redemption).Select("name", "status", "quota", "redeemed_time", "expired_time").Updates(redemption).Error
+	err = DB.WithContext(tenantCtx).Model(redemption).Select("name", "status", "quota", "redeemed_time", "expired_time").Updates(redemption).Error
 	return err
 }
 
-func (redemption *Redemption) Delete() error {
+func (redemption *Redemption) Delete(tenantCtx context.Context) error {
 	var err error
-	err = DB.Delete(redemption).Error
+	err = DB.WithContext(tenantCtx).Delete(redemption).Error
 	return err
 }
 
-func DeleteRedemptionById(id int) (err error) {
+func DeleteRedemptionById(tenantCtx context.Context, id int) (err error) {
 	if id == 0 {
 		return errors.New("id 为空！")
 	}
 	redemption := Redemption{Id: id}
-	err = DB.Where(redemption).First(&redemption).Error
+	err = DB.WithContext(tenantCtx).Where(redemption).First(&redemption).Error
 	if err != nil {
 		return err
 	}
-	return redemption.Delete()
+	return redemption.Delete(tenantCtx)
 }
 
-func DeleteInvalidRedemptions() (int64, error) {
+func DeleteInvalidRedemptions(tenantCtx context.Context) (int64, error) {
 	now := common.GetTimestamp()
-	result := DB.Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
+	result := DB.WithContext(tenantCtx).Where("status IN ? OR (status = ? AND expired_time != 0 AND expired_time < ?)", []int{common.RedemptionCodeStatusUsed, common.RedemptionCodeStatusDisabled}, common.RedemptionCodeStatusEnabled, now).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }
 
 // BatchDeleteRedemptions soft-deletes the selected codes in one statement.
-func BatchDeleteRedemptions(ids []int) (int64, error) {
+func BatchDeleteRedemptions(tenantCtx context.Context, ids []int) (int64, error) {
 	if len(ids) == 0 || len(ids) > 1000 {
 		return 0, errors.New("select between 1 and 1000 redemption codes")
 	}
@@ -250,6 +253,6 @@ func BatchDeleteRedemptions(ids []int) (int64, error) {
 			return 0, errors.New("redemption IDs must be positive")
 		}
 	}
-	result := DB.Where("id IN ?", ids).Delete(&Redemption{})
+	result := DB.WithContext(tenantCtx).Where("id IN ?", ids).Delete(&Redemption{})
 	return result.RowsAffected, result.Error
 }

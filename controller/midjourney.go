@@ -15,6 +15,7 @@ import (
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
+	"github.com/QuantumNous/new-api/tenant"
 
 	"github.com/gin-gonic/gin"
 )
@@ -33,11 +34,12 @@ type midjourneyPollSummary struct {
 // totalChannels) so the system task surfaces a percentage.
 func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, total int)) midjourneyPollSummary {
 	summary := midjourneyPollSummary{}
-	if ctx == nil {
-		ctx = context.Background()
+	if _, err := tenant.FromContext(ctx); err != nil {
+		common.SysError("Midjourney polling requires a workspace: " + err.Error())
+		return summary
 	}
 
-	tasks := model.GetAllUnFinishTasks()
+	tasks := model.GetAllUnFinishTasks(ctx)
 	if len(tasks) == 0 {
 		return summary
 	}
@@ -58,7 +60,7 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 	}
 	if len(nullTaskIds) > 0 {
 		summary.NullTasksFailed = len(nullTaskIds)
-		err := model.MjBulkUpdateByTaskIds(nullTaskIds, map[string]any{
+		err := model.MjBulkUpdateByTaskIds(ctx, nullTaskIds, map[string]any{
 			"status":   "FAILURE",
 			"progress": "100%",
 		})
@@ -75,7 +77,7 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 	totalChannels := len(taskChannelM)
 	processedChannels := 0
 	for channelId, taskIds := range taskChannelM {
-		if ctx != nil && ctx.Err() != nil {
+		if ctx.Err() != nil {
 			break
 		}
 		if report != nil {
@@ -87,10 +89,10 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 		if len(taskIds) == 0 {
 			continue
 		}
-		midjourneyChannel, err := model.CacheGetChannel(channelId)
+		midjourneyChannel, err := model.CacheGetChannel(ctx, channelId)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("CacheGetChannel: %v", err))
-			err := model.MjBulkUpdate(taskIds, map[string]any{
+			err := model.MjBulkUpdate(ctx, taskIds, map[string]any{
 				"fail_reason": fmt.Sprintf("获取渠道信息失败，请联系管理员，渠道ID：%d", channelId),
 				"status":      "FAILURE",
 				"progress":    "100%",
@@ -119,7 +121,7 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("mj-api-secret", midjourneyChannel.Key)
-		resp, err := service.GetHttpClient().Do(req)
+		resp, err := service.GetHttpClient(ctx).Do(req)
 		if err != nil {
 			logger.LogError(ctx, fmt.Sprintf("Get Task Do req error: %v", err))
 			cancel()
@@ -209,7 +211,7 @@ func runMidjourneyTaskUpdateOnce(ctx context.Context, report func(processed, tot
 					shouldReturnQuota = true
 				}
 			}
-			won, err := task.UpdateWithStatus(preStatus)
+			won, err := task.UpdateWithStatus(ctx, preStatus)
 			if err != nil {
 				logger.LogError(ctx, "UpdateMidjourneyTask task error: "+err.Error())
 			} else if won && shouldReturnQuota {
@@ -289,12 +291,12 @@ func GetAllMidjourney(c *gin.Context) {
 		EndTimestamp:   c.Query("end_timestamp"),
 	}
 
-	items := model.GetAllTasks(pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
-	total := model.CountAllTasks(queryParams)
+	items := model.GetAllTasks(c.Request.Context(), pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	total := model.CountAllTasks(c.Request.Context(), queryParams)
 
-	if setting.MjForwardUrlEnabled {
+	if setting.TenantState(c.Request.Context()).MjForwardUrlEnabled {
 		for i, midjourney := range items {
-			midjourney.ImageUrl = system_setting.ServerAddress + "/mj/image/" + midjourney.MjId
+			midjourney.ImageUrl = system_setting.TenantState(c.Request.Context()).ServerAddress + "/mj/image/" + midjourney.MjId
 			items[i] = midjourney
 		}
 	}
@@ -314,12 +316,12 @@ func GetUserMidjourney(c *gin.Context) {
 		EndTimestamp:   c.Query("end_timestamp"),
 	}
 
-	items := model.GetAllUserTask(userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
-	total := model.CountAllUserTask(userId, queryParams)
+	items := model.GetAllUserTask(c.Request.Context(), userId, pageInfo.GetStartIdx(), pageInfo.GetPageSize(), queryParams)
+	total := model.CountAllUserTask(c.Request.Context(), userId, queryParams)
 
-	if setting.MjForwardUrlEnabled {
+	if setting.TenantState(c.Request.Context()).MjForwardUrlEnabled {
 		for i, midjourney := range items {
-			midjourney.ImageUrl = system_setting.ServerAddress + "/mj/image/" + midjourney.MjId
+			midjourney.ImageUrl = system_setting.TenantState(c.Request.Context()).ServerAddress + "/mj/image/" + midjourney.MjId
 			items[i] = midjourney
 		}
 	}

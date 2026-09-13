@@ -23,6 +23,13 @@ import { t } from 'i18next'
 import { publishAuthSessionEvent } from '@/lib/auth-session-sync'
 import { hasSessionHint } from '@/lib/session-hint'
 import {
+  applyTenantRequestURL,
+  tenantBasePath,
+  tenantKey,
+  WORKSPACE_HEADER,
+  workspaceSlug,
+} from '@/lib/tenant'
+import {
   useAuthStore,
   type AuthBootstrapState,
   type AuthBundle,
@@ -68,12 +75,22 @@ export class AuthRotationError extends Error {
 }
 
 const authClient = axios.create({
-  baseURL: '',
+  baseURL: tenantBasePath,
+  allowAbsoluteUrls: false,
   withCredentials: true,
   headers: {
     // no-store forbids storage; no-cache also revalidates any older cached response.
     'Cache-Control': 'no-cache, no-store',
   },
+})
+
+authClient.interceptors.request.use((config) => {
+  applyTenantRequestURL(config)
+  const slug = workspaceSlug()
+  if (slug) {
+    config.headers.set(WORKSPACE_HEADER, slug)
+  }
+  return config
 })
 
 const refreshRaceDelays = [80, 200, 500] as const
@@ -322,7 +339,7 @@ async function performRefreshWithBrowserLock(
       return runRefresh(refreshEpoch)
     }
     return navigator.locks.request(
-      'new-api:auth-refresh',
+      tenantKey('new-api:auth-refresh'),
       { mode: 'exclusive' },
       () => runRefresh(refreshEpoch)
     )

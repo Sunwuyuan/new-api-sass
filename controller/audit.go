@@ -95,7 +95,7 @@ func recordPasskeyDomainAudit(c *gin.Context, change *model.PasskeyDomainChange,
 		Method: c.Request.Method, Route: c.FullPath(), Path: c.FullPath(),
 		Status: c.Writer.Status(), Success: err == nil,
 	}
-	model.RecordOperationAuditLog(c.GetInt("id"), c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), auditInfo, c)
+	model.RecordOperationAuditLog(c.Request.Context(), c.GetInt("id"), c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), auditInfo, c)
 	markAuditLogged(c)
 }
 
@@ -152,7 +152,7 @@ func recordManageAuditFor(c *gin.Context, targetUserId int, action string, param
 	if _, ok := params["target_user_id"]; !ok && targetUserId > 0 && targetUserId != operatorUserId {
 		params["target_user_id"] = targetUserId
 	}
-	model.RecordOperationAuditLog(operatorUserId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil, c)
+	model.RecordOperationAuditLog(c.Request.Context(), operatorUserId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, auditOperatorInfo(c), nil, c)
 	markAuditLogged(c)
 }
 
@@ -172,7 +172,7 @@ func recordUserSecurityAudit(c *gin.Context, userId int, action string, params m
 			Status: c.Writer.Status(), Success: success,
 		}
 	}
-	model.RecordOperationAuditLog(userId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, nil, auditInfo, c)
+	model.RecordOperationAuditLog(c.Request.Context(), userId, c.GetInt("role"), auditContentEN(action, params), c.ClientIP(), action, params, nil, auditInfo, c)
 }
 
 func tokenAuditParams(c *gin.Context) model.AuditFields {

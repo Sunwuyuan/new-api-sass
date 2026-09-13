@@ -1,5 +1,7 @@
 package authz
 
+import context "context"
+
 import "slices"
 
 import "github.com/casbin/casbin/v2"
@@ -7,7 +9,7 @@ import "github.com/casbin/casbin/v2"
 // Can reports whether the subject may perform the permission. A superuser role
 // short-circuits to allow. Otherwise a per-user override wins, then the union of
 // the subject's role baselines applies.
-func Can(userID int, systemRole int, permission Permission) bool {
+func Can(tenantCtx context.Context, userID int, systemRole int, permission Permission) bool {
 	roles := resolveSubjectRoles(userID, systemRole)
 	if len(roles) == 0 {
 		return false
@@ -19,7 +21,7 @@ func Can(userID int, systemRole int, permission Permission) bool {
 		return false
 	}
 
-	e := currentEnforcer()
+	e := currentEnforcer(tenantCtx)
 	if e == nil {
 		return false
 	}
@@ -35,12 +37,12 @@ func Can(userID int, systemRole int, permission Permission) bool {
 }
 
 // Capabilities returns the full resource/action matrix the subject is allowed.
-func Capabilities(userID int, systemRole int) PermissionsMap {
+func Capabilities(tenantCtx context.Context, userID int, systemRole int) PermissionsMap {
 	result := make(PermissionsMap, len(registry))
 	for _, resource := range registry {
 		actions := make(map[string]bool, len(resource.Actions))
 		for _, action := range resource.Actions {
-			actions[action.Action] = Can(userID, systemRole, Permission{
+			actions[action.Action] = Can(tenantCtx, userID, systemRole, Permission{
 				Resource: resource.Resource,
 				Action:   action.Action,
 			})

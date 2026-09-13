@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"crypto/hmac"
 	"errors"
@@ -51,9 +53,9 @@ func IsPasskeyDomainOption(key string) bool {
 // nodes. Callers also hold passkeyOptionMutex for SQLite and local cache ordering.
 // Always acquire these option rows before any user/session/credential row locks.
 func lockPasskeyDomainSettings(tx *gorm.DB) (system_setting.PasskeySettings, string, error) {
-	common.OptionMapRWMutex.RLock()
-	settings, serverAddress := *system_setting.GetPasskeySettings(), system_setting.ServerAddress
-	common.OptionMapRWMutex.RUnlock()
+	common.TenantState(tx.Statement.Context).OptionMapRWMutex.RLock()
+	settings, serverAddress := *system_setting.GetPasskeySettings(tx.Statement.Context), system_setting.TenantState(tx.Statement.Context).ServerAddress
+	common.TenantState(tx.Statement.Context).OptionMapRWMutex.RUnlock()
 	rows := []Option{
 		{Key: "ServerAddress", Value: serverAddress},
 		{Key: "passkey.legacy_rp_ids", Value: settings.LegacyRPIDs},
@@ -93,9 +95,9 @@ func validatePasskeyRPIDWithTx(tx *gorm.DB, rpID string) error {
 // UpdatePasskeyDomainOptions keeps every supplied option in one transaction,
 // including unrelated keys from UpdateOptionsBulk. Preview rolls back even the
 // initial default rows and never publishes a local configuration change.
-func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirmation string) (*PasskeyDomainChange, error) {
-	passkeyOptionMutex.Lock()
-	defer passkeyOptionMutex.Unlock()
+func UpdatePasskeyDomainOptions(tenantCtx context.Context, values map[string]string, preview bool, confirmation string) (*PasskeyDomainChange, error) {
+	TenantState(tenantCtx).passkeyOptionMutex.Lock()
+	defer TenantState(tenantCtx).passkeyOptionMutex.Unlock()
 	values = maps.Clone(values)
 	for key, value := range values {
 		if err := validateOptionValue(key, value); err != nil {
@@ -103,7 +105,7 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 		}
 	}
 	var change *PasskeyDomainChange
-	err := DB.Transaction(func(tx *gorm.DB) error {
+	err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		settings, serverAddress, err := lockPasskeyDomainSettings(tx)
 		if err != nil {
 			return err
@@ -228,7 +230,7 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 		values["ServerAddress"] = serverAddress
 		keys := slices.Sorted(maps.Keys(values))
 		for _, key := range keys {
-			if err := tx.Save(&Option{Key: key, Value: values[key]}).Error; err != nil {
+			if err := tx.Model(&Option{}).Where(Option{Key: key}).Update("value", values[key]).Error; err != nil {
 				return err
 			}
 		}
@@ -240,10 +242,10 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 	if err != nil {
 		return change, err
 	}
-	applyPasskeyDomainOptions(values)
+	applyPasskeyDomainOptions(tenantCtx, values)
 	for key, value := range values {
 		if !IsPasskeyDomainOption(key) {
-			if err := updateOptionMap(key, value); err != nil {
+			if err := updateOptionMap(tenantCtx, key, value); err != nil {
 				return change, err
 			}
 		}
@@ -251,19 +253,19 @@ func UpdatePasskeyDomainOptions(values map[string]string, preview bool, confirma
 	return change, nil
 }
 
-func applyPasskeyDomainOptions(values map[string]string) {
-	common.OptionMapRWMutex.Lock()
-	defer common.OptionMapRWMutex.Unlock()
-	if common.OptionMap == nil {
-		common.OptionMap = make(map[string]string)
+func applyPasskeyDomainOptions(tenantCtx context.Context, values map[string]string) {
+	common.TenantState(tenantCtx).OptionMapRWMutex.Lock()
+	defer common.TenantState(tenantCtx).OptionMapRWMutex.Unlock()
+	if common.TenantState(tenantCtx).OptionMap == nil {
+		common.TenantState(tenantCtx).OptionMap = make(map[string]string)
 	}
 	for _, key := range []string{"ServerAddress", "passkey.legacy_rp_ids", "passkey.origins", "passkey.rp_id"} {
 		if value, ok := values[key]; ok {
-			common.OptionMap[key] = value
+			common.TenantState(tenantCtx).OptionMap[key] = value
 			if key == "ServerAddress" {
-				system_setting.ServerAddress = value
+				system_setting.UpdateTenantSettings(tenantCtx, func(state *system_setting.WorkspaceState) { state.ServerAddress = value })
 			} else {
-				handleConfigUpdate(key, value)
+				handleConfigUpdate(tenantCtx, key, value)
 			}
 		}
 	}

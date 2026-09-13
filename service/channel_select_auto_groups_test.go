@@ -8,6 +8,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
@@ -23,11 +24,11 @@ func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
 
 	originalDB := model.DB
 	originalMemoryCacheEnabled := common.MemoryCacheEnabled
-	originalRetryTimes := common.RetryTimes
-	originalAutoGroups := setting.AutoGroups2JsonString()
-	originalUsableGroups := setting.UserUsableGroups2JSONString()
-	originalGroupRatios := ratio_setting.GroupRatio2JSONString()
-	originalMaxTokenAutoGroups := setting.GetMaxTokenAutoGroups()
+	originalRetryTimes := common.TenantState(testtenant.Context()).RetryTimes
+	originalAutoGroups := setting.AutoGroups2JsonString(testtenant.Context())
+	originalUsableGroups := setting.UserUsableGroups2JSONString(testtenant.Context())
+	originalGroupRatios := ratio_setting.GroupRatio2JSONString(testtenant.Context())
+	originalMaxTokenAutoGroups := setting.GetMaxTokenAutoGroups(testtenant.Context())
 
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", strings.ReplaceAll(t.Name(), "/", "_"))
 	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
@@ -35,25 +36,25 @@ func setupChannelSelectAutoGroupsTest(t *testing.T) *gorm.DB {
 	require.NoError(t, db.AutoMigrate(&model.Channel{}, &model.Ability{}))
 	model.DB = db
 	common.MemoryCacheEnabled = true
-	common.RetryTimes = 0
+	common.TenantState(testtenant.Context()).RetryTimes = 0
 
-	require.NoError(t, setting.UpdateAutoGroupsByJsonString(`[]`))
-	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(`{"default":"Default","vip":"VIP"}`))
-	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(`{"default":1,"vip":2}`))
-	require.NoError(t, setting.UpdateMaxTokenAutoGroups("2"))
+	require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), `[]`))
+	require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), `{"default":"Default","vip":"VIP"}`))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), `{"default":1,"vip":2}`))
+	require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), "2"))
 
 	t.Cleanup(func() {
 		model.DB = originalDB
 		common.MemoryCacheEnabled = originalMemoryCacheEnabled
-		common.RetryTimes = originalRetryTimes
-		require.NoError(t, setting.UpdateAutoGroupsByJsonString(originalAutoGroups))
-		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(originalUsableGroups))
-		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(originalGroupRatios))
-		require.NoError(t, setting.UpdateMaxTokenAutoGroups(fmt.Sprintf("%d", originalMaxTokenAutoGroups)))
+		common.TenantState(testtenant.Context()).RetryTimes = originalRetryTimes
+		require.NoError(t, setting.UpdateAutoGroupsByJsonString(testtenant.Context(), originalAutoGroups))
+		require.NoError(t, setting.UpdateUserUsableGroupsByJSONString(testtenant.Context(), originalUsableGroups))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(testtenant.Context(), originalGroupRatios))
+		require.NoError(t, setting.UpdateMaxTokenAutoGroups(testtenant.Context(), fmt.Sprintf("%d", originalMaxTokenAutoGroups)))
 
 		if originalMemoryCacheEnabled && originalDB != nil &&
 			originalDB.Migrator().HasTable(&model.Channel{}) && originalDB.Migrator().HasTable(&model.Ability{}) {
-			model.InitChannelCache()
+			model.InitChannelCache(testtenant.Context())
 		}
 		sqlDB, err := db.DB()
 		if err == nil {
@@ -94,10 +95,10 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 	const modelName = "auto-groups-runtime-model"
 	createChannelSelectAutoGroupsChannel(t, db, 2101, "vip", modelName)
 	createChannelSelectAutoGroupsChannel(t, db, 2102, "default", modelName)
-	model.InitChannelCache()
+	model.InitChannelCache(testtenant.Context())
 
 	gin.SetMode(gin.TestMode)
-	ctx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	ctx, _ := testtenant.CreateTestContext(httptest.NewRecorder())
 	common.SetContextKey(ctx, constant.ContextKeyUserGroup, "default")
 	common.SetContextKey(ctx, constant.ContextKeyTokenAutoGroups, []string{"vip", "default"})
 	common.SetContextKey(ctx, constant.ContextKeyTokenCrossGroupRetry, true)
@@ -111,16 +112,16 @@ func TestCacheGetRandomSatisfiedChannelUsesTokenAutoGroupsWhenGlobalAutoIsEmpty(
 		Retry:       &retry,
 	}
 
-	first, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+	first, selectedGroup, err := CacheGetRandomSatisfiedChannel(testtenant.Context(), param)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	assert.Equal(t, 2101, first.Id)
 	assert.Equal(t, "vip", selectedGroup)
 	assert.Equal(t, "vip", common.GetContextKeyString(ctx, constant.ContextKeyAutoGroup))
-	assert.Empty(t, setting.GetAutoGroups(), "the selection must not depend on the global Auto list")
+	assert.Empty(t, setting.GetAutoGroups(testtenant.Context()), "the selection must not depend on the global Auto list")
 
 	param.IncreaseRetry()
-	second, selectedGroup, err := CacheGetRandomSatisfiedChannel(param)
+	second, selectedGroup, err := CacheGetRandomSatisfiedChannel(testtenant.Context(), param)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	assert.Equal(t, 2102, second.Id)

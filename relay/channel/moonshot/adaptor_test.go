@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/stretchr/testify/require"
@@ -14,7 +16,7 @@ func TestConvertOpenAIRequestKimiK26UsesOnlyAllowedTemperature(t *testing.T) {
 		Model:       "kimi-k2.6",
 		Temperature: common.GetPointer[float64](0.7),
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "kimi-k2.6",
 		},
@@ -33,7 +35,7 @@ func TestConvertOpenAIRequestKimiK26KeepsOmittedTemperatureOmitted(t *testing.T)
 	request := &dto.GeneralOpenAIRequest{
 		Model: "kimi-k2.6",
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "kimi-k2.6",
 		},
@@ -52,7 +54,7 @@ func TestConvertOpenAIRequestOtherMoonshotModelKeepsTemperature(t *testing.T) {
 		Model:       "kimi-k2.5",
 		Temperature: common.GetPointer[float64](0.7),
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		ChannelMeta: &relaycommon.ChannelMeta{
 			UpstreamModelName: "kimi-k2.5",
 		},

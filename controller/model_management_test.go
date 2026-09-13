@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/pkg/billingexpr"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
@@ -37,24 +39,24 @@ func modelManagementDB(t *testing.T, kind, dsn string) *gorm.DB {
 	previousMain, previousLog := common.MainDatabaseType(), common.LogDatabaseType()
 	previousMaster, previousSQLite := common.IsMasterNode, common.SQLitePath
 	previousRedis, previousMemory := common.RedisEnabled, common.MemoryCacheEnabled
-	previousOptions := common.OptionMap
-	previousConfig := config.GlobalConfig.ExportAllConfigs()
+	previousOptions := common.TenantState(testtenant.Context()).OptionMap
+	previousConfig := config.GlobalConfig.ForTenant(testtenant.Context()).ExportAllConfigs()
 	restoreRatios := []struct {
 		value   string
-		restore func(string) error
+		restore func(context.Context, string) error
 	}{
-		{ratio_setting.ModelPrice2JSONString(), ratio_setting.UpdateModelPriceByJSONString},
-		{ratio_setting.ModelRatio2JSONString(), ratio_setting.UpdateModelRatioByJSONString},
-		{ratio_setting.CompletionRatio2JSONString(), ratio_setting.UpdateCompletionRatioByJSONString},
-		{ratio_setting.CacheRatio2JSONString(), ratio_setting.UpdateCacheRatioByJSONString},
-		{ratio_setting.CreateCacheRatio2JSONString(), ratio_setting.UpdateCreateCacheRatioByJSONString},
-		{ratio_setting.ImageRatio2JSONString(), ratio_setting.UpdateImageRatioByJSONString},
-		{ratio_setting.AudioRatio2JSONString(), ratio_setting.UpdateAudioRatioByJSONString},
-		{ratio_setting.AudioCompletionRatio2JSONString(), ratio_setting.UpdateAudioCompletionRatioByJSONString},
+		{ratio_setting.ModelPrice2JSONString(testtenant.Context()), ratio_setting.UpdateModelPriceByJSONString},
+		{ratio_setting.ModelRatio2JSONString(testtenant.Context()), ratio_setting.UpdateModelRatioByJSONString},
+		{ratio_setting.CompletionRatio2JSONString(testtenant.Context()), ratio_setting.UpdateCompletionRatioByJSONString},
+		{ratio_setting.CacheRatio2JSONString(testtenant.Context()), ratio_setting.UpdateCacheRatioByJSONString},
+		{ratio_setting.CreateCacheRatio2JSONString(testtenant.Context()), ratio_setting.UpdateCreateCacheRatioByJSONString},
+		{ratio_setting.ImageRatio2JSONString(testtenant.Context()), ratio_setting.UpdateImageRatioByJSONString},
+		{ratio_setting.AudioRatio2JSONString(testtenant.Context()), ratio_setting.UpdateAudioRatioByJSONString},
+		{ratio_setting.AudioCompletionRatio2JSONString(testtenant.Context()), ratio_setting.UpdateAudioCompletionRatioByJSONString},
 	}
 	common.IsMasterNode = false
 	common.RedisEnabled, common.MemoryCacheEnabled = false, false
-	common.OptionMap = map[string]string{}
+	common.TenantState(testtenant.Context()).OptionMap = map[string]string{}
 	if kind == "sqlite" {
 		common.SQLitePath = isolatedDSN
 		isolatedDSN = "local"
@@ -66,9 +68,9 @@ func modelManagementDB(t *testing.T, kind, dsn string) *gorm.DB {
 	model.LOG_DB = database
 	require.NoError(t, database.AutoMigrate(&model.Model{}, &model.Vendor{}, &model.Channel{}, &model.Ability{}, &model.Option{}, &model.User{}, &model.AuditLog{}))
 	for _, value := range restoreRatios {
-		require.NoError(t, value.restore("{}"))
+		require.NoError(t, value.restore(testtenant.Context(), "{}"))
 	}
-	config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": "{}", "billing_expr": "{}", "plugin_billing_expr": "{}"})
+	config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": "{}", "billing_expr": "{}", "plugin_billing_expr": "{}"})
 	var version string
 	query := "SELECT version()"
 	if kind == "sqlite" {
@@ -78,10 +80,10 @@ func modelManagementDB(t *testing.T, kind, dsn string) *gorm.DB {
 	t.Logf("database version: %s", version)
 	t.Cleanup(func() {
 		for _, value := range restoreRatios {
-			require.NoError(t, value.restore(value.value))
+			require.NoError(t, value.restore(testtenant.Context(), value.value))
 		}
-		config.UpdateConfigFromMap(config.GlobalConfig.Get("billing_setting"), map[string]string{"billing_mode": previousConfig["billing_setting.billing_mode"], "billing_expr": previousConfig["billing_setting.billing_expr"], "plugin_billing_expr": previousConfig[billing_setting.PluginBillingExprOption]})
-		common.OptionMap = previousOptions
+		config.UpdateConfigFromMap(config.GlobalConfig.ForTenant(testtenant.Context()).Get("billing_setting"), map[string]string{"billing_mode": previousConfig["billing_setting.billing_mode"], "billing_expr": previousConfig["billing_setting.billing_expr"], "plugin_billing_expr": previousConfig[billing_setting.PluginBillingExprOption]})
+		common.TenantState(testtenant.Context()).OptionMap = previousOptions
 		common.IsMasterNode, common.SQLitePath = previousMaster, previousSQLite
 		common.RedisEnabled, common.MemoryCacheEnabled = previousRedis, previousMemory
 		common.SetDatabaseTypes(previousMain, previousLog)
@@ -99,8 +101,8 @@ func modelManagementRequest(t *testing.T, handler gin.HandlerFunc, method, path 
 	encoded, err := common.Marshal(body)
 	require.NoError(t, err)
 	recorder := httptest.NewRecorder()
-	context, _ := gin.CreateTestContext(recorder)
-	context.Request = httptest.NewRequest(method, path, bytes.NewReader(encoded))
+	context, _ := testtenant.CreateTestContext(recorder)
+	context.Request = testtenant.NewRequest(method, path, bytes.NewReader(encoded))
 	context.Set("role", common.RoleRootUser)
 	handler(context)
 	if output != nil {
@@ -110,9 +112,9 @@ func modelManagementRequest(t *testing.T, handler gin.HandlerFunc, method, path 
 }
 
 func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
-	previousQuota := common.QuotaPerUnit
-	common.QuotaPerUnit = 500000
-	t.Cleanup(func() { common.QuotaPerUnit = previousQuota })
+	previousQuota := common.TenantState(testtenant.Context()).QuotaPerUnit
+	common.TenantState(testtenant.Context()).QuotaPerUnit = 500000
+	t.Cleanup(func() { common.TenantState(testtenant.Context()).QuotaPerUnit = previousQuota })
 	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
 		t.Run(dialect.kind, func(t *testing.T) {
 			if dialect.env != "" && os.Getenv(dialect.env) == "" {
@@ -145,7 +147,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 			}
 			// The preview must resolve the draft, even when the running process
 			// still has a different saved output multiplier for that model.
-			require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(`{"conversion-defaults":99}`))
+			require.NoError(t, ratio_setting.UpdateCompletionRatioByJSONString(testtenant.Context(), `{"conversion-defaults":99}`))
 			for _, tc := range []struct {
 				name               string
 				draft              model.PricingValues
@@ -178,7 +180,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 				{"conversion-audio", model.PricingValues{"ModelRatio": float64(1), "AudioRatio": float64(2)}, `tier("base", p * 2 + c * 2 + ai * 4 + ao * 4)`, ""},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
-					before, err := model.GetModelPricingSnapshot([]string{tc.name})
+					before, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{tc.name})
 					require.NoError(t, err)
 					var response struct {
 						Success bool
@@ -218,7 +220,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 							assert.Equal(t, 256.5, cost, "cache reads remain billed across both response formats")
 						}
 					}
-					after, err := model.GetModelPricingSnapshot([]string{tc.name})
+					after, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{tc.name})
 					require.NoError(t, err)
 					assert.Equal(t, before.Entries, after.Entries, "preview must not write pricing")
 					if tc.expression == "" {
@@ -228,15 +230,15 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 					pricing["billing_setting.billing_mode"] = "tiered_expr"
 					pricing["billing_setting.billing_expr"] = tc.expression
 					change := model.ModelPricingChange{ModelName: tc.name, ExpectedVersion: before.Entries[0].Version, Pricing: pricing}
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-					after, err = model.GetModelPricingSnapshot([]string{tc.name})
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+					after, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{tc.name})
 					require.NoError(t, err)
 					assert.Equal(t, pricing, after.Entries[0].Configured)
-					assert.ErrorIs(t, model.UpdateModelPricing([]model.ModelPricingChange{change}), model.ErrModelPricingConflict)
+					assert.ErrorIs(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}), model.ErrModelPricingConflict)
 					change.ExpectedVersion = after.Entries[0].Version
 					change.Pricing["billing_setting.billing_mode"] = "ratio"
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-					after, err = model.GetModelPricingSnapshot([]string{tc.name})
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+					after, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{tc.name})
 					require.NoError(t, err)
 					assert.Equal(t, "ratio", after.Entries[0].Effective["billing_setting.billing_mode"])
 					if _, fixed := pricing["ModelPrice"]; !fixed {
@@ -251,18 +253,18 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 						for field, value := range response.Data.Effective {
 							assert.Equal(t, value, preview.Data.Effective[field], "conversion preview field %s", field)
 						}
-						cache, _ := ratio_setting.GetCacheRatio(tc.name)
-						createCache, _ := ratio_setting.GetCreateCacheRatio(tc.name)
-						image, _ := ratio_setting.GetImageRatio(tc.name)
-						assert.Equal(t, ratio_setting.GetCompletionRatio(tc.name), preview.Data.Effective["CompletionRatio"])
+						cache, _ := ratio_setting.GetCacheRatio(testtenant.Context(), tc.name)
+						createCache, _ := ratio_setting.GetCreateCacheRatio(testtenant.Context(), tc.name)
+						image, _ := ratio_setting.GetImageRatio(testtenant.Context(), tc.name)
+						assert.Equal(t, ratio_setting.GetCompletionRatio(testtenant.Context(), tc.name), preview.Data.Effective["CompletionRatio"])
 						assert.Equal(t, cache, preview.Data.Effective["CacheRatio"])
 						assert.Equal(t, createCache, preview.Data.Effective["CreateCacheRatio"])
 						assert.Equal(t, image, preview.Data.Effective["ImageRatio"])
 					}
 				})
 			}
-			require.NoError(t, (&model.Channel{Name: "Mapped image", Models: "conversion-alias", Type: 1, ModelMapping: common.GetPointer(`{"conversion-alias":"conversion-hop","conversion-hop":"gpt-image-2"}`)}).Insert())
-			preview, err := model.PreviewModelPricingConversion("conversion-alias", model.PricingValues{"ModelPrice": float64(1)})
+			require.NoError(t, (&model.Channel{Name: "Mapped image", Models: "conversion-alias", Type: 1, ModelMapping: common.GetPointer(`{"conversion-alias":"conversion-hop","conversion-hop":"gpt-image-2"}`)}).Insert(testtenant.Context()))
+			preview, err := model.PreviewModelPricingConversion(testtenant.Context(), "conversion-alias", model.PricingValues{"ModelPrice": float64(1)})
 			require.NoError(t, err)
 			assert.Equal(t, `tier("image", fixed(1)) * image_count`, preview.Expression)
 			assert.Empty(t, preview.UnsupportedReason)
@@ -313,8 +315,8 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 					})
 				}
 				// The billing name remains authoritative for cache terms.
-				require.NoError(t, (&model.Channel{Name: "Cache alias", Type: 1, Models: "opaque-cache-alias", ModelMapping: common.GetPointer(`{"opaque-cache-alias":"claude-sonnet-4-6"}`)}).Insert())
-				alias, err := model.PreviewModelPricingConversion("opaque-cache-alias", model.PricingValues{"ModelRatio": 2.0})
+				require.NoError(t, (&model.Channel{Name: "Cache alias", Type: 1, Models: "opaque-cache-alias", ModelMapping: common.GetPointer(`{"opaque-cache-alias":"claude-sonnet-4-6"}`)}).Insert(testtenant.Context()))
+				alias, err := model.PreviewModelPricingConversion(testtenant.Context(), "opaque-cache-alias", model.PricingValues{"ModelRatio": 2.0})
 				require.NoError(t, err)
 				assert.Equal(t, `tier("base", p * 4 + c * 4)`, alias.Expression)
 			})
@@ -330,7 +332,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 					{"ImageRatio", "img * 120", 2, dto.InputTokenDetails{CachedTokens: 600, ImageTokens: 500}, 108000, 102000},
 				} {
 					t.Run(tc.field, func(t *testing.T) {
-						converted, err := model.PreviewModelPricingConversion("overlapping-cache", model.PricingValues{"ModelRatio": 30.0, "CompletionRatio": 2.0, "CacheRatio": 1.0, tc.field: tc.ratio})
+						converted, err := model.PreviewModelPricingConversion(testtenant.Context(), "overlapping-cache", model.PricingValues{"ModelRatio": 30.0, "CompletionRatio": 2.0, "CacheRatio": 1.0, tc.field: tc.ratio})
 						require.NoError(t, err)
 						assert.Equal(t, `tier("base", p * 60 + c * 120 + cr * 60 + `+tc.term+`)`, converted.Expression)
 						usage := dto.Usage{PromptTokens: 1000, CompletionTokens: 100, PromptTokensDetails: tc.details}
@@ -349,26 +351,26 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 			t.Run("media_prices_and_request_adjustments", func(t *testing.T) {
 				for _, quantity := range []string{"129", "-1", "0.5", "18446744073709551615"} {
 					recorder := httptest.NewRecorder()
-					ctx, _ := gin.CreateTestContext(recorder)
-					ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"z-image","parameters":{"n":`+quantity+`}}`))
+					ctx, _ := testtenant.CreateTestContext(recorder)
+					ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/images/generations", strings.NewReader(`{"model":"z-image","parameters":{"n":`+quantity+`}}`))
 					ctx.Request.Header.Set("Content-Type", "application/json")
 					Relay(ctx, types.RelayFormatOpenAIImage)
 					assert.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 				}
-				conflicting, err := model.PreviewModelPricingConversion("gemini-2.5-flash-conflict", model.PricingValues{"ModelRatio": 0.15, "AudioRatio": 10.0})
+				conflicting, err := model.PreviewModelPricingConversion(testtenant.Context(), "gemini-2.5-flash-conflict", model.PricingValues{"ModelRatio": 0.15, "AudioRatio": 10.0})
 				require.NoError(t, err)
 				assert.Contains(t, conflicting.UnsupportedReason, "Gemini and OpenAI audio prices differ")
 				aliName := "z-image-media-conversion"
-				require.NoError(t, (&model.Channel{Name: aliName, Models: aliName, Type: 17, Status: common.ChannelStatusEnabled}).Insert())
-				aliConversion, err := model.PreviewModelPricingConversion(aliName, model.PricingValues{"ModelPrice": 0.04})
+				require.NoError(t, (&model.Channel{Name: aliName, Models: aliName, Type: 17, Status: common.ChannelStatusEnabled}).Insert(testtenant.Context()))
+				aliConversion, err := model.PreviewModelPricingConversion(testtenant.Context(), aliName, model.PricingValues{"ModelPrice": 0.04})
 				require.NoError(t, err)
 				require.Empty(t, aliConversion.UnsupportedReason)
 				quantity := 3
 				aliCost, _, err := billingexpr.RunExprWithRequest(aliConversion.Expression, billingexpr.TokenParams{}, billingexpr.RequestInput{ImageCount: &quantity, Body: []byte(`{"parameters":{"prompt_extend":true}}`)})
 				require.NoError(t, err)
 				assert.Equal(t, 240000.0, aliCost)
-				require.NoError(t, (&model.Channel{Name: "Different image rules", Models: aliName, Type: 1, Status: common.ChannelStatusEnabled}).Insert())
-				conflicting, err = model.PreviewModelPricingConversion(aliName, model.PricingValues{"ModelPrice": 0.04})
+				require.NoError(t, (&model.Channel{Name: "Different image rules", Models: aliName, Type: 1, Status: common.ChannelStatusEnabled}).Insert(testtenant.Context()))
+				conflicting, err = model.PreviewModelPricingConversion(testtenant.Context(), aliName, model.PricingValues{"ModelPrice": 0.04})
 				require.NoError(t, err)
 				assert.Contains(t, conflicting.UnsupportedReason, "different image request multipliers")
 				for _, tc := range []struct {
@@ -386,7 +388,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 					{"gemini-2.5-flash-overlap", model.PricingValues{"ModelRatio": 1.0}, dto.Usage{PromptTokens: 1000, PromptTokensDetails: dto.InputTokenDetails{CachedTokens: 800, AudioTokens: 500}}, 2100},
 				} {
 					t.Run(tc.name, func(t *testing.T) {
-						converted, err := model.PreviewModelPricingConversion(tc.name, tc.pricing)
+						converted, err := model.PreviewModelPricingConversion(testtenant.Context(), tc.name, tc.pricing)
 						require.NoError(t, err)
 						require.Empty(t, converted.UnsupportedReason)
 						require.NotNil(t, converted.BillingDetails.AudioInputPrice)
@@ -396,12 +398,12 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 						assert.InDelta(t, tc.want, cost, 1e-9)
 					})
 				}
-				converted, err := model.PreviewModelPricingConversion("dall-e-3", model.PricingValues{"ModelPrice": 0.04})
+				converted, err := model.PreviewModelPricingConversion(testtenant.Context(), "dall-e-3", model.PricingValues{"ModelPrice": 0.04})
 				require.NoError(t, err)
 				require.Empty(t, converted.UnsupportedReason)
 				assert.NotContains(t, converted.Expression, "256x256")
 				assert.NotContains(t, converted.Expression, "512x512")
-				smallImage, err := model.PreviewModelPricingConversion("dall-e-2", model.PricingValues{"ModelPrice": 0.02})
+				smallImage, err := model.PreviewModelPricingConversion(testtenant.Context(), "dall-e-2", model.PricingValues{"ModelPrice": 0.02})
 				require.NoError(t, err)
 				require.Empty(t, smallImage.UnsupportedReason)
 				assert.NotContains(t, smallImage.Expression, "1792")
@@ -425,9 +427,9 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 				}
 				for _, channelType := range []int{20, 58} {
 					name := fmt.Sprintf("gemini-3.5-flash-media-%d", channelType)
-					require.NoError(t, (&model.Channel{Name: name, Models: name, Type: channelType}).Insert())
+					require.NoError(t, (&model.Channel{Name: name, Models: name, Type: channelType}).Insert(testtenant.Context()))
 					require.NoError(t, db.Create(&model.Model{ModelName: name, Endpoints: `{"custom-text":"/v1/custom"}`}).Error)
-					converted, err := model.PreviewModelPricingConversion(name, model.PricingValues{"ModelRatio": 0.75, "CompletionRatio": 6.0, "CacheRatio": 0.1})
+					converted, err := model.PreviewModelPricingConversion(testtenant.Context(), name, model.PricingValues{"ModelRatio": 0.75, "CompletionRatio": 6.0, "CacheRatio": 0.1})
 					require.NoError(t, err)
 					assert.Empty(t, converted.UnsupportedReason)
 					assert.Equal(t, `tier("base", p * 1.5 + c * 9 + cr * 0.15)`, converted.Expression)
@@ -435,7 +437,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 				}
 			})
 			require.NoError(t, db.Create(&model.Model{ModelName: "conversion-metadata", Endpoints: `{"image-generation":"/v1/images/generations"}`}).Error)
-			preview, err = model.PreviewModelPricingConversion("conversion-metadata", model.PricingValues{"ModelPrice": float64(1)})
+			preview, err = model.PreviewModelPricingConversion(testtenant.Context(), "conversion-metadata", model.PricingValues{"ModelPrice": float64(1)})
 			require.NoError(t, err)
 			assert.Equal(t, `tier("image", fixed(1)) * image_count`, preview.Expression)
 			assert.Empty(t, preview.UnsupportedReason)
@@ -453,7 +455,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 					endpoints, err := common.Marshal(map[string]string{string(tc.endpoint): "/v1/fixture"})
 					require.NoError(t, err)
 					require.NoError(t, db.Create(&model.Model{ModelName: tc.rule, NameRule: tc.nameRule, Endpoints: string(endpoints)}).Error)
-					converted, err := model.PreviewModelPricingConversion(tc.name, model.PricingValues{"ModelPrice": 1.0})
+					converted, err := model.PreviewModelPricingConversion(testtenant.Context(), tc.name, model.PricingValues{"ModelPrice": 1.0})
 					require.NoError(t, err)
 					if tc.endpoint == constant.EndpointTypeOpenAIVideo {
 						assert.Empty(t, converted.Expression)
@@ -464,8 +466,8 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 				})
 			}
 			sora := &model.Channel{Name: "Opaque video route", Models: "opaque-video-route", Type: constant.ChannelTypeSora, Group: "a,b"}
-			require.NoError(t, sora.Insert())
-			video, err := model.PreviewModelPricingConversion("opaque-video-route", model.PricingValues{"ModelPrice": 1.0})
+			require.NoError(t, sora.Insert(testtenant.Context()))
+			video, err := model.PreviewModelPricingConversion(testtenant.Context(), "opaque-video-route", model.PricingValues{"ModelPrice": 1.0})
 			require.NoError(t, err)
 			assert.Equal(t, "Video pricing must be converted manually.", video.UnsupportedReason)
 		})
@@ -473,7 +475,7 @@ func TestModelPricingConversionDatabaseMatrix(t *testing.T) {
 }
 
 func TestModelManagementDatabaseMatrix(t *testing.T) {
-	_, err := jsplugin.DefaultRegistry.Register(`
+	_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(`
 export const meta = {apiVersion: 1, key: "model-management-task", name: "Management task fixture", version: "1.0.0", author: {name: "Test"}, models: ["matrix-task"], fetchMode: "per_task", usageSchema: {seconds: {type: "number", unit: "second"}}};
 export function buildSubmitRequest() { return {}; }
 export function parseSubmitResponse() { return {}; }
@@ -481,7 +483,9 @@ export function buildQueryRequest() { return {}; }
 export function parseTaskResult() { return {}; }
 `, jsplugin.Options{})
 	require.NoError(t, err)
-	t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister("model-management-task") })
+	t.Cleanup(func() {
+		jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("model-management-task")
+	})
 	for _, dialect := range []struct{ kind, env string }{{"sqlite", ""}, {"mysql", "TEST_MYSQL_DSN"}, {"postgres", "TEST_POSTGRES_DSN"}} {
 		t.Run(dialect.kind, func(t *testing.T) {
 			if dialect.env != "" && os.Getenv(dialect.env) == "" {
@@ -508,7 +512,7 @@ export function parseTaskResult() { return {}; }
 				}
 				ids := make([]int, 0, len(records))
 				for i := range records {
-					require.NoError(t, records[i].Insert())
+					require.NoError(t, records[i].Insert(testtenant.Context()))
 					ids = append(ids, records[i].Id)
 				}
 				active := model.Channel{Name: "Square active", Type: 1, Key: "fixture", Group: "default", Status: common.ChannelStatusEnabled,
@@ -516,13 +520,13 @@ export function parseTaskResult() { return {}; }
 				inactive := model.Channel{Name: "Square inactive", Type: 1, Key: "fixture", Group: "default", Status: common.ChannelStatusManuallyDisabled,
 					Models: "square-disabled,square-partial-off,square-off-child"}
 				for _, channel := range []*model.Channel{&active, &inactive} {
-					require.NoError(t, channel.Insert())
+					require.NoError(t, channel.Insert(testtenant.Context()))
 				}
 				t.Cleanup(func() {
 					require.NoError(t, db.Where("channel_id IN ?", []int{active.Id, inactive.Id}).Delete(&model.Ability{}).Error)
 					require.NoError(t, db.Where("id IN ?", []int{active.Id, inactive.Id}).Delete(&model.Channel{}).Error)
 					require.NoError(t, db.Unscoped().Where("id IN ?", ids).Delete(&model.Model{}).Error)
-					model.RefreshPricing()
+					model.RefreshPricing(testtenant.Context())
 				})
 				var response struct {
 					Success bool
@@ -535,8 +539,8 @@ export function parseTaskResult() { return {}; }
 					byName[row.ModelName] = row
 				}
 				catalog := make(map[string]bool)
-				model.RefreshPricing()
-				for _, row := range model.GetPricing() {
+				model.RefreshPricing(testtenant.Context())
+				for _, row := range model.GetPricing(testtenant.Context()) {
 					catalog[row.ModelName] = true
 				}
 				expected := map[string]model.ModelSquareState{
@@ -665,18 +669,18 @@ export function parseTaskResult() { return {}; }
 				catalog := model.Model{ModelName: "listing-catalog", Status: 1}
 				rule := model.Model{ModelName: "listing-rule-", NameRule: model.NameRulePrefix, Status: 1}
 				for _, item := range []*model.Model{&exact, &catalog, &rule} {
-					require.NoError(t, item.Insert())
+					require.NoError(t, item.Insert(testtenant.Context()))
 				}
 				active := model.Channel{Name: "Listing active", Type: 1, Key: "fixture", Models: "listing-exact, listing-new,listing-rule-child,listing-new, ,", Group: "default", Status: common.ChannelStatusEnabled}
 				inactive := model.Channel{Name: "Listing inactive", Type: 1, Key: "fixture", Models: "listing-new,listing-disabled", Group: "default", Status: common.ChannelStatusManuallyDisabled}
 				for _, channel := range []*model.Channel{&active, &inactive} {
-					require.NoError(t, channel.Insert())
+					require.NoError(t, channel.Insert(testtenant.Context()))
 				}
 				t.Cleanup(func() {
 					require.NoError(t, db.Where("channel_id IN ?", []int{active.Id, inactive.Id}).Delete(&model.Ability{}).Error)
 					require.NoError(t, db.Where("id IN ?", []int{active.Id, inactive.Id}).Delete(&model.Channel{}).Error)
 					require.NoError(t, db.Unscoped().Where("model_name LIKE ?", "listing-%").Delete(&model.Model{}).Error)
-					model.RefreshPricing()
+					model.RefreshPricing(testtenant.Context())
 				})
 				type listingResponse struct {
 					Success bool
@@ -731,26 +735,26 @@ export function parseTaskResult() { return {}; }
 				var count int64
 				require.NoError(t, db.Model(&model.Model{}).Where("model_name LIKE ?", "listing-%").Count(&count).Error)
 				assert.EqualValues(t, 3, count)
-				prices, err := model.GetModelPricingSnapshot([]string{"listing-new"})
+				prices, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"listing-new"})
 				require.NoError(t, err)
-				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: "listing-new", ExpectedVersion: prices.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0)}}}))
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: "listing-new", ExpectedVersion: prices.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0)}}}))
 				t.Cleanup(func() {
-					snapshot, err := model.GetModelPricingSnapshot([]string{"listing-new"})
+					snapshot, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"listing-new"})
 					require.NoError(t, err)
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: "listing-new", ExpectedVersion: snapshot.Entries[0].Version, Reset: true}}))
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: "listing-new", ExpectedVersion: snapshot.Entries[0].Version, Reset: true}}))
 				})
 				require.NoError(t, db.Model(&model.Model{}).Where("model_name = ?", "listing-new").Count(&count).Error)
 				assert.Zero(t, count)
-				for _, price := range model.GetPricing() {
+				for _, price := range model.GetPricing(testtenant.Context()) {
 					assert.NotEqual(t, catalog.ModelName, price.ModelName)
 				}
 				created := model.Model{ModelName: "listing-new", Status: 1}
-				require.NoError(t, created.Insert())
+				require.NoError(t, created.Insert(testtenant.Context()))
 				var after listingResponse
 				modelManagementRequest(t, SearchModelsMeta, "GET", "/api/models/search?include_channel_models=true&keyword=listing-new", nil, &after)
 				require.Len(t, after.Data.Items, 1)
 				assert.Equal(t, created.Id, after.Data.Items[0].Id)
-				require.NoError(t, created.Delete())
+				require.NoError(t, created.Delete(testtenant.Context()))
 				after = listingResponse{}
 				modelManagementRequest(t, SearchModelsMeta, "GET", "/api/models/search?include_channel_models=true&keyword=listing-new", nil, &after)
 				require.Len(t, after.Data.Items, 1)
@@ -768,35 +772,35 @@ export function parseTaskResult() { return {}; }
 			})
 
 			t.Run("pricing_saves_zero_switches_modes_and_rejects_stale_batches", func(t *testing.T) {
-				before, err := model.GetModelPricingSnapshot([]string{"matrix-priced", "matrix-other"})
+				before, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced", "matrix-other"})
 				require.NoError(t, err)
 				changes := []model.ModelPricingChange{
 					{ModelName: "matrix-priced", ExpectedVersion: before.EmptyVersion, Pricing: model.PricingValues{"ModelPrice": float64(0), "billing_setting.billing_mode": "ratio"}},
 					{ModelName: "matrix-other", ExpectedVersion: before.EmptyVersion, Pricing: model.PricingValues{"ModelRatio": float64(1), "CreateCacheRatio": 1.25}},
 				}
-				require.NoError(t, model.UpdateModelPricing(changes))
-				loaded, err := model.GetModelPricingSnapshot([]string{"matrix-priced"})
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), changes))
+				loaded, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced"})
 				require.NoError(t, err)
 				assert.Equal(t, float64(0), loaded.Entries[0].Effective["ModelPrice"])
 				stale := changes[0]
 				changes[0].ExpectedVersion = loaded.Entries[0].Version
 				changes[0].Pricing = model.PricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `tier("base", p * 2 + c * 8 + cr * 0 + cc * 2.5)`, "ModelRatio": float64(1)}
-				require.NoError(t, model.UpdateModelPricing(changes[:1]))
-				loaded, err = model.GetModelPricingSnapshot([]string{"matrix-priced", "matrix-other"})
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), changes[:1]))
+				loaded, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced", "matrix-other"})
 				require.NoError(t, err)
 				assert.Equal(t, 1.25, loaded.Entries[0].Configured["CreateCacheRatio"])
 				assert.Equal(t, "tiered_expr", loaded.Entries[1].Effective["billing_setting.billing_mode"])
 				_, oldFixed := loaded.Entries[1].Configured["ModelPrice"]
 				assert.False(t, oldFixed)
 				other := model.ModelPricingChange{ModelName: "matrix-other", ExpectedVersion: loaded.Entries[0].Version, Pricing: model.PricingValues{"ModelRatio": float64(9)}}
-				err = model.UpdateModelPricing([]model.ModelPricingChange{other, stale})
+				err = model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{other, stale})
 				assert.ErrorIs(t, err, model.ErrModelPricingConflict)
-				after, err := model.GetModelPricingSnapshot([]string{"matrix-priced", "matrix-other"})
+				after, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced", "matrix-other"})
 				require.NoError(t, err)
 				assert.Equal(t, loaded.Entries, after.Entries)
 				invalid := other
 				invalid.Pricing = model.PricingValues{"ModelPrice": float64(-1)}
-				assert.Error(t, model.UpdateModelPricing([]model.ModelPricingChange{invalid}))
+				assert.Error(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{invalid}))
 				// A physical failure after earlier option writes must roll back all
 				// rows and leave the previously published runtime price intact.
 				writes := 0
@@ -808,13 +812,13 @@ export function parseTaskResult() { return {}; }
 						}
 					}
 				}))
-				err = model.UpdateModelPricing([]model.ModelPricingChange{other})
+				err = model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{other})
 				require.Error(t, err)
 				require.NoError(t, db.Callback().Update().Remove("fail_pricing_matrix"))
-				after, err = model.GetModelPricingSnapshot([]string{"matrix-priced", "matrix-other"})
+				after, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced", "matrix-other"})
 				require.NoError(t, err)
 				assert.Equal(t, loaded.Entries, after.Entries)
-				ratio, _, _ := ratio_setting.GetModelRatio("matrix-other")
+				ratio, _, _ := ratio_setting.GetModelRatio(testtenant.Context(), "matrix-other")
 				assert.Equal(t, float64(1), ratio)
 				// Two saves based on the same version cannot both succeed.
 				var wg sync.WaitGroup
@@ -825,7 +829,7 @@ export function parseTaskResult() { return {}; }
 						defer wg.Done()
 						change := other
 						change.Pricing = model.PricingValues{"ModelRatio": value}
-						results <- model.UpdateModelPricing([]model.ModelPricingChange{change})
+						results <- model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change})
 					}(value)
 				}
 				wg.Wait()
@@ -844,33 +848,33 @@ export function parseTaskResult() { return {}; }
 				assert.Equal(t, 1, conflicts)
 			})
 			t.Run("task_usage_and_builtin_reset", func(t *testing.T) {
-				snapshot, err := model.GetModelPricingSnapshot([]string{"matrix-task"})
+				snapshot, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-task"})
 				require.NoError(t, err)
 				assert.Contains(t, snapshot.Entries[0].UsageSchema, "seconds")
 				expression := `tier("base", u("seconds") * 0.25)`
 				change := model.ModelPricingChange{ModelName: "matrix-task", ExpectedVersion: snapshot.Entries[0].Version, Pricing: model.PricingValues{"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": expression}}
-				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-				snapshot, err = model.GetModelPricingSnapshot([]string{"matrix-task"})
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+				snapshot, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-task"})
 				require.NoError(t, err)
 				assert.Equal(t, expression, snapshot.Entries[0].Effective["billing_setting.billing_expr"])
 				change.ExpectedVersion = snapshot.Entries[0].Version
 				change.Pricing["billing_setting.billing_expr"] = `tier("base", u("undeclared") * 1)`
-				assert.Error(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
+				assert.Error(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
 				{
 					const name = "gpt-6-astra"
 					builtin, exists := billing_setting.GetBuiltinBillingExpr(name)
 					require.True(t, exists)
-					before, err := model.GetModelPricingSnapshot([]string{name})
+					before, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 					require.NoError(t, err)
 					require.Empty(t, before.Entries[0].Configured)
 					change = model.ModelPricingChange{ModelName: name, ExpectedVersion: before.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0)}}
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-					custom, err := model.GetModelPricingSnapshot([]string{name})
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+					custom, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 					require.NoError(t, err)
 					assert.Equal(t, float64(0), custom.Entries[0].Effective["ModelPrice"])
 					change.ExpectedVersion, change.Pricing, change.Reset = custom.Entries[0].Version, nil, true
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-					reset, err := model.GetModelPricingSnapshot([]string{name})
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+					reset, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 					require.NoError(t, err)
 					assert.Empty(t, reset.Entries[0].Configured)
 					assert.Equal(t, builtin, reset.Entries[0].Effective["billing_setting.billing_expr"])
@@ -882,7 +886,7 @@ export function parseTaskResult() { return {}; }
 				results := make(chan error, 2)
 				for range 2 {
 					wg.Go(func() {
-						_, err := model.ApplyMetadataSync([]model.MetadataSyncUpdate{update}, nil)
+						_, err := model.ApplyMetadataSync(testtenant.Context(), []model.MetadataSyncUpdate{update}, nil)
 						results <- err
 					})
 				}
@@ -915,32 +919,32 @@ export function parseTaskResult() { return {}; }
 					{Model: "matrix-hidden-unpriced", Group: "inactive", ChannelId: active.Id, Enabled: false},
 				}).Error)
 				exact := &model.Model{ModelName: "matrix-hidden-unpriced", Status: 0, SyncOfficial: 0}
-				require.NoError(t, exact.Insert())
+				require.NoError(t, exact.Insert(testtenant.Context()))
 				rule := &model.Model{ModelName: "matrix-hidden-", NameRule: model.NameRulePrefix}
-				enrichModels([]*model.Model{exact, rule})
+				enrichModels(testtenant.Context(), []*model.Model{exact, rule})
 				assert.Equal(t, []string{"available"}, exact.EnableGroups)
 				assert.Equal(t, []model.BoundChannel{{Name: "Active route", Type: 1}}, exact.BoundChannels)
 				assert.Equal(t, []string{"matrix-hidden-unpriced"}, rule.MatchedModels)
 				assert.Empty(t, exact.Endpoints, "inferred endpoints must not become stored configuration")
-				priceBefore, err := model.GetModelPricingSnapshot([]string{"matrix-hidden-unpriced"})
+				priceBefore, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-hidden-unpriced"})
 				require.NoError(t, err)
-				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: exact.ModelName, ExpectedVersion: priceBefore.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0)}}}))
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: exact.ModelName, ExpectedVersion: priceBefore.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0)}}}))
 				exact.ModelName = "matrix-renamed"
 				exact.Endpoints = `{"openai":{"path":"/v1/chat/completions","method":"POST"}}`
 				response := modelManagementRequest(t, UpdateModelMeta, http.MethodPut, "/api/models/", exact, nil)
 				assert.Contains(t, response.Body.String(), `"success":true`)
 				var reloaded model.Model
 				require.NoError(t, db.First(&reloaded, exact.Id).Error)
-				enrichModels([]*model.Model{&reloaded})
+				enrichModels(testtenant.Context(), []*model.Model{&reloaded})
 				assert.Equal(t, exact.Endpoints, reloaded.Endpoints)
 				assert.Empty(t, reloaded.BoundChannels)
-				prices, err := model.GetModelPricingSnapshot([]string{"matrix-hidden-unpriced", "matrix-renamed"})
+				prices, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-hidden-unpriced", "matrix-renamed"})
 				require.NoError(t, err)
 				assert.Equal(t, float64(0), prices.Entries[0].Configured["ModelPrice"])
 				assert.Empty(t, prices.Entries[1].Configured)
-				require.NoError(t, reloaded.Delete())
-				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: "matrix-hidden-unpriced", ExpectedVersion: prices.Entries[0].Version, Reset: true}}))
-				prices, err = model.GetModelPricingSnapshot([]string{"matrix-hidden-unpriced"})
+				require.NoError(t, reloaded.Delete(testtenant.Context()))
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: "matrix-hidden-unpriced", ExpectedVersion: prices.Entries[0].Version, Reset: true}}))
+				prices, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-hidden-unpriced"})
 				require.NoError(t, err)
 				assert.Empty(t, prices.Entries[0].Configured)
 				var ability model.Ability
@@ -948,9 +952,9 @@ export function parseTaskResult() { return {}; }
 			})
 			t.Run("metadata_preview_selection_versions_and_transaction", func(t *testing.T) {
 				local := &model.Model{ModelName: "matrix-existing", Description: "Local description", Tags: "keep", Status: 1, SyncOfficial: 1}
-				require.NoError(t, local.Insert())
+				require.NoError(t, local.Insert(testtenant.Context()))
 				blocked := &model.Model{ModelName: "matrix-blocked", Status: 1, SyncOfficial: 0}
-				require.NoError(t, blocked.Insert())
+				require.NoError(t, blocked.Insert(testtenant.Context()))
 				require.NoError(t, db.Create(&model.Ability{Model: "matrix-new", Group: "default", ChannelId: 1, Enabled: true}).Error)
 				var revision atomic.Int32
 				var failVendors atomic.Bool
@@ -1002,7 +1006,7 @@ export function parseTaskResult() { return {}; }
 					{ModelName: "matrix-existing", RecordVersion: byName["matrix-existing"].RecordVersion, Fields: []string{"description", "endpoints"}},
 					{ModelName: "matrix-new", RecordVersion: byName["matrix-new"].RecordVersion, Create: true},
 				}}
-				beforePricing, err := model.GetModelPricingSnapshot([]string{"matrix-priced"})
+				beforePricing, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced"})
 				require.NoError(t, err)
 				// A failed model insert must also undo the earlier metadata update
 				// and the newly inserted supplier.
@@ -1038,7 +1042,7 @@ export function parseTaskResult() { return {}; }
 				require.NoError(t, db.Where("model_name = ?", "matrix-new").First(&created).Error)
 				assert.Equal(t, 1, created.SyncOfficial)
 				assert.Zero(t, created.Status)
-				afterPricing, err := model.GetModelPricingSnapshot([]string{"matrix-priced"})
+				afterPricing, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"matrix-priced"})
 				require.NoError(t, err)
 				assert.Equal(t, beforePricing.Entries, afterPricing.Entries)
 				response = modelManagementRequest(t, SyncUpstreamModels, "POST", "/api/models/sync_upstream", body, nil)
@@ -1086,9 +1090,9 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 				channel := model.Channel{Name: "Vendor fixture", Type: 1, Status: common.ChannelStatusEnabled}
 				require.NoError(t, db.Create(&channel).Error)
 				require.NoError(t, db.Create(&model.Ability{Model: "gemini-vendor-fixture", Group: "default", ChannelId: channel.Id, Enabled: true}).Error)
-				model.RefreshPricing()
-				model.GetPricing()
-				vendors := model.GetVendors()
+				model.RefreshPricing(testtenant.Context())
+				model.GetPricing(testtenant.Context())
+				vendors := model.GetVendors(testtenant.Context())
 				require.Len(t, vendors, 1)
 				assert.Equal(t, "Google", vendors[0].Name)
 				assert.Equal(t, "Gemini.Color", vendors[0].Icon)
@@ -1097,60 +1101,60 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 				require.NoError(t, db.Model(&model.Vendor{}).Count(&count).Error)
 				assert.Zero(t, count)
 				saved := model.Vendor{Name: "Google", Icon: "Gemini.Color"}
-				require.NoError(t, saved.Insert())
-				assert.Equal(t, saved.Id, model.GetVendors()[0].ID)
-				require.NoError(t, saved.Delete())
-				assert.Equal(t, vendors[0].ID, model.GetVendors()[0].ID)
+				require.NoError(t, saved.Insert(testtenant.Context()))
+				assert.Equal(t, saved.Id, model.GetVendors(testtenant.Context())[0].ID)
+				require.NoError(t, saved.Delete(testtenant.Context()))
+				assert.Equal(t, vendors[0].ID, model.GetVendors(testtenant.Context())[0].ID)
 				require.NoError(t, db.Model(&model.Vendor{}).Count(&count).Error)
 				assert.Zero(t, count, "refresh must not recreate a deleted vendor")
 			})
 			t.Run("metadata_ownership_preview_merge_delete_and_rollback", func(t *testing.T) {
 				source := model.Vendor{Name: "  Vendor Source  ", Icon: "Gemini.Color"}
 				target := model.Vendor{Name: "Vendor Target", Description: "Keep target", Icon: "OpenAI"}
-				require.NoError(t, source.Insert())
-				require.NoError(t, target.Insert())
+				require.NoError(t, source.Insert(testtenant.Context()))
+				require.NoError(t, target.Insert(testtenant.Context()))
 				assert.Equal(t, "Vendor Source", source.Name)
-				assert.Error(t, (&model.Vendor{Name: "vendor source"}).Insert())
-				assert.Error(t, (&model.Vendor{Name: " "}).Insert())
+				assert.Error(t, (&model.Vendor{Name: "vendor source"}).Insert(testtenant.Context()))
+				assert.Error(t, (&model.Vendor{Name: " "}).Insert(testtenant.Context()))
 				require.NoError(t, db.Model(&model.Vendor{}).Where("id = ?", source.Id).Update("status", 0).Error)
-				loaded, err := model.GetVendorByID(source.Id)
+				loaded, err := model.GetVendorByID(testtenant.Context(), source.Id)
 				require.NoError(t, err)
 				staleVersion := loaded.Version
 				edit := model.Vendor{Id: source.Id, Name: source.Name, Description: "Updated source", Icon: source.Icon, Version: loaded.Version}
-				require.NoError(t, edit.Update())
-				updated, err := model.GetVendorByID(source.Id)
+				require.NoError(t, edit.Update(testtenant.Context()))
+				updated, err := model.GetVendorByID(testtenant.Context(), source.Id)
 				require.NoError(t, err)
 				assert.Equal(t, loaded.CreatedTime, updated.CreatedTime)
 				assert.Zero(t, updated.Status)
 				edit.Version = staleVersion
-				assert.ErrorIs(t, edit.Update(), model.ErrVendorConflict)
+				assert.ErrorIs(t, edit.Update(testtenant.Context()), model.ErrVendorConflict)
 
 				one := model.Model{ModelName: "vendor-model-one", VendorID: source.Id, Icon: "Custom", Description: "Preserve description", Status: 0, SyncOfficial: 0}
 				rule := model.Model{ModelName: "vendor-rule-", VendorID: source.Id, NameRule: model.NameRulePrefix, Status: 1, SyncOfficial: 1}
-				require.NoError(t, one.Insert())
-				require.NoError(t, rule.Insert())
-				priceBefore, err := model.GetModelPricingSnapshot([]string{one.ModelName})
+				require.NoError(t, one.Insert(testtenant.Context()))
+				require.NoError(t, rule.Insert(testtenant.Context()))
+				priceBefore, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{one.ModelName})
 				require.NoError(t, err)
-				require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: one.ModelName, ExpectedVersion: priceBefore.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0.25)}}}))
-				priceBefore, err = model.GetModelPricingSnapshot([]string{one.ModelName})
+				require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: one.ModelName, ExpectedVersion: priceBefore.Entries[0].Version, Pricing: model.PricingValues{"ModelPrice": float64(0.25)}}}))
+				priceBefore, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{one.ModelName})
 				require.NoError(t, err)
 				channel := model.Channel{Name: "Unchanged vendor channel", Type: 1, Status: common.ChannelStatusEnabled}
 				require.NoError(t, db.Create(&channel).Error)
 				ability := model.Ability{Model: one.ModelName, Group: "default", ChannelId: channel.Id, Enabled: true}
 				require.NoError(t, db.Create(&ability).Error)
-				linked, total, err := model.SearchVendors("", 0, 20, "linked")
+				linked, total, err := model.SearchVendors(testtenant.Context(), "", 0, 20, "linked")
 				require.NoError(t, err)
 				require.Len(t, linked, 1)
 				assert.EqualValues(t, 1, total)
 				assert.EqualValues(t, 2, linked[0].ModelCount)
-				unlinked, _, err := model.SearchVendors("Vendor Target", 0, 20, "unlinked")
+				unlinked, _, err := model.SearchVendors(testtenant.Context(), "Vendor Target", 0, 20, "unlinked")
 				require.NoError(t, err)
 				require.Len(t, unlinked, 1)
 				var references *model.VendorReferenceError
-				err = model.DeleteVendors([]int{source.Id, target.Id})
+				err = model.DeleteVendors(testtenant.Context(), []int{source.Id, target.Id})
 				require.ErrorAs(t, err, &references)
 				assert.EqualValues(t, 2, references.Counts[source.Id])
-				_, err = model.GetVendorByID(target.Id)
+				_, err = model.GetVendorByID(testtenant.Context(), target.Id)
 				require.NoError(t, err, "bulk delete must not partially delete unreferenced vendors")
 				var response struct {
 					Success         bool
@@ -1163,36 +1167,36 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 				assert.EqualValues(t, 2, response.ReferenceCounts[source.Id])
 
 				disappearing := model.Vendor{Name: "Preview target"}
-				require.NoError(t, disappearing.Insert())
+				require.NoError(t, disappearing.Insert(testtenant.Context()))
 				staleAssignment := model.VendorOperation{Action: "assign", ModelIDs: []int{one.Id}, TargetVendorID: disappearing.Id}
-				stalePreview, err := model.PreviewVendorOperation(staleAssignment)
+				stalePreview, err := model.PreviewVendorOperation(testtenant.Context(), staleAssignment)
 				require.NoError(t, err)
 				staleAssignment.ExpectedVersion = stalePreview.Version
-				require.NoError(t, disappearing.Delete())
+				require.NoError(t, disappearing.Delete(testtenant.Context()))
 				recorder = modelManagementRequest(t, ApplyVendorOperation, http.MethodPost, "/api/vendors/operations", staleAssignment, &response)
 				assert.Equal(t, http.StatusConflict, recorder.Code)
 				assert.Equal(t, "VENDOR_CONFLICT", response.Code)
 
 				assign := model.VendorOperation{Action: "assign", ModelIDs: []int{one.Id}, TargetVendorID: target.Id}
-				preview, err := model.PreviewVendorOperation(assign)
+				preview, err := model.PreviewVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				require.Len(t, preview.Models, 1)
 				assign.ExpectedVersion = preview.Version
 				one.Description = "Updated in the same timestamp"
 				require.NoError(t, db.Model(&model.Model{}).Where("id = ?", one.Id).Update("description", one.Description).Error)
-				_, err = model.ApplyVendorOperation(assign)
+				_, err = model.ApplyVendorOperation(testtenant.Context(), assign)
 				assert.ErrorIs(t, err, model.ErrVendorConflict)
-				preview, err = model.PreviewVendorOperation(assign)
+				preview, err = model.PreviewVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				assign.ExpectedVersion = preview.Version
 				target.Description = "New target description"
-				require.NoError(t, target.Update())
-				_, err = model.ApplyVendorOperation(assign)
+				require.NoError(t, target.Update(testtenant.Context()))
+				_, err = model.ApplyVendorOperation(testtenant.Context(), assign)
 				assert.ErrorIs(t, err, model.ErrVendorConflict)
-				preview, err = model.PreviewVendorOperation(assign)
+				preview, err = model.PreviewVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				assign.ExpectedVersion = preview.Version
-				result, err := model.ApplyVendorOperation(assign)
+				result, err := model.ApplyVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				assert.Equal(t, []int{one.Id}, result.UpdatedModels)
 				var after model.Model
@@ -1206,19 +1210,19 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 				require.NoError(t, db.First(&after, rule.Id).Error)
 				assert.Equal(t, source.Id, after.VendorID)
 				assign.TargetVendorID = 0
-				preview, err = model.PreviewVendorOperation(assign)
+				preview, err = model.PreviewVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				assign.ExpectedVersion = preview.Version
-				_, err = model.ApplyVendorOperation(assign)
+				_, err = model.ApplyVendorOperation(testtenant.Context(), assign)
 				require.NoError(t, err)
 				after = model.Model{}
 				require.NoError(t, db.First(&after, one.Id).Error)
 				assert.Zero(t, after.VendorID)
 				after.VendorID = -1001
-				assert.Error(t, after.Update(), "display-only vendors cannot become stored references")
+				assert.Error(t, after.Update(testtenant.Context()), "display-only vendors cannot become stored references")
 
 				merge := model.VendorOperation{Action: "merge", VendorIDs: []int{source.Id}, TargetVendorID: target.Id}
-				preview, err = model.PreviewVendorOperation(merge)
+				preview, err = model.PreviewVendorOperation(testtenant.Context(), merge)
 				require.NoError(t, err)
 				merge.ExpectedVersion = preview.Version
 				require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register("vendor_delete_failure", func(tx *gorm.DB) {
@@ -1226,27 +1230,27 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 						tx.AddError(errors.New("injected vendor delete failure"))
 					}
 				}))
-				_, err = model.ApplyVendorOperation(merge)
+				_, err = model.ApplyVendorOperation(testtenant.Context(), merge)
 				require.Error(t, err)
 				require.NoError(t, db.Callback().Delete().Remove("vendor_delete_failure"))
 				after = model.Model{}
 				require.NoError(t, db.First(&after, rule.Id).Error)
 				assert.Equal(t, source.Id, after.VendorID, "ownership updates roll back when deletion fails")
-				_, err = model.GetVendorByID(source.Id)
+				_, err = model.GetVendorByID(testtenant.Context(), source.Id)
 				require.NoError(t, err)
-				_, err = model.ApplyVendorOperation(merge)
+				_, err = model.ApplyVendorOperation(testtenant.Context(), merge)
 				require.NoError(t, err)
-				_, err = model.GetVendorByID(source.Id)
+				_, err = model.GetVendorByID(testtenant.Context(), source.Id)
 				assert.ErrorIs(t, err, gorm.ErrRecordNotFound)
-				retained, err := model.GetVendorByID(target.Id)
+				retained, err := model.GetVendorByID(testtenant.Context(), target.Id)
 				require.NoError(t, err)
 				assert.Equal(t, target.Description, retained.Description)
 				assert.Equal(t, "OpenAI", retained.Icon)
 				assert.EqualValues(t, 1, retained.ModelCount)
 				after = one
 				after.VendorID = source.Id
-				assert.Error(t, after.Update(), "deleted vendors cannot acquire new references")
-				priceAfter, err := model.GetModelPricingSnapshot([]string{one.ModelName})
+				assert.Error(t, after.Update(testtenant.Context()), "deleted vendors cannot acquire new references")
+				priceAfter, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{one.ModelName})
 				require.NoError(t, err)
 				assert.Equal(t, priceBefore.Entries[0], priceAfter.Entries[0], "assignment and merge preserve model pricing")
 				var retainedChannel model.Channel
@@ -1260,15 +1264,15 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 			})
 			t.Run("concurrent_create_and_delete_never_orphan_model", func(t *testing.T) {
 				vendor := model.Vendor{Name: "Concurrent owner"}
-				require.NoError(t, vendor.Insert())
+				require.NoError(t, vendor.Insert(testtenant.Context()))
 				var createErr, deleteErr error
 				var wg sync.WaitGroup
 				wg.Add(2)
 				go func() {
 					defer wg.Done()
-					createErr = (&model.Model{ModelName: "concurrent-owned-model", VendorID: vendor.Id}).Insert()
+					createErr = (&model.Model{ModelName: "concurrent-owned-model", VendorID: vendor.Id}).Insert(testtenant.Context())
 				}()
-				go func() { defer wg.Done(); deleteErr = vendor.Delete() }()
+				go func() { defer wg.Done(); deleteErr = vendor.Delete(testtenant.Context()) }()
 				wg.Wait()
 				if createErr == nil {
 					require.Error(t, deleteErr)
@@ -1278,7 +1282,7 @@ func TestVendorManagementDatabaseMatrix(t *testing.T) {
 				var models []model.Model
 				require.NoError(t, db.Where("model_name = ?", "concurrent-owned-model").Find(&models).Error)
 				if len(models) != 0 {
-					_, err := model.GetVendorByID(models[0].VendorID)
+					_, err := model.GetVendorByID(testtenant.Context(), models[0].VendorID)
 					require.NoError(t, err)
 				}
 			})
@@ -1299,7 +1303,7 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 				Data    model.ModelDeleteResult
 			}
 			metadataOnly := model.Model{ModelName: "metadata-only", Status: 1}
-			require.NoError(t, metadataOnly.Insert())
+			require.NoError(t, metadataOnly.Insert(testtenant.Context()))
 			channel := model.Channel{Name: "Retained channel", Type: 1, Key: "fixture-key", Models: metadataOnly.ModelName, Group: "default", Status: common.ChannelStatusEnabled}
 			require.NoError(t, db.Create(&channel).Error)
 			require.NoError(t, channel.UpdateAbilities(db))
@@ -1321,8 +1325,8 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 					name := fmt.Sprintf("delete-rule-%d", rule)
 					first := model.Model{ModelName: name, NameRule: rule, Status: 1}
 					second := model.Model{ModelName: name + "-second", Status: 1}
-					require.NoError(t, first.Insert())
-					require.NoError(t, second.Insert())
+					require.NoError(t, first.Insert(testtenant.Context()))
+					require.NoError(t, second.Insert(testtenant.Context()))
 					mapping := `{"` + name + `":"upstream-name"}`
 					priority, weight := int64(7), uint(9)
 					channels := []model.Channel{
@@ -1336,19 +1340,19 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 						require.NoError(t, channels[i].UpdateAbilities(db))
 					}
 					common.MemoryCacheEnabled = true
-					model.InitChannelCache()
-					cached, err := model.GetRandomSatisfiedChannel("default", name, 0, nil)
+					model.InitChannelCache(testtenant.Context())
+					cached, err := model.GetRandomSatisfiedChannel(testtenant.Context(), "default", name, 0, nil)
 					require.NoError(t, err)
 					require.NotNil(t, cached)
-					baseline, err := model.GetModelPricingSnapshot([]string{name})
+					baseline, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 					require.NoError(t, err)
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: name, ExpectedVersion: baseline.EmptyVersion, Pricing: model.PricingValues{"ModelPrice": float64(2)}}}))
-					pricingBefore, err := model.GetModelPricingSnapshot([]string{name, second.ModelName})
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: name, ExpectedVersion: baseline.EmptyVersion, Pricing: model.PricingValues{"ModelPrice": float64(2)}}}))
+					pricingBefore, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, second.ModelName})
 					require.NoError(t, err)
 					if rule != model.NameRuleExact {
-						_, err := model.DeleteModelMetadata([]int{first.Id, second.Id}, true, true)
+						_, err := model.DeleteModelMetadata(testtenant.Context(), []int{first.Id, second.Id}, true, true)
 						require.EqualError(t, err, "only exact-match models can be removed from channels")
-						after, err := model.GetModelPricingSnapshot([]string{name, second.ModelName})
+						after, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, second.ModelName})
 						require.NoError(t, err)
 						assert.Equal(t, pricingBefore, after)
 						require.NoError(t, db.Model(&model.Model{}).Where("id IN ?", []int{first.Id, second.Id}).Count(&count).Error)
@@ -1368,7 +1372,7 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 							tx.AddError(errors.New("injected model deletion failure"))
 						}
 					}))
-					result, err := model.DeleteModelMetadata([]int{first.Id, second.Id}, true, false)
+					result, err := model.DeleteModelMetadata(testtenant.Context(), []int{first.Id, second.Id}, true, false)
 					require.Error(t, err)
 					assert.Zero(t, result)
 					require.NoError(t, db.Callback().Delete().Remove("fail_model_deletion"))
@@ -1377,7 +1381,7 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 						require.NoError(t, db.First(&after, original.Id).Error)
 						assert.Equal(t, original, after)
 					}
-					cached, err = model.GetRandomSatisfiedChannel("default", name, 0, nil)
+					cached, err = model.GetRandomSatisfiedChannel(testtenant.Context(), "default", name, 0, nil)
 					require.NoError(t, err)
 					require.NotNil(t, cached)
 					recorder := modelManagementRequest(t, BatchDeleteModelMeta, http.MethodPost, "/api/models/delete", body, &response)
@@ -1406,18 +1410,18 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 						}
 					}
 					for _, group := range []string{"default", "vip", "last-model-group"} {
-						cached, _ = model.GetRandomSatisfiedChannel(group, name, 0, nil)
+						cached, _ = model.GetRandomSatisfiedChannel(testtenant.Context(), group, name, 0, nil)
 						assert.Nil(t, cached)
 					}
-					cached, err = model.GetRandomSatisfiedChannel("default", name+"-keep", 0, nil)
+					cached, err = model.GetRandomSatisfiedChannel(testtenant.Context(), "default", name+"-keep", 0, nil)
 					require.NoError(t, err)
 					require.NotNil(t, cached)
-					pricingAfter, err := model.GetModelPricingSnapshot([]string{name, second.ModelName})
+					pricingAfter, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, second.ModelName})
 					require.NoError(t, err)
 					assert.Equal(t, pricingBefore, pricingAfter)
 					require.NoError(t, db.Model(&model.Model{}).Where("id IN ?", []int{first.Id, second.Id}).Count(&count).Error)
 					assert.Zero(t, count)
-					_, err = model.DeleteModelMetadata([]int{first.Id}, true, false)
+					_, err = model.DeleteModelMetadata(testtenant.Context(), []int{first.Id}, true, false)
 					assert.Error(t, err, "stale selections cannot delete newly created records")
 				})
 			}
@@ -1425,20 +1429,20 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 				t.Run(fmt.Sprintf("pricing_removal_channels_%t", removeChannels), func(t *testing.T) {
 					name := fmt.Sprintf("remove-pricing-%t", removeChannels)
 					metadata := model.Model{ModelName: name, NameRule: model.NameRuleExact, Status: 1}
-					require.NoError(t, metadata.Insert())
+					require.NoError(t, metadata.Insert(testtenant.Context()))
 					keep := name + "-keep"
 					channel := model.Channel{Name: "Independent pricing removal", Type: 1, Models: name + "," + keep, Group: "pricing-removal", Status: common.ChannelStatusEnabled}
 					require.NoError(t, db.Create(&channel).Error)
 					require.NoError(t, channel.UpdateAbilities(db))
-					model.InitChannelCache()
-					baseline, err := model.GetModelPricingSnapshot([]string{name, keep})
+					model.InitChannelCache(testtenant.Context())
+					baseline, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, keep})
 					require.NoError(t, err)
 					pricing := model.PricingValues{"ModelRatio": float64(1), "ModelPrice": float64(0), "CompletionRatio": float64(2), "CacheRatio": float64(0.1), "CreateCacheRatio": float64(1.25), "ImageRatio": float64(3), "AudioRatio": float64(4), "AudioCompletionRatio": float64(5), "billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": `tier("base", p * 2 + c * 4)`}
-					require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{
+					require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{
 						{ModelName: name, ExpectedVersion: baseline.EmptyVersion, Pricing: pricing},
 						{ModelName: keep, ExpectedVersion: baseline.EmptyVersion, Pricing: model.PricingValues{"ModelPrice": float64(9)}},
 					}))
-					before, err := model.GetModelPricingSnapshot([]string{name, keep})
+					before, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, keep})
 					require.NoError(t, err)
 					body := map[string]any{"model_ids": []int{metadata.Id}, "remove_from_channels": removeChannels, "remove_pricing": true}
 					for _, single := range []bool{false, true} {
@@ -1462,28 +1466,28 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 							}
 						}
 					}))
-					_, err = model.DeleteModelMetadata([]int{metadata.Id}, removeChannels, true)
+					_, err = model.DeleteModelMetadata(testtenant.Context(), []int{metadata.Id}, removeChannels, true)
 					require.Error(t, err)
 					require.NoError(t, db.Callback().Update().Remove("fail_deleted_pricing"))
-					after, err := model.GetModelPricingSnapshot([]string{name, keep})
+					after, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name, keep})
 					require.NoError(t, err)
 					assert.Equal(t, before, after, "partial option writes roll back")
-					assert.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(name), "failed deletion must not publish new runtime pricing")
+					assert.Equal(t, billing_setting.BillingModeTieredExpr, billing_setting.GetBillingMode(testtenant.Context(), name), "failed deletion must not publish new runtime pricing")
 					var retained model.Model
 					require.NoError(t, db.First(&retained, metadata.Id).Error)
 					var channelAfter model.Channel
 					require.NoError(t, db.First(&channelAfter, channel.Id).Error)
 					assert.Equal(t, channel.Models, channelAfter.Models)
-					_, err = model.DeleteModelMetadata([]int{metadata.Id, 999999}, removeChannels, true)
+					_, err = model.DeleteModelMetadata(testtenant.Context(), []int{metadata.Id, 999999}, removeChannels, true)
 					assert.Error(t, err, "a missing model aborts the whole batch")
 					recorder := modelManagementRequest(t, BatchDeleteModelMeta, http.MethodPost, "/api/models/delete", body, &response)
 					require.True(t, response.Success, recorder.Body.String())
-					after, err = model.GetModelPricingSnapshot([]string{name, keep})
+					after, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{name, keep})
 					require.NoError(t, err)
 					assert.Empty(t, after.Entries[0].Configured)
 					assert.Equal(t, before.Entries[1], after.Entries[1], "name rules do not expand pricing deletion")
-					assert.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(name))
-					_, hasExpr := billing_setting.GetBillingExpr(name)
+					assert.Equal(t, billing_setting.BillingModeRatio, billing_setting.GetBillingMode(testtenant.Context(), name))
+					_, hasExpr := billing_setting.GetBillingExpr(testtenant.Context(), name)
 					assert.False(t, hasExpr)
 					require.NoError(t, db.First(&channelAfter, channel.Id).Error)
 					expectedModels := channel.Models
@@ -1496,7 +1500,7 @@ func TestModelDeletionDatabaseMatrix(t *testing.T) {
 				})
 			}
 			for _, ids := range [][]int{nil, {0}, {-1}, make([]int, 1001)} {
-				_, err := model.DeleteModelMetadata(ids, true, false)
+				_, err := model.DeleteModelMetadata(testtenant.Context(), ids, true, false)
 				assert.Error(t, err)
 			}
 		})
@@ -1521,9 +1525,9 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 		export function buildQueryRequest(){return {};}
 		export function parseTaskResult(){return {};}
 		`, spec.key, spec.key, name, spec.field, spec.unit)
-				_, err := jsplugin.DefaultRegistry.Register(source, jsplugin.Options{})
+				_, err := jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(source, jsplugin.Options{})
 				require.NoError(t, err)
-				t.Cleanup(func() { jsplugin.DefaultRegistry.Unregister(spec.key) })
+				t.Cleanup(func() { jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister(spec.key) })
 			}
 
 			// Representative existing options have no plugin-expression row.
@@ -1536,10 +1540,10 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 				{Key: "billing_setting.billing_expr", Value: string(baseJSON)},
 				{Key: "billing_setting.billing_mode", Value: string(modeJSON)},
 			}).Error)
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+			require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{
 				"billing_setting.billing_expr": string(baseJSON), "billing_setting.billing_mode": string(modeJSON),
 			}))
-			before, err := model.GetModelPricingSnapshot([]string{name})
+			before, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			require.Len(t, before.Entries, 1)
 			require.Len(t, before.Entries[0].PluginVariants, 2)
@@ -1550,8 +1554,8 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 				"billing_setting.billing_mode": "tiered_expr", "billing_setting.billing_expr": base,
 				billing_setting.PluginBillingExprOption: map[string]any{"matrix-beta": variant},
 			}}
-			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-			loaded, err := model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+			loaded, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Equal(t, change.Pricing, loaded.Entries[0].Configured)
 			require.Len(t, loaded.Entries[0].PluginVariants, 2)
@@ -1562,35 +1566,35 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 			var flat map[string]string
 			require.NoError(t, common.UnmarshalJsonStr(loaded.Options[billing_setting.PluginBillingExprOption], &flat))
 			assert.Equal(t, map[string]string{"matrix-beta::" + name: variant}, flat)
-			all, err := model.GetModelPricingSnapshot(nil)
+			all, err := model.GetModelPricingSnapshot(testtenant.Context(), nil)
 			require.NoError(t, err)
 			for _, entry := range all.Entries {
 				assert.NotEqual(t, "matrix-beta::"+name, entry.ModelName)
 			}
-			unrelated, err := model.GetModelPricingSnapshot([]string{"unrelated-model"})
+			unrelated, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{"unrelated-model"})
 			require.NoError(t, err)
 			assert.Equal(t, float64(0.75), unrelated.Entries[0].Configured["ModelPrice"])
-			assert.NotContains(t, billing_setting.GetPricingSyncData(map[string]any{}), "plugin_billing_expr")
-			assert.NotContains(t, billing_setting.GetPricingSyncData(map[string]any{})["billing_expr"], "matrix-beta::"+name)
+			assert.NotContains(t, billing_setting.GetPricingSyncData(testtenant.Context(), map[string]any{}), "plugin_billing_expr")
+			assert.NotContains(t, billing_setting.GetPricingSyncData(testtenant.Context(), map[string]any{})["billing_expr"], "matrix-beta::"+name)
 			// Restart/re-read is idempotent; a second save based on its version succeeds.
 			require.NoError(t, db.AutoMigrate(&model.Option{}))
 			change.ExpectedVersion = loaded.Entries[0].Version
-			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-			repeated, err := model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+			repeated, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Equal(t, loaded.Entries[0].Version, repeated.Entries[0].Version)
 			// Changing only the provider price changes the model version.
 			change.Pricing[billing_setting.PluginBillingExprOption] = map[string]any{"matrix-beta": `tier("free", u("credits") * 0)`}
-			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
-			updated, err := model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
+			updated, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.NotEqual(t, loaded.Entries[0].Version, updated.Entries[0].Version)
-			assert.ErrorIs(t, model.UpdateModelPricing([]model.ModelPricingChange{change}), model.ErrModelPricingConflict)
+			assert.ErrorIs(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}), model.ErrModelPricingConflict)
 			// The legacy option API validates the full draft and cannot drop a required override.
 			response := modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: billing_setting.PluginBillingExprOption, Value: `{}`}, nil)
 			assert.Contains(t, response.Body.String(), `"success":false`)
 			assert.Contains(t, response.Body.String(), "matrix-beta")
-			afterFailure, err := model.GetModelPricingSnapshot([]string{name})
+			afterFailure, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Equal(t, updated.Entries[0].Version, afterFailure.Entries[0].Version)
 			// Model-level legacy saves also skip providers with a stored override.
@@ -1601,18 +1605,18 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 			require.NoError(t, err)
 			response = modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: billing_setting.PluginBillingExprOption, Value: string(raw)}, nil)
 			assert.Contains(t, response.Body.String(), `"success":true`)
-			final, err := model.GetModelPricingSnapshot([]string{name})
+			final, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Equal(t, variant, final.Entries[0].PluginVariants[1].Effective)
 			// A provider may disappear without making every legacy price save fail.
-			require.NoError(t, jsplugin.DefaultRegistry.Unregister("matrix-beta"))
-			stale, err := model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("matrix-beta"))
+			stale, err := model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			require.Len(t, stale.Entries[0].PluginVariants, 2)
 			assert.True(t, stale.Entries[0].PluginVariants[1].Stale)
 			assert.Equal(t, variant, stale.Entries[0].PluginVariants[1].Configured)
 			assert.Empty(t, stale.Entries[0].PluginVariants[1].Effective)
-			_, err = model.PreviewModelPricing(name, stale.Entries[0].Configured)
+			_, err = model.PreviewModelPricing(testtenant.Context(), name, stale.Entries[0].Configured)
 			require.NoError(t, err)
 			ratioJSON, err := common.Marshal(map[string]float64{name: 2})
 			require.NoError(t, err)
@@ -1620,23 +1624,23 @@ func TestSharedModelPluginPricingDatabaseMatrix(t *testing.T) {
 			assert.Contains(t, response.Body.String(), `"success":true`)
 			response = modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: "billing_setting.billing_expr", Value: string(baseJSON)}, nil)
 			assert.Contains(t, response.Body.String(), `"success":true`)
-			final, err = model.GetModelPricingSnapshot([]string{name})
+			final, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Equal(t, variant, final.Entries[0].PluginVariants[1].Configured)
 			// The versioned save also preserves an unchanged stale expression.
 			change = model.ModelPricingChange{ModelName: name, ExpectedVersion: final.Entries[0].Version, Pricing: final.Entries[0].Configured}
-			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{change}))
+			require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}))
 			change.Pricing[billing_setting.PluginBillingExprOption] = map[string]any{"matrix-beta": "1"}
 			// Even if this process's cache is ahead of storage, a changed stale
 			// override is validated against the locked database value.
 			tamperedJSON, err := common.Marshal(map[string]string{"matrix-beta::" + name: "1"})
 			require.NoError(t, err)
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: string(tamperedJSON)}))
-			require.ErrorContains(t, model.UpdateModelPricing([]model.ModelPricingChange{change}), "does not declare this model")
-			require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: final.Options[billing_setting.PluginBillingExprOption]}))
+			require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: string(tamperedJSON)}))
+			require.ErrorContains(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{change}), "does not declare this model")
+			require.NoError(t, config.GlobalConfig.ForTenant(testtenant.Context()).LoadFromDB(map[string]string{billing_setting.PluginBillingExprOption: final.Options[billing_setting.PluginBillingExprOption]}))
 			// Updating a plugin to stop declaring this model also leaves the
 			// stored override visible and inert, even with no active providers.
-			_, err = jsplugin.DefaultRegistry.Register(`
+			_, err = jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Register(`
 export const meta = {apiVersion:1,key:"matrix-beta",name:"Beta updated",version:"2.0.0",author:{name:"Test"},models:["replacement-model"],fetchMode:"per_task",usageSchema:{credits:{type:"number",unit:"credit"}}};
 export function buildSubmitRequest(){return {};}
 export function parseSubmitResponse(){return {};}
@@ -1644,23 +1648,23 @@ export function buildQueryRequest(){return {};}
 export function parseTaskResult(){return {};}
 `, jsplugin.Options{})
 			require.NoError(t, err)
-			require.NoError(t, jsplugin.DefaultRegistry.Unregister("matrix-alpha"))
-			stale, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, jsplugin.TenantState(testtenant.Context()).DefaultRegistry.Unregister("matrix-alpha"))
+			stale, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			require.Len(t, stale.Entries[0].PluginVariants, 1)
 			assert.True(t, stale.Entries[0].PluginVariants[0].Stale)
 			assert.Equal(t, "Beta updated", stale.Entries[0].PluginVariants[0].PluginName)
-			require.NoError(t, model.UpdateModelPricingOptions(map[string]string{"ModelRatio": string(ratioJSON)}))
+			require.NoError(t, model.UpdateModelPricingOptions(testtenant.Context(), map[string]string{"ModelRatio": string(ratioJSON)}))
 			// Removing just the stale override succeeds and leaves other prices.
 			response = modelManagementRequest(t, UpdateOption, http.MethodPut, "/api/option/", OptionUpdateRequest{Key: billing_setting.PluginBillingExprOption, Value: `{}`}, nil)
 			assert.Contains(t, response.Body.String(), `"success":true`)
-			final, err = model.GetModelPricingSnapshot([]string{name})
+			final, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Empty(t, final.Entries[0].PluginVariants)
 			assert.Equal(t, base, final.Entries[0].Configured["billing_setting.billing_expr"])
 			// A complete reset removes all provider keys, including models containing ::.
-			require.NoError(t, model.UpdateModelPricing([]model.ModelPricingChange{{ModelName: name, ExpectedVersion: final.Entries[0].Version, Reset: true}}))
-			final, err = model.GetModelPricingSnapshot([]string{name})
+			require.NoError(t, model.UpdateModelPricing(testtenant.Context(), []model.ModelPricingChange{{ModelName: name, ExpectedVersion: final.Entries[0].Version, Reset: true}}))
+			final, err = model.GetModelPricingSnapshot(testtenant.Context(), []string{name})
 			require.NoError(t, err)
 			assert.Empty(t, final.Entries[0].Configured)
 			assert.Equal(t, "{}", final.Options[billing_setting.PluginBillingExprOption])

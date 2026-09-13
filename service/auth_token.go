@@ -1,5 +1,8 @@
 package service
 
+import context "context"
+import "github.com/QuantumNous/new-api/tenant"
+
 import (
 	"crypto/hmac"
 	"crypto/sha256"
@@ -51,13 +54,13 @@ type authClaims struct {
 	jwt.RegisteredClaims
 }
 
-func authSigningKey(purpose string) []byte {
+func authSigningKey(tenantCtx context.Context, purpose string) []byte {
 	mac := hmac.New(sha256.New, []byte(common.SessionSecret))
-	_, _ = mac.Write([]byte("new-api/auth/" + purpose + "/v1"))
+	_, _ = mac.Write([]byte(tenant.MustKey(tenantCtx, "new-api/auth/"+purpose+"/v1")))
 	return mac.Sum(nil)
 }
 
-func IssueAccessToken(identity AuthIdentity) (string, int64, error) {
+func IssueAccessToken(tenantCtx context.Context, identity AuthIdentity) (string, int64, error) {
 	if identity.UserID <= 0 || identity.SessionID == "" || identity.UserAuthVersion <= 0 || identity.SessionVersion <= 0 {
 		return "", 0, ErrAuthTokenInvalid
 	}
@@ -78,12 +81,12 @@ func IssueAccessToken(identity AuthIdentity) (string, int64, error) {
 			ID:        uuid.NewString(),
 		},
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(accessTokenUse))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(tenantCtx, accessTokenUse))
 	return signed, expiresAt.Unix(), err
 }
 
-func ParseAccessToken(raw string) (AuthIdentity, error) {
-	claims, err := parseAuthClaims(raw, accessTokenUse, authSigningKey(accessTokenUse))
+func ParseAccessToken(tenantCtx context.Context, raw string) (AuthIdentity, error) {
+	claims, err := parseAuthClaims(raw, accessTokenUse, authSigningKey(tenantCtx, accessTokenUse))
 	if err != nil {
 		return AuthIdentity{}, err
 	}
@@ -104,7 +107,7 @@ func ParseAccessToken(raw string) (AuthIdentity, error) {
 // token use is always treated as internal, even when its signature, lifetime
 // or requested purpose is invalid, so it can never fall through to PAT or
 // relay-token authentication.
-func ParseDashboardAccessToken(raw string) (identity AuthIdentity, internal bool, err error) {
+func ParseDashboardAccessToken(tenantCtx context.Context, raw string) (identity AuthIdentity, internal bool, err error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return AuthIdentity{}, false, nil
@@ -119,18 +122,18 @@ func ParseDashboardAccessToken(raw string) (identity AuthIdentity, internal bool
 	if claims.Issuer != authTokenIssuer || !audienceMatches || !knownTokenUse {
 		return AuthIdentity{}, false, nil
 	}
-	identity, err = ParseAccessToken(raw)
+	identity, err = ParseAccessToken(tenantCtx, raw)
 	return identity, true, err
 }
 
-func IssueSecurityProof(identity AuthIdentity, method string, binding VerificationBinding) (string, int64, error) {
+func IssueSecurityProof(tenantCtx context.Context, identity AuthIdentity, method string, binding VerificationBinding) (string, int64, error) {
 	method = strings.TrimSpace(method)
 	if identity.UserID <= 0 || identity.SessionID == "" || identity.UserAuthVersion <= 0 || identity.SessionVersion <= 0 || method == "" || binding.Scope == "" || binding.ContextHash == "" {
 		return "", 0, ErrAuthTokenInvalid
 	}
 	now := time.Now()
 	expiresAt := now.Add(SecurityProofTTL).Truncate(time.Second)
-	proofID, _, err := model.CreateAuthFlow(model.AuthFlowCreate{
+	proofID, _, err := model.CreateAuthFlow(tenantCtx, model.AuthFlowCreate{
 		Purpose: model.AuthFlowPurposeSecurityProof, UserId: identity.UserID,
 		SessionId: identity.SessionID, ExpiresAt: expiresAt,
 	})
@@ -155,12 +158,12 @@ func IssueSecurityProof(identity AuthIdentity, method string, binding Verificati
 			ID:        proofID,
 		},
 	}
-	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(securityProofTokenUse))
+	signed, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims).SignedString(authSigningKey(tenantCtx, securityProofTokenUse))
 	return signed, expiresAt.Unix(), err
 }
 
-func verifySecurityProof(raw string, identity AuthIdentity, binding VerificationBinding) (*authClaims, error) {
-	claims, err := parseAuthClaims(raw, securityProofTokenUse, authSigningKey(securityProofTokenUse))
+func verifySecurityProof(tenantCtx context.Context, raw string, identity AuthIdentity, binding VerificationBinding) (*authClaims, error) {
+	claims, err := parseAuthClaims(raw, securityProofTokenUse, authSigningKey(tenantCtx, securityProofTokenUse))
 	if err != nil {
 		return nil, err
 	}

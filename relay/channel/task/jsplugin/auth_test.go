@@ -1,7 +1,9 @@
 package jsplugin
 
 import (
+	"context"
 	"fmt"
+	"github.com/QuantumNous/new-api/tenant"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -9,10 +11,13 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	pluginruntime "github.com/QuantumNous/new-api/pkg/jsplugin"
+
 	vertexcore "github.com/QuantumNous/new-api/relay/channel/vertex"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
-	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,22 +27,22 @@ func TestOAuth2JWTAuthCachesAndRefreshes(t *testing.T) {
 	original := acquireAccessToken
 	t.Cleanup(func() { acquireAccessToken = original; pluginAuthCache = sync.Map{} })
 	calls := 0
-	acquireAccessToken = func(_ vertexcore.Credentials, _ string) (string, error) {
+	acquireAccessToken = func(_ context.Context, _ vertexcore.Credentials, _ string) (string, error) {
 		calls++
 		return fmt.Sprintf("token-%d", calls), nil
 	}
 	credentials, err := common.Marshal(vertexcore.Credentials{ProjectID: "project", ClientEmail: "a@example.com", PrivateKey: "secret"})
 	require.NoError(t, err)
 	meta := pluginruntime.AuthMeta{Type: "oauth2_jwt"}
-	first, err := resolveAuth(meta, string(credentials), "")
+	first, err := resolveAuth(testtenant.Context(), meta, string(credentials), "")
 	require.NoError(t, err)
-	second, err := resolveAuth(meta, string(credentials), "")
+	second, err := resolveAuth(testtenant.Context(), meta, string(credentials), "")
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer token-1", first["authHeader"])
 	assert.Equal(t, first, second)
 	assert.Equal(t, 1, calls)
-	pluginAuthCache.Store(string(credentials)+"\x00", cachedAuth{expiresAt: time.Now().Add(-time.Second)})
-	refreshed, err := resolveAuth(meta, string(credentials), "")
+	pluginAuthCache.Store(tenant.MustKey(testtenant.Context(), common.GenerateHMAC(string(credentials)+"\x00")), cachedAuth{expiresAt: time.Now().Add(-time.Second)})
+	refreshed, err := resolveAuth(testtenant.Context(), meta, string(credentials), "")
 	require.NoError(t, err)
 	assert.Equal(t, "Bearer token-2", refreshed["authHeader"])
 	assert.Equal(t, 2, calls)
@@ -47,7 +52,7 @@ func TestOAuth2JWTContextDoesNotExposeServiceAccountKey(t *testing.T) {
 	pluginAuthCache = sync.Map{}
 	original := acquireAccessToken
 	t.Cleanup(func() { acquireAccessToken = original; pluginAuthCache = sync.Map{} })
-	acquireAccessToken = func(_ vertexcore.Credentials, _ string) (string, error) {
+	acquireAccessToken = func(_ context.Context, _ vertexcore.Credentials, _ string) (string, error) {
 		return "access-token", nil
 	}
 	credentials, err := common.Marshal(vertexcore.Credentials{ProjectID: "project", ClientEmail: "a@example.com", PrivateKey: "secret"})
@@ -64,14 +69,14 @@ export function parseTaskResult(){return {status:"SUCCESS"}}
 `
 	plugin, err := pluginruntime.NewRegistry().Register(source, pluginruntime.Options{})
 	require.NoError(t, err)
-	adaptor := New(plugin)
-	info := &relaycommon.RelayInfo{ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example", ApiKey: string(credentials)}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
+	adaptor := New(testtenant.Context(), plugin)
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(), ChannelMeta: &relaycommon.ChannelMeta{ChannelBaseUrl: "https://provider.example", ApiKey: string(credentials)}, TaskRelayInfo: &relaycommon.TaskRelayInfo{}}
 	adaptor.Init(info)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/videos", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest(http.MethodPost, "/v1/videos", nil)
 	c.Set("task_request", relaycommon.TaskSubmitReq{Prompt: "p"})
 	require.Nil(t, adaptor.ValidateRequestAndSetAction(c, info))
-	req := httptest.NewRequest(http.MethodPost, "https://provider.example/submit", nil)
+	req := testtenant.NewRequest(http.MethodPost, "https://provider.example/submit", nil)
 	require.NoError(t, adaptor.BuildRequestHeader(c, req, info))
 	assert.Equal(t, "Bearer access-token", req.Header.Get("Authorization"))
 }

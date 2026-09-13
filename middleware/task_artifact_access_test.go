@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/gin-gonic/gin"
@@ -22,10 +23,10 @@ func TestTaskArtifactAccessIsRedactedAndVerifiedBeforeHandler(t *testing.T) {
 	common.CryptoSecret = "task-artifact-middleware-secret"
 	t.Cleanup(func() { common.CryptoSecret = previousSecret })
 
-	access, err := service.IssueTaskArtifactAccess("task-1", "video-main")
+	access, err := service.IssueTaskArtifactAccess(testtenant.Context(), "task-1", "video-main")
 	require.NoError(t, err)
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(redactTaskArtifactAccessQuery())
 	router.GET(
 		"/v1/tasks/:key/artifacts/:artifact_key/content",
@@ -37,7 +38,7 @@ func TestTaskArtifactAccessIsRedactedAndVerifiedBeforeHandler(t *testing.T) {
 			c.Status(http.StatusNoContent)
 		},
 	)
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/tasks/task-1/artifacts/video-main/content?access="+urlQueryEscape(access)+"&keep=kept",
 		nil,
@@ -55,7 +56,7 @@ func TestTaskArtifactAccessRejectsTamperedAndEmptyCapabilitiesAsNotFound(t *test
 	common.CryptoSecret = "task-artifact-middleware-reject-secret"
 	t.Cleanup(func() { common.CryptoSecret = previousSecret })
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(redactTaskArtifactAccessQuery())
 	router.GET(
 		"/v1/tasks/:key/artifacts/:artifact_key/content",
@@ -70,7 +71,7 @@ func TestTaskArtifactAccessRejectsTamperedAndEmptyCapabilitiesAsNotFound(t *test
 		"?access=" + strings.Repeat("x", 1024),
 		"?access=%20" + strings.Repeat("A", 43) + "%20",
 	} {
-		request := httptest.NewRequest(
+		request := testtenant.NewRequest(
 			http.MethodGet,
 			"/v1/tasks/task-1/artifacts/video-main/content"+query,
 			nil,
@@ -112,7 +113,7 @@ func TestTaskArtifactAccessLimiterDefaults(t *testing.T) {
 
 func TestRedactTaskArtifactAccessAlsoCoversLegacyVideoRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	router := gin.New()
+	router := testtenant.NewRouter()
 	router.Use(redactTaskArtifactAccessQuery())
 	router.GET("/v1/videos/:task_id/content", func(c *gin.Context) {
 		assert.NotContains(t, c.Request.URL.RawQuery, "access")
@@ -120,7 +121,7 @@ func TestRedactTaskArtifactAccessAlsoCoversLegacyVideoRoute(t *testing.T) {
 		assert.Equal(t, "ok", c.Query("keep"))
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/videos/task-1/content?access=secret-capability&keep=ok",
 		nil,
@@ -137,12 +138,12 @@ func TestSetUpLoggerNeverWritesTaskArtifactAccess(t *testing.T) {
 	gin.DefaultWriter = &output
 	t.Cleanup(func() { gin.DefaultWriter = previousWriter })
 
-	router := gin.New()
+	router := testtenant.NewRouter()
 	SetUpLogger(router)
 	router.GET("/v1/tasks/:key/artifacts/:artifact_key/content", func(c *gin.Context) {
 		c.Status(http.StatusNoContent)
 	})
-	request := httptest.NewRequest(
+	request := testtenant.NewRequest(
 		http.MethodGet,
 		"/v1/tasks/task-1/artifacts/video/content?access=never-log-this&keep=ok",
 		nil,
@@ -150,6 +151,14 @@ func TestSetUpLoggerNeverWritesTaskArtifactAccess(t *testing.T) {
 	router.ServeHTTP(httptest.NewRecorder(), request)
 
 	assert.False(t, strings.Contains(output.String(), "never-log-this"))
+	router.GET("/platform/oauth/:provider", func(c *gin.Context) {
+		c.Status(http.StatusNoContent)
+	})
+	request = testtenant.NewRequest(http.MethodGet, "/platform/oauth/github?code=never-log-oauth-code&state=never-log-oauth-state", nil)
+	router.ServeHTTP(httptest.NewRecorder(), request)
+	assert.NotContains(t, output.String(), "never-log-oauth-code")
+	assert.NotContains(t, output.String(), "never-log-oauth-state")
+	assert.Contains(t, output.String(), "/platform/oauth/github")
 }
 
 func urlQueryEscape(value string) string {

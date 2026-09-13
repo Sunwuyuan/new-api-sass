@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -13,8 +15,8 @@ import (
 
 func TestNewTaskAPIRequestInheritsClientCancellation(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	requestContext, cancel := context.WithCancel(context.Background())
+	c, _ := testtenant.CreateTestContext(recorder)
+	requestContext, cancel := context.WithCancel(testtenant.Context())
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestContext)
 
 	upstream, err := newTaskAPIRequest(c, "https://provider.example/tasks", nil)
@@ -29,11 +31,11 @@ func TestProcessHeaderOverride_ChannelTestSkipsPassthroughRules(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest: true,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			HeadersOverride: map[string]any{
@@ -52,11 +54,11 @@ func TestProcessHeaderOverride_ChannelTestSkipsClientHeaderPlaceholder(t *testin
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest: true,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			HeadersOverride: map[string]any{
@@ -76,11 +78,11 @@ func TestProcessHeaderOverride_NonTestKeepsClientHeaderPlaceholder(t *testing.T)
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest: false,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			HeadersOverride: map[string]any{
@@ -99,10 +101,10 @@ func TestProcessHeaderOverride_RuntimeOverrideIsFinalHeaderMap(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest:             false,
 		UseRuntimeHeadersOverride: true,
 		RuntimeHeadersOverride: map[string]any{
@@ -130,12 +132,12 @@ func TestProcessHeaderOverride_PassthroughSkipsAcceptEncoding(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
 	ctx.Request.Header.Set("X-Trace-Id", "trace-123")
 	ctx.Request.Header.Set("Accept-Encoding", "gzip")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest: false,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			HeadersOverride: map[string]any{
@@ -157,12 +159,12 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	ctx, _ := gin.CreateTestContext(recorder)
-	ctx.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	ctx, _ := testtenant.CreateTestContext(recorder)
+	ctx.Request = testtenant.NewRequest(http.MethodPost, "/v1/responses", nil)
 	ctx.Request.Header.Set("Originator", "Codex CLI")
 	ctx.Request.Header.Set("Session_id", "sess-123")
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		IsChannelTest: false,
 		RequestHeaders: map[string]string{
 			"Originator": "Codex CLI",
@@ -199,7 +201,7 @@ func TestProcessHeaderOverride_PassHeadersTemplateSetsRuntimeHeaders(t *testing.
 	_, exists = headers["x-codex-beta-features"]
 	require.False(t, exists)
 
-	upstreamReq := httptest.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
+	upstreamReq := testtenant.NewRequest(http.MethodPost, "https://example.com/v1/responses", nil)
 	applyHeaderOverrideToRequest(upstreamReq, headers)
 	require.Equal(t, "Codex CLI", upstreamReq.Header.Get("Originator"))
 	require.Equal(t, "sess-123", upstreamReq.Header.Get("Session_id"))

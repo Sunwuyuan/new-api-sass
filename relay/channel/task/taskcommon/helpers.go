@@ -1,5 +1,7 @@
 package taskcommon
 
+import context "context"
+
 import (
 	"encoding/base64"
 	"fmt"
@@ -12,7 +14,7 @@ import (
 )
 
 // UnmarshalMetadata converts a map[string]any metadata to a typed struct via JSON round-trip.
-// This replaces the repeated pattern: json.Marshal(metadata) → json.Unmarshal(bytes, &target).
+// This replaces the repeated pattern: common.Marshal(metadata) → common.Unmarshal(bytes, &target).
 func UnmarshalMetadata(metadata map[string]any, target any) error {
 	if metadata == nil {
 		return nil
@@ -62,8 +64,8 @@ func DecodeLocalTaskID(id string) (string, error) {
 
 // BuildProxyURL constructs the video proxy URL using the public task ID.
 // e.g., "https://your-server.com/v1/videos/task_xxxx/content"
-func BuildProxyURL(taskID string) string {
-	return fmt.Sprintf("%s/v1/videos/%s/content", system_setting.ServerAddress, taskID)
+func BuildProxyURL(tenantCtx context.Context, taskID string) string {
+	return fmt.Sprintf("%s/v1/videos/%s/content", system_setting.TenantState(tenantCtx).ServerAddress, taskID)
 }
 
 // Status-to-progress mapping constants for polling updates.

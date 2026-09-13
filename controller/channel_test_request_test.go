@@ -6,9 +6,11 @@ import (
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/relay/channel/ali"
 	"github.com/QuantumNous/new-api/relay/channel/openai"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -25,7 +27,7 @@ func convertChatCompatibilityRequest(t *testing.T, request *dto.GeneralOpenAIReq
 	oldMode := gin.Mode()
 	gin.SetMode(gin.TestMode)
 	t.Cleanup(func() { gin.SetMode(oldMode) })
-	settings := model_setting.GetGlobalSettings()
+	settings := model_setting.GetGlobalSettings(testtenant.Context())
 	oldPassThrough, oldBlacklist := settings.PassThroughRequestEnabled, settings.ThinkingModelBlacklist
 	oldEffortTailModels := settings.EffortTailModelIDs
 	settings.PassThroughRequestEnabled = false
@@ -37,14 +39,14 @@ func convertChatCompatibilityRequest(t *testing.T, request *dto.GeneralOpenAIReq
 		settings.EffortTailModelIDs = oldEffortTailModels
 	})
 
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	c, _ := testtenant.CreateTestContext(httptest.NewRecorder())
+	c.Request = testtenant.NewRequest("POST", "/v1/chat/completions", nil)
 	if mapping != nil {
 		encoded, err := common.Marshal(mapping)
 		require.NoError(t, err)
 		c.Set("model_mapping", string(encoded))
 	}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: request.Model,
 		Request:         request,
 		RelayFormat:     types.RelayFormatOpenAI,
@@ -220,7 +222,7 @@ func TestDirectOpenAIResponsesKeepsExistingParameters(t *testing.T) {
 	const body = `{"model":"gpt-6-astra","input":"hi","max_output_tokens":100,"temperature":0.2,"top_p":0.8,"top_logprobs":5,"include":["message.output_text.logprobs"],"reasoning":{"effort":"high"}}`
 	var request dto.OpenAIResponsesRequest
 	require.NoError(t, common.UnmarshalJsonStr(body, &request))
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		OriginModelName: "gpt-6-astra",
 		RelayFormat:     types.RelayFormatOpenAIResponses,
 		ChannelMeta: &relaycommon.ChannelMeta{

@@ -35,11 +35,11 @@ const tokenCacheFenceSeconds = 10
 // invalidateTokenCacheForMutation is called before a token metadata mutation
 // writes to the database: it raises the fence and drops the cached hash so no
 // reader can act on (or re-publish) the pre-mutation state.
-func invalidateTokenCacheForMutation(key string) error {
+func invalidateTokenCacheForMutation(tenantCtx context.Context, key string) error {
 	if !common.RedisEnabled || key == "" {
 		return nil
 	}
-	ctx := context.Background()
+	ctx := tenantCtx
 	err := common.RDB.Set(ctx, getTokenCacheFenceKey(key), 1, time.Duration(tokenCacheFenceSeconds)*time.Second).Err()
 	if err != nil {
 		return err
@@ -53,7 +53,7 @@ func invalidateTokenCacheForMutation(key string) error {
 // pre-consume decrements Redis first, so a snapshot must never overwrite any
 // field of a live hash.
 // 返回值：0=被 fence 拦截，1=完成初始化，2=哈希已存在，仅刷新 TTL。
-func cacheInitToken(token Token) (int, error) {
+func cacheInitToken(tenantCtx context.Context, token Token) (int, error) {
 	if !common.RedisEnabled {
 		return 0, nil
 	}
@@ -78,7 +78,7 @@ redis.call('HSET', KEYS[1],
 redis.call('EXPIRE', KEYS[1], ARGV[17])
 return 1`
 
-	return common.RDB.Eval(context.Background(), script, []string{
+	return common.RDB.Eval(tenantCtx, script, []string{
 		getTokenCacheKey(token.Key), getTokenCacheFenceKey(token.Key),
 	},
 		token.Id, token.UserId, token.Status, token.Name,
@@ -91,12 +91,12 @@ return 1`
 }
 
 // cacheGetTokenByKey 从缓存读取 token；不完整的哈希（如仅有配额字段）会被拒绝。
-func cacheGetTokenByKey(key string) (*Token, error) {
+func cacheGetTokenByKey(tenantCtx context.Context, key string) (*Token, error) {
 	if !common.RedisEnabled {
 		return nil, fmt.Errorf("redis is not enabled")
 	}
 	var token Token
-	if err := common.RedisHGetObj(getTokenCacheKey(key), &token); err != nil {
+	if err := common.RedisHGetObj(tenantCtx, getTokenCacheKey(key), &token); err != nil {
 		return nil, err
 	}
 	if token.Id <= 0 {

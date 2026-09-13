@@ -35,6 +35,8 @@ import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Switch } from '@/components/ui/switch'
 
+import { useStatus } from '@/hooks/use-status'
+
 import {
   SettingsForm,
   SettingsSwitchContent,
@@ -64,6 +66,7 @@ const createEmailSchema = (t: (key: string) => string) =>
     SMTPStartTLSEnabled: z.boolean(),
     SMTPInsecureSkipVerify: z.boolean(),
     SMTPForceAuthLogin: z.boolean(),
+    PlatformMailEnabled: z.boolean(),
   })
 
 type EmailFormValues = z.infer<ReturnType<typeof createEmailSchema>>
@@ -87,6 +90,8 @@ export function EmailSettingsSection({
   defaultValues,
 }: EmailSettingsSectionProps) {
   const { t } = useTranslation()
+  const { status } = useStatus()
+  const platformMailAvailable = Boolean(status?.platform_mail_available)
   const updateOption = useUpdateOption()
   const emailSchema = createEmailSchema(t)
 
@@ -109,6 +114,7 @@ export function EmailSettingsSection({
       SMTPStartTLSEnabled: securityMode === 'starttls',
       SMTPInsecureSkipVerify: values.SMTPInsecureSkipVerify,
       SMTPForceAuthLogin: values.SMTPForceAuthLogin,
+      PlatformMailEnabled: values.PlatformMailEnabled,
     }
 
     const initial = {
@@ -121,6 +127,7 @@ export function EmailSettingsSection({
       SMTPStartTLSEnabled: defaultValues.SMTPStartTLSEnabled,
       SMTPInsecureSkipVerify: defaultValues.SMTPInsecureSkipVerify,
       SMTPForceAuthLogin: defaultValues.SMTPForceAuthLogin,
+      PlatformMailEnabled: defaultValues.PlatformMailEnabled,
     }
 
     const updates: Array<{ key: string; value: string | boolean }> = []
@@ -173,6 +180,13 @@ export function EmailSettingsSection({
       })
     }
 
+    if (sanitized.PlatformMailEnabled !== initial.PlatformMailEnabled) {
+      updates.push({
+        key: 'PlatformMailEnabled',
+        value: sanitized.PlatformMailEnabled,
+      })
+    }
+
     for (const update of updates) {
       await updateOption.mutateAsync(update)
     }
@@ -187,6 +201,30 @@ export function EmailSettingsSection({
             isSaving={updateOption.isPending}
             saveLabel='Save SMTP settings'
           />
+          {platformMailAvailable && (
+            <FormField
+              control={form.control}
+              name='PlatformMailEnabled'
+              render={({ field }) => (
+                <SettingsSwitchItem>
+                  <SettingsSwitchContent>
+                    <FormLabel>{t('Send mail through the platform')}</FormLabel>
+                    <FormDescription>
+                      {t(
+                        'Use the included hosting-plan email quota. Workspace SMTP is unused while this is on.'
+                      )}
+                    </FormDescription>
+                  </SettingsSwitchContent>
+                  <FormControl>
+                    <Switch
+                      checked={field.value}
+                      onCheckedChange={field.onChange}
+                    />
+                  </FormControl>
+                </SettingsSwitchItem>
+              )}
+            />
+          )}
           <FormField
             control={form.control}
             name='SMTPServer'

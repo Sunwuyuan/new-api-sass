@@ -30,7 +30,7 @@ func VerifyLogin(c *gin.Context) {
 		writeSecurityOperationError(c, service.ErrProofMethod)
 		return
 	}
-	bundle, err := service.VerifyLoginCode(request.FlowToken, request.Code, c.ClientIP(), c.Request.UserAgent())
+	bundle, err := service.VerifyLoginCode(c.Request.Context(), request.FlowToken, request.Code, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -47,12 +47,12 @@ func LoginPasskeyBegin(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	verification, err := service.RequireLoginVerification(request.FlowToken, service.VerificationMethodPasskey)
+	verification, err := service.RequireLoginVerification(c.Request.Context(), request.FlowToken, service.VerificationMethodPasskey)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	credential, err := model.GetPasskeyByUserID(verification.State.UserID)
+	credential, err := model.GetPasskeyByUserID(c.Request.Context(), verification.State.UserID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -61,7 +61,7 @@ func LoginPasskeyBegin(c *gin.Context) {
 	if credential.RPID != nil {
 		credentialRPID = *credential.RPID
 	}
-	wa, rpIDs, err := passkeysvc.BuildLoginWebAuthn(c.Request, request.RPID, credentialRPID)
+	wa, rpIDs, err := passkeysvc.BuildLoginWebAuthn(c.Request.Context(), c.Request, request.RPID, credentialRPID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -72,7 +72,7 @@ func LoginPasskeyBegin(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	token, expiresAt, err := passkeysvc.CreateSessionDataFlow(model.AuthFlowPurposeLoginPasskey, passkeysvc.FlowSecurity{
+	token, expiresAt, err := passkeysvc.CreateSessionDataFlow(c.Request.Context(), model.AuthFlowPurposeLoginPasskey, passkeysvc.FlowSecurity{
 		AuthSessionIdentity: model.AuthSessionIdentity{UserID: user.Id, UserAuthVersion: verification.State.AuthVersion},
 		LoginFlowID:         verification.Flow.Id, LoginExpiresAt: verification.Flow.ExpiresAt.Unix(),
 	}, sessionData)
@@ -93,7 +93,7 @@ func LoginPasskeyFinish(c *gin.Context) {
 		common.ApiErrorMsg(c, "参数错误")
 		return
 	}
-	verification, err := service.RequireLoginVerification(request.FlowToken, service.VerificationMethodPasskey)
+	verification, err := service.RequireLoginVerification(c.Request.Context(), request.FlowToken, service.VerificationMethodPasskey)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -104,7 +104,7 @@ func LoginPasskeyFinish(c *gin.Context) {
 		return
 	}
 	identity := model.AuthSessionIdentity{UserID: verification.State.UserID, UserAuthVersion: verification.State.AuthVersion}
-	sessionData, security, err := passkeysvc.PopSessionDataFlow(request.PasskeyFlowToken, model.AuthFlowPurposeLoginPasskey, identity)
+	sessionData, security, err := passkeysvc.PopSessionDataFlow(c.Request.Context(), request.PasskeyFlowToken, model.AuthFlowPurposeLoginPasskey, identity)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -114,12 +114,12 @@ func LoginPasskeyFinish(c *gin.Context) {
 		writeSecurityOperationError(c, model.ErrAuthFlowInvalid)
 		return
 	}
-	credential, err := model.GetPasskeyByUserID(identity.UserID)
+	credential, err := model.GetPasskeyByUserID(c.Request.Context(), identity.UserID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	wa, err := passkeysvc.BuildWebAuthnForRPID(c.Request, sessionData.RelyingPartyID)
+	wa, err := passkeysvc.BuildWebAuthnForRPID(c.Request.Context(), c.Request, sessionData.RelyingPartyID)
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -133,11 +133,11 @@ func LoginPasskeyFinish(c *gin.Context) {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	if err := model.UpdatePasskeyAssertionState(identity.UserID, validated, time.Now(), sessionData.RelyingPartyID); err != nil {
+	if err := model.UpdatePasskeyAssertionState(c.Request.Context(), identity.UserID, validated, time.Now(), sessionData.RelyingPartyID); err != nil {
 		writeSecurityOperationError(c, err)
 		return
 	}
-	bundle, err := service.CompleteLoginVerification(request.FlowToken, verification, service.VerificationMethodPasskey, c.ClientIP(), c.Request.UserAgent())
+	bundle, err := service.CompleteLoginVerification(c.Request.Context(), request.FlowToken, verification, service.VerificationMethodPasskey, c.ClientIP(), c.Request.UserAgent())
 	if err != nil {
 		writeSecurityOperationError(c, err)
 		return
@@ -146,12 +146,12 @@ func LoginPasskeyFinish(c *gin.Context) {
 }
 
 func completeVerifiedLoginResponse(c *gin.Context, bundle *service.AuthBundle, method string) {
-	identity, err := service.ParseAccessToken(bundle.AccessToken)
+	identity, err := service.ParseAccessToken(c.Request.Context(), bundle.AccessToken)
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return
 	}
-	user, err := model.GetSelfUserById(identity.UserID)
+	user, err := model.GetSelfUserById(c.Request.Context(), identity.UserID)
 	if err != nil {
 		writeAuthSessionError(c, err)
 		return

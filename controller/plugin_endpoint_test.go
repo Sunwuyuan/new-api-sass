@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/pkg/jsplugin"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -12,7 +13,7 @@ import (
 
 func TestRelayTaskPluginEndpointPreservesUnclaimedFallback(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	fallbackCalls := 0
 
 	RelayTaskPluginEndpoint(c, func(c *gin.Context) {
@@ -27,7 +28,7 @@ func TestRelayTaskPluginEndpointPreservesUnclaimedFallback(t *testing.T) {
 
 func TestRelayTaskPluginEndpointNeverEntersOrdinaryRelayWhenClaimed(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 	c.Set(jsplugin.ContextKeyPinnedEndpoint, jsplugin.PinnedEndpoint{
 		Generation: &jsplugin.RoutingGeneration{},
 		Plugin:     &jsplugin.LoadedPlugin{},

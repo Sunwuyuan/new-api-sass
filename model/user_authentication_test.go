@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
 	"github.com/QuantumNous/new-api/setting/system_setting"
 	"github.com/go-redis/redis/v8"
 	"github.com/go-webauthn/webauthn/webauthn"
@@ -55,7 +56,7 @@ func TestHardDeleteUserFailsClosedWhenAuthFenceCannotPublish(t *testing.T) {
 		common.RedisEnabled, common.RDB = oldRedisEnabled, oldRDB
 	})
 
-	require.Error(t, HardDeleteUserById(user.Id))
+	require.Error(t, HardDeleteUserById(testtenant.Context(), user.Id))
 
 	var count int64
 	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
@@ -101,12 +102,12 @@ func TestHardDeleteUserPublishesTombstoneAndPurgesAuthenticationData(t *testing.
 		TokenHash: "hard-delete-success-flow", Purpose: AuthFlowPurposeTwoFALogin,
 		UserId: user.Id, ExpiresAt: time.Now().Add(time.Minute),
 	}).Error)
-	require.NoError(t, populateUserCache(user))
+	require.NoError(t, populateUserCache(testtenant.Context(), user))
 	// Administrative hard deletion commonly targets an already soft-deleted
 	// user; the shared version increment must therefore query unscoped.
 	require.NoError(t, DB.Delete(&user).Error)
 
-	require.NoError(t, HardDeleteUserById(user.Id))
+	require.NoError(t, HardDeleteUserById(testtenant.Context(), user.Id))
 
 	var count int64
 	require.NoError(t, DB.Unscoped().Model(&User{}).Where("id = ?", user.Id).Count(&count).Error)
@@ -144,7 +145,7 @@ func TestIncrementFailedAttemptsCountsConcurrentFailures(t *testing.T) {
 	var wg sync.WaitGroup
 	for range attempts {
 		wg.Go(func() {
-			errs <- (&TwoFA{Id: twoFA.Id}).IncrementFailedAttempts()
+			errs <- (&TwoFA{Id: twoFA.Id}).IncrementFailedAttempts(testtenant.Context())
 		})
 	}
 	wg.Wait()
@@ -175,7 +176,7 @@ func TestValidateBackupCodeCanOnlySucceedOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	for range attempts {
 		wg.Go(func() {
-			valid, err := ValidateBackupCode(123, code)
+			valid, err := ValidateBackupCode(testtenant.Context(), 123, code)
 			results <- valid
 			errs <- err
 		})
@@ -195,7 +196,7 @@ func TestValidateBackupCodeCanOnlySucceedOnce(t *testing.T) {
 	}
 	assert.Equal(t, 1, wins)
 
-	remaining, err := GetUnusedBackupCodeCount(123)
+	remaining, err := GetUnusedBackupCodeCount(testtenant.Context(), 123)
 	require.NoError(t, err)
 	assert.Zero(t, remaining)
 }
@@ -212,7 +213,7 @@ func TestPendingTwoFASetupAPIsRejectEnabledFactor(t *testing.T) {
 	require.NoError(t, DB.Create(&session).Error)
 	identity := AuthSessionIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1}
 	authorization := &AuthFlowAuthorization{AuthSessionIdentity: identity, ProofID: 1, Scope: "2fa.setup", ContextHash: "setup-context", Method: "password"}
-	_, err := CreateTwoFAEnrollment(identity, authorization, "replacement-secret", []string{"ABCD-1234"}, time.Now().Add(time.Minute))
+	_, err := CreateTwoFAEnrollment(testtenant.Context(), identity, authorization, "replacement-secret", []string{"ABCD-1234"}, time.Now().Add(time.Minute))
 	require.ErrorIs(t, err, ErrTwoFAAlreadyEnabled)
 
 	var stored TwoFA
@@ -239,41 +240,41 @@ func TestSecurityFactorMutationsAdvanceUserAuthVersion(t *testing.T) {
 	require.NoError(t, DB.Create(&session).Error)
 	identity := AuthSessionIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1}
 	authorization := &AuthFlowAuthorization{AuthSessionIdentity: identity, ProofID: 1, Scope: "2fa.setup", ContextHash: "setup-context", Method: "password"}
-	token, err := CreateTwoFAEnrollment(identity, authorization, "JBSWY3DPEHPK3PXP", []string{"ABCD-1234"}, time.Now().Add(time.Minute))
+	token, err := CreateTwoFAEnrollment(testtenant.Context(), identity, authorization, "JBSWY3DPEHPK3PXP", []string{"ABCD-1234"}, time.Now().Add(time.Minute))
 	require.NoError(t, err)
 	code, err := totp.GenerateCode("JBSWY3DPEHPK3PXP", time.Now())
 	require.NoError(t, err)
-	require.NoError(t, EnableTwoFAEnrollment(identity, token, code))
+	require.NoError(t, EnableTwoFAEnrollment(testtenant.Context(), identity, token, code))
 	assertUserAuthVersion(t, user.Id, 2)
-	assert.ErrorIs(t, EnableTwoFAEnrollment(identity, token, code), ErrTwoFASetupInvalid)
+	assert.ErrorIs(t, EnableTwoFAEnrollment(testtenant.Context(), identity, token, code), ErrTwoFASetupInvalid)
 	assertUserAuthVersion(t, user.Id, 2)
-	require.NoError(t, ReplaceBackupCodesWithAuthVersion(user.Id, []string{"ABCD-1234"}))
+	require.NoError(t, ReplaceBackupCodesWithAuthVersion(testtenant.Context(), user.Id, []string{"ABCD-1234"}))
 	assertUserAuthVersion(t, user.Id, 3)
-	require.NoError(t, DisableTwoFAWithAuthVersion(user.Id))
+	require.NoError(t, DisableTwoFAWithAuthVersion(testtenant.Context(), user.Id))
 	assertUserAuthVersion(t, user.Id, 4)
 
 	credential := &PasskeyCredential{UserID: user.Id, CredentialID: "credential-id", PublicKey: "public-key"}
-	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(credential))
+	require.NoError(t, UpsertPasskeyCredentialWithAuthVersion(testtenant.Context(), credential))
 	assertUserAuthVersion(t, user.Id, 5)
-	require.NoError(t, DeletePasskeyByUserIDWithAuthVersion(user.Id))
+	require.NoError(t, DeletePasskeyByUserIDWithAuthVersion(testtenant.Context(), user.Id))
 	assertUserAuthVersion(t, user.Id, 6)
 }
 
 func TestUpdatePasskeyAssertionStateCannotRewriteRegistrationIdentity(t *testing.T) {
 	truncateTables(t)
 	require.NoError(t, DB.AutoMigrate(&Option{}))
-	previousSettings := *system_setting.GetPasskeySettings()
+	previousSettings := *system_setting.GetPasskeySettings(testtenant.Context())
 	domainKeys := map[string]any{"key": []string{"ServerAddress", "passkey.rp_id", "passkey.legacy_rp_ids", "passkey.origins"}}
 	var previousOptions []Option
 	require.NoError(t, DB.Where(domainKeys).Find(&previousOptions).Error)
 	t.Cleanup(func() {
-		*system_setting.GetPasskeySettings() = previousSettings
+		*system_setting.GetPasskeySettings(testtenant.Context()) = previousSettings
 		require.NoError(t, DB.Where(domainKeys).Delete(&Option{}).Error)
 		if len(previousOptions) > 0 {
 			require.NoError(t, DB.Create(&previousOptions).Error)
 		}
 	})
-	*system_setting.GetPasskeySettings() = system_setting.PasskeySettings{RPID: "example.com", Origins: "https://example.com"}
+	*system_setting.GetPasskeySettings(testtenant.Context()) = system_setting.PasskeySettings{RPID: "example.com", Origins: "https://example.com"}
 	for _, option := range []Option{{Key: "passkey.rp_id", Value: "example.com"}, {Key: "passkey.legacy_rp_ids", Value: ""}, {Key: "passkey.origins", Value: "https://example.com"}} {
 		require.NoError(t, DB.Save(&option).Error)
 	}
@@ -309,7 +310,7 @@ func TestUpdatePasskeyAssertionStateCannotRewriteRegistrationIdentity(t *testing
 			CloneWarning: true,
 		},
 	}
-	require.NoError(t, UpdatePasskeyAssertionState(user.Id, validated, usedAt, "example.com"))
+	require.NoError(t, UpdatePasskeyAssertionState(testtenant.Context(), user.Id, validated, usedAt, "example.com"))
 
 	var updated PasskeyCredential
 	require.NoError(t, DB.First(&updated, stored.ID).Error)
@@ -329,7 +330,7 @@ func TestUpdatePasskeyAssertionStateCannotRewriteRegistrationIdentity(t *testing
 	assert.Equal(t, usedAt.Unix(), updated.LastUsedAt.Unix())
 
 	validated.ID = []byte("another-credential")
-	assert.ErrorIs(t, UpdatePasskeyAssertionState(user.Id, validated, usedAt, "example.com"), ErrPasskeyNotFound)
+	assert.ErrorIs(t, UpdatePasskeyAssertionState(testtenant.Context(), user.Id, validated, usedAt, "example.com"), ErrPasskeyNotFound)
 }
 
 func assertUserAuthVersion(t *testing.T, userID int, expected int64) {

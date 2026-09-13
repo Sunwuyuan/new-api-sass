@@ -1,5 +1,7 @@
 package model
 
+import context "context"
+
 import (
 	"errors"
 	"fmt"
@@ -38,17 +40,18 @@ var supportedAccessPolicyOps = map[string]struct{}{
 
 // CustomOAuthProvider stores configuration for custom OAuth providers
 type CustomOAuthProvider struct {
+	TenantID              int64  `json:"-" gorm:"not null;index;uniqueIndex:tenant_custom_o_auth_provider_slug,priority:1"`
 	Id                    int    `json:"id" gorm:"primaryKey"`
-	Name                  string `json:"name" gorm:"type:varchar(64);not null"`                          // Display name, e.g., "GitHub Enterprise"
-	Slug                  string `json:"slug" gorm:"type:varchar(64);uniqueIndex;not null"`              // URL identifier, e.g., "github-enterprise"
-	Icon                  string `json:"icon" gorm:"type:varchar(128);default:''"`                       // Icon name from @lobehub/icons
-	Enabled               bool   `json:"enabled" gorm:"default:false"`                                   // Whether this provider is enabled
-	ClientId              string `json:"client_id" gorm:"type:varchar(256)"`                             // OAuth client ID
-	ClientSecret          string `json:"-" gorm:"type:varchar(512)"`                                     // OAuth client secret (not returned to frontend)
-	AuthorizationEndpoint string `json:"authorization_endpoint" gorm:"type:varchar(512)"`                // Authorization URL
-	TokenEndpoint         string `json:"token_endpoint" gorm:"type:varchar(512)"`                        // Token exchange URL
-	UserInfoEndpoint      string `json:"user_info_endpoint" gorm:"type:varchar(512)"`                    // User info URL
-	Scopes                string `json:"scopes" gorm:"type:varchar(256);default:'openid profile email'"` // OAuth scopes
+	Name                  string `json:"name" gorm:"type:varchar(64);not null"`                                                // Display name, e.g., "GitHub Enterprise"
+	Slug                  string `json:"slug" gorm:"type:varchar(64);uniqueIndex:tenant_custom_o_auth_provider_slug;not null"` // URL identifier, e.g., "github-enterprise"
+	Icon                  string `json:"icon" gorm:"type:varchar(128);default:''"`                                             // Icon name from @lobehub/icons
+	Enabled               bool   `json:"enabled" gorm:"default:false"`                                                         // Whether this provider is enabled
+	ClientId              string `json:"client_id" gorm:"type:varchar(256)"`                                                   // OAuth client ID
+	ClientSecret          string `json:"-" gorm:"type:varchar(512)"`                                                           // OAuth client secret (not returned to frontend)
+	AuthorizationEndpoint string `json:"authorization_endpoint" gorm:"type:varchar(512)"`                                      // Authorization URL
+	TokenEndpoint         string `json:"token_endpoint" gorm:"type:varchar(512)"`                                              // Token exchange URL
+	UserInfoEndpoint      string `json:"user_info_endpoint" gorm:"type:varchar(512)"`                                          // User info URL
+	Scopes                string `json:"scopes" gorm:"type:varchar(256);default:'openid profile email'"`                       // OAuth scopes
 
 	// Field mapping configuration (supports JSONPath via gjson)
 	UserIdField      string `json:"user_id_field" gorm:"type:varchar(128);default:'sub'"`                 // User ID field path, e.g., "sub", "id", "data.user.id"
@@ -71,23 +74,23 @@ func (CustomOAuthProvider) TableName() string {
 }
 
 // GetAllCustomOAuthProviders returns all custom OAuth providers
-func GetAllCustomOAuthProviders() ([]*CustomOAuthProvider, error) {
+func GetAllCustomOAuthProviders(tenantCtx context.Context) ([]*CustomOAuthProvider, error) {
 	var providers []*CustomOAuthProvider
-	err := DB.Order("id asc").Find(&providers).Error
+	err := DB.WithContext(tenantCtx).Order("id asc").Find(&providers).Error
 	return providers, err
 }
 
 // GetEnabledCustomOAuthProviders returns all enabled custom OAuth providers
-func GetEnabledCustomOAuthProviders() ([]*CustomOAuthProvider, error) {
+func GetEnabledCustomOAuthProviders(tenantCtx context.Context) ([]*CustomOAuthProvider, error) {
 	var providers []*CustomOAuthProvider
-	err := DB.Where("enabled = ?", true).Order("id asc").Find(&providers).Error
+	err := DB.WithContext(tenantCtx).Where("enabled = ?", true).Order("id asc").Find(&providers).Error
 	return providers, err
 }
 
 // GetCustomOAuthProviderById returns a custom OAuth provider by ID
-func GetCustomOAuthProviderById(id int) (*CustomOAuthProvider, error) {
+func GetCustomOAuthProviderById(tenantCtx context.Context, id int) (*CustomOAuthProvider, error) {
 	var provider CustomOAuthProvider
-	err := DB.First(&provider, id).Error
+	err := DB.WithContext(tenantCtx).First(&provider, id).Error
 	if err != nil {
 		return nil, err
 	}
@@ -95,9 +98,9 @@ func GetCustomOAuthProviderById(id int) (*CustomOAuthProvider, error) {
 }
 
 // GetCustomOAuthProviderBySlug returns a custom OAuth provider by slug
-func GetCustomOAuthProviderBySlug(slug string) (*CustomOAuthProvider, error) {
+func GetCustomOAuthProviderBySlug(tenantCtx context.Context, slug string) (*CustomOAuthProvider, error) {
 	var provider CustomOAuthProvider
-	err := DB.Where("slug = ?", slug).First(&provider).Error
+	err := DB.WithContext(tenantCtx).Where("slug = ?", slug).First(&provider).Error
 	if err != nil {
 		return nil, err
 	}
@@ -105,35 +108,35 @@ func GetCustomOAuthProviderBySlug(slug string) (*CustomOAuthProvider, error) {
 }
 
 // CreateCustomOAuthProvider creates a new custom OAuth provider
-func CreateCustomOAuthProvider(provider *CustomOAuthProvider) error {
+func CreateCustomOAuthProvider(tenantCtx context.Context, provider *CustomOAuthProvider) error {
 	if err := validateCustomOAuthProvider(provider); err != nil {
 		return err
 	}
-	return DB.Create(provider).Error
+	return DB.WithContext(tenantCtx).Create(provider).Error
 }
 
 // UpdateCustomOAuthProvider updates an existing custom OAuth provider
-func UpdateCustomOAuthProvider(provider *CustomOAuthProvider) error {
+func UpdateCustomOAuthProvider(tenantCtx context.Context, provider *CustomOAuthProvider) error {
 	if err := validateCustomOAuthProvider(provider); err != nil {
 		return err
 	}
-	return DB.Save(provider).Error
+	return DB.WithContext(tenantCtx).Save(provider).Error
 }
 
 // DeleteCustomOAuthProvider deletes a custom OAuth provider by ID
-func DeleteCustomOAuthProvider(id int) error {
+func DeleteCustomOAuthProvider(tenantCtx context.Context, id int) error {
 	// First, delete all user bindings for this provider
-	if err := DB.Where("provider_id = ?", id).Delete(&UserOAuthBinding{}).Error; err != nil {
+	if err := DB.WithContext(tenantCtx).Where("provider_id = ?", id).Delete(&UserOAuthBinding{}).Error; err != nil {
 		return err
 	}
-	return DB.Delete(&CustomOAuthProvider{}, id).Error
+	return DB.WithContext(tenantCtx).Delete(&CustomOAuthProvider{}, id).Error
 }
 
 // IsSlugTaken checks if a slug is already taken by another provider
 // Returns true on DB errors (fail-closed) to prevent slug conflicts
-func IsSlugTaken(slug string, excludeId int) bool {
+func IsSlugTaken(tenantCtx context.Context, slug string, excludeId int) bool {
 	var count int64
-	query := DB.Model(&CustomOAuthProvider{}).Where("slug = ?", slug)
+	query := DB.WithContext(tenantCtx).Model(&CustomOAuthProvider{}).Where("slug = ?", slug)
 	if excludeId > 0 {
 		query = query.Where("id != ?", excludeId)
 	}

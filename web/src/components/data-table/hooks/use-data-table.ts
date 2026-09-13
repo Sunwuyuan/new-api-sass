@@ -39,6 +39,8 @@ import {
 } from '@tanstack/react-table'
 import * as React from 'react'
 
+import { tenantStorage } from '@/lib/tenant'
+
 type DataTableFeatureOptions<TData> = Pick<
   TableOptions<TData>,
   | 'enableRowSelection'
@@ -149,7 +151,7 @@ function readColumnVisibility(storageKey: string | undefined): VisibilityState {
   if (!storageKey || typeof window === 'undefined') return {}
 
   try {
-    const raw = window.localStorage.getItem(storageKey)
+    const raw = tenantStorage.getItem(storageKey)
     if (!raw) return {}
 
     const parsed = JSON.parse(raw) as unknown
@@ -251,7 +253,7 @@ function readColumnSizing(
   if (!storageKey || typeof window === 'undefined') return {}
 
   try {
-    const raw = window.localStorage.getItem(storageKey)
+    const raw = tenantStorage.getItem(storageKey)
     if (!raw) return {}
 
     const parsed = JSON.parse(raw) as unknown
@@ -479,7 +481,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
     }
 
     try {
-      window.localStorage.setItem(
+      tenantStorage.setItem(
         columnVisibilityStorageKey,
         JSON.stringify(columnVisibility)
       )
@@ -502,7 +504,7 @@ export function useDataTable<TData>(options: UseDataTableOptions<TData>) {
 
     columnSizingPersistTimerRef.current = window.setTimeout(() => {
       try {
-        window.localStorage.setItem(
+        tenantStorage.setItem(
           columnSizingStorageKey,
           JSON.stringify(columnSizing)
         )

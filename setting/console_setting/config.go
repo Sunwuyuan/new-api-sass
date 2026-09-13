@@ -1,5 +1,7 @@
 package console_setting
 
+import context "context"
+
 import "github.com/QuantumNous/new-api/setting/config"
 
 type ConsoleSetting struct {
@@ -34,6 +36,6 @@ func init() {
 }
 
 // GetConsoleSetting 获取 ConsoleSetting 配置实例
-func GetConsoleSetting() *ConsoleSetting {
-	return &consoleSetting
+func GetConsoleSetting(tenantCtx context.Context) *ConsoleSetting {
+	return config.GlobalConfig.ForTenant(tenantCtx).Get("console_setting").(*ConsoleSetting)
 }

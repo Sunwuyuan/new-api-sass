@@ -8,17 +8,19 @@ import (
 	"testing"
 	"time"
 
+	testtenant "github.com/QuantumNous/new-api/internal/testtenant"
+
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relaykit/dto"
-
 	"github.com/gin-gonic/gin"
 )
 
 func TestGetRequestURLForImageGeneration(t *testing.T) {
 	t.Parallel()
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayMode: relayconstant.RelayModeImagesGenerations,
 		ChannelMeta: &relaycommon.ChannelMeta{
 			ChannelBaseUrl: "https://api.minimax.chat",
@@ -40,7 +42,7 @@ func TestConvertImageRequest(t *testing.T) {
 	t.Parallel()
 
 	adaptor := &Adaptor{}
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayMode:       relayconstant.RelayModeImagesGenerations,
 		OriginModelName: "image-01",
 	}
@@ -52,7 +54,7 @@ func TestConvertImageRequest(t *testing.T) {
 		N:              uintPtr(2),
 	}
 
-	got, err := adaptor.ConvertImageRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), gin.New()), info, request)
+	got, err := adaptor.ConvertImageRequest(gin.CreateTestContextOnly(httptest.NewRecorder(), testtenant.NewRouter()), info, request)
 	if err != nil {
 		t.Fatalf("ConvertImageRequest returned error: %v", err)
 	}
@@ -89,9 +91,9 @@ func TestDoResponseForImageGeneration(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
+	c, _ := testtenant.CreateTestContext(recorder)
 
-	info := &relaycommon.RelayInfo{
+	info := &relaycommon.RelayInfo{Context: testtenant.Context(),
 		RelayMode: relayconstant.RelayModeImagesGenerations,
 		StartTime: time.Unix(1700000000, 0),
 	}

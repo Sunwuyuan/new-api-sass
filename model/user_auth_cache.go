@@ -42,7 +42,7 @@ func userAuthFenceTTLSeconds() int {
 	return cacheTTL + extra
 }
 
-func writeUserCache(user *UserBase, includeQuota bool) error {
+func writeUserCache(tenantCtx context.Context, user *UserBase, includeQuota bool) error {
 	if user == nil || user.Id <= 0 || !common.RedisEnabled {
 		return nil
 	}
@@ -81,7 +81,7 @@ if ARGV[10] == '1' and redis.call('HEXISTS', KEYS[1], 'Quota') == 0 then
 end
 redis.call('EXPIRE', KEYS[1], ARGV[12])
 return 1`
-	result, err := common.RDB.Eval(context.Background(), script,
+	result, err := common.RDB.Eval(tenantCtx, script,
 		[]string{getUserCacheKey(user.Id), getUserAuthFenceKey(user.Id), getUserAuthVersionKey(user.Id)},
 		user.AuthVersion, user.Id, user.Group, user.Email, user.Status, user.Role,
 		user.Username, user.Setting, user.CacheSchema, includeQuotaArg, user.Quota, ttl,
@@ -95,11 +95,11 @@ return 1`
 	return nil
 }
 
-func getUserAuthVersionFloor(userId int) (int64, error) {
+func getUserAuthVersionFloor(tenantCtx context.Context, userId int) (int64, error) {
 	if !common.RedisEnabled {
 		return 0, nil
 	}
-	values, err := common.RDB.MGet(context.Background(), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)).Result()
+	values, err := common.RDB.MGet(tenantCtx, getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -123,7 +123,7 @@ func getUserAuthVersionFloor(userId int) (int64, error) {
 // database update. Pending fences expire only after every pre-existing user
 // hash must have expired; a committed update is promoted separately to a
 // permanent monotonic version floor.
-func SetUserAuthVersionFence(userId int, authVersion int64) error {
+func SetUserAuthVersionFence(tenantCtx context.Context, userId int, authVersion int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -141,13 +141,13 @@ elseif redis.call('TTL', KEYS[1]) < 0 then
   redis.call('EXPIRE', KEYS[1], ARGV[2])
 end
 return 1`
-	return common.RDB.Eval(context.Background(), script, []string{getUserAuthFenceKey(userId)}, authVersion, userAuthFenceTTLSeconds()).Err()
+	return common.RDB.Eval(tenantCtx, script, []string{getUserAuthFenceKey(userId)}, authVersion, userAuthFenceTTLSeconds()).Err()
 }
 
 // publishCommittedUserAuthVersion records the durable lower bound used to
 // reject an arbitrarily delayed cache fill after a committed security change.
 // It also removes this transaction's now-obsolete pending fence.
-func publishCommittedUserAuthVersion(userId int, authVersion int64) error {
+func publishCommittedUserAuthVersion(tenantCtx context.Context, userId int, authVersion int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -165,7 +165,7 @@ if pending > 0 and pending <= incoming then
   redis.call('DEL', KEYS[2])
 end
 return 1`
-	return common.RDB.Eval(context.Background(), script,
+	return common.RDB.Eval(tenantCtx, script,
 		[]string{getUserAuthVersionKey(userId), getUserAuthFenceKey(userId)}, authVersion,
 	).Err()
 }
@@ -185,7 +185,7 @@ func IncrementUserAuthVersionWithTx(tx *gorm.DB, userId int) (int64, error) {
 		}
 		current := max(user.AuthVersion, 1)
 		next := current + 1
-		if err := SetUserAuthVersionFence(userId, next); err != nil {
+		if err := SetUserAuthVersionFence(tx.Statement.Context, userId, next); err != nil {
 			return 0, err
 		}
 		result := tx.Unscoped().Model(&User{}).
@@ -203,16 +203,16 @@ func IncrementUserAuthVersionWithTx(tx *gorm.DB, userId int) (int64, error) {
 
 // BumpUserAuthVersion is the transaction-owning variant used by password,
 // role, status and security-factor changes outside another transaction.
-func BumpUserAuthVersion(userId int) (int64, error) {
+func BumpUserAuthVersion(tenantCtx context.Context, userId int) (int64, error) {
 	var next int64
-	if err := DB.Transaction(func(tx *gorm.DB) error {
+	if err := DB.WithContext(tenantCtx).Transaction(func(tx *gorm.DB) error {
 		var err error
 		next, err = IncrementUserAuthVersionWithTx(tx, userId)
 		return err
 	}); err != nil {
 		return 0, err
 	}
-	if err := PublishUserAuthCache(userId); err != nil {
+	if err := PublishUserAuthCache(tenantCtx, userId); err != nil {
 		return next, err
 	}
 	return next, nil
@@ -220,21 +220,21 @@ func BumpUserAuthVersion(userId int) (int64, error) {
 
 // PublishUserAuthCache refreshes the current database state after a successful
 // auth-sensitive transaction without touching the cached quota field.
-func PublishUserAuthCache(userId int) error {
-	user, err := GetUserById(userId, false)
+func PublishUserAuthCache(tenantCtx context.Context, userId int) error {
+	user, err := GetUserById(tenantCtx, userId, false)
 	if err != nil {
 		return err
 	}
-	return updateUserCache(*user)
+	return updateUserCache(tenantCtx, *user)
 }
 
 // InitializeUserAuthVersions must run after AutoMigrate when upgrading an
 // existing database. It is idempotent and portable across all supported DBs.
-func InitializeUserAuthVersions() error {
-	return DB.Model(&User{}).Where("auth_version IS NULL OR auth_version < ?", 1).Update("auth_version", 1).Error
+func InitializeUserAuthVersions(tenantCtx context.Context) error {
+	return DB.WithContext(tenantCtx).Model(&User{}).Where("auth_version IS NULL OR auth_version < ?", 1).Update("auth_version", 1).Error
 }
 
-func updateUserCacheFieldAtVersion(userId int, field string, value any, authVersion int64) error {
+func updateUserCacheFieldAtVersion(tenantCtx context.Context, userId int, field string, value any, authVersion int64) error {
 	if !common.RedisEnabled {
 		return nil
 	}
@@ -263,7 +263,7 @@ if current ~= incoming then
 end
 redis.call('HSET', KEYS[1], ARGV[2], ARGV[3], 'CacheSchema', ARGV[4])
 return 1`
-	result, err := common.RDB.Eval(context.Background(), script,
+	result, err := common.RDB.Eval(tenantCtx, script,
 		[]string{getUserCacheKey(userId), getUserAuthFenceKey(userId), getUserAuthVersionKey(userId)},
 		authVersion, field, value, userCacheSchemaVersion,
 	).Int()

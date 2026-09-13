@@ -31,6 +31,7 @@ import type {
   DashboardFilters,
   ModelAnalyticsChartTab,
 } from '@/features/dashboard/types'
+import { tenantStorage } from '@/lib/tenant'
 import { getRollingDateRange, type TimeGranularity } from '@/lib/time'
 
 function isTimeGranularity(value: unknown): value is TimeGranularity {
@@ -39,7 +40,7 @@ function isTimeGranularity(value: unknown): value is TimeGranularity {
 
 function getLegacySavedGranularity(): TimeGranularity {
   if (typeof window === 'undefined') return DEFAULT_TIME_GRANULARITY
-  const saved = localStorage.getItem(TIME_GRANULARITY_STORAGE_KEY)
+  const saved = tenantStorage.getItem(TIME_GRANULARITY_STORAGE_KEY)
   return isTimeGranularity(saved) ? saved : DEFAULT_TIME_GRANULARITY
 }
 
@@ -88,7 +89,7 @@ export function saveGranularity(granularity: TimeGranularity): void {
     ...getSavedChartPreferences(),
     defaultTimeGranularity: granularity,
   })
-  localStorage.setItem(TIME_GRANULARITY_STORAGE_KEY, granularity)
+  tenantStorage.setItem(TIME_GRANULARITY_STORAGE_KEY, granularity)
 }
 
 export function getSavedChartPreferences(): DashboardChartPreferences {
@@ -100,7 +101,7 @@ export function getSavedChartPreferences(): DashboardChartPreferences {
   }
 
   try {
-    const raw = localStorage.getItem(DASHBOARD_CHART_PREFERENCES_STORAGE_KEY)
+    const raw = tenantStorage.getItem(DASHBOARD_CHART_PREFERENCES_STORAGE_KEY)
     if (!raw) return fallbackPreferences
 
     const parsed = JSON.parse(raw) as Partial<DashboardChartPreferences>
@@ -129,7 +130,7 @@ export function saveChartPreferences(
   preferences: DashboardChartPreferences
 ): void {
   if (typeof window === 'undefined') return
-  localStorage.setItem(
+  tenantStorage.setItem(
     DASHBOARD_CHART_PREFERENCES_STORAGE_KEY,
     JSON.stringify(preferences)
   )
