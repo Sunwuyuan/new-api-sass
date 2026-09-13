@@ -28,6 +28,7 @@ import {
   CardTitle,
 } from '@/components/ui/card'
 
+import { workspaceHref, workspaceHostLabel } from './lib/workspace-url'
 import { WorkspaceLink } from './navigation'
 import type { HostingPlan, WorkspaceUsage } from './types'
 import { WorkspaceStatus, WorkspaceUsageMeter } from './workspace-status'
@@ -44,6 +45,8 @@ export function WorkspaceCard(props: {
   const currentPlan = expired
     ? props.plans.find((plan) => plan.name === 'Lite')
     : props.plans.find((plan) => plan.id === workspace.plan_id)
+  const entryURL = workspaceHref(props.item)
+  const hostLabel = workspaceHostLabel(props.item)
   return (
     <Card>
       <CardHeader>
@@ -52,7 +55,7 @@ export function WorkspaceCard(props: {
           <WorkspaceStatus workspace={workspace} />
         </div>
         <CardDescription className='break-words'>
-          /t/{workspace.slug}
+          {hostLabel}
           {currentPlan ? ` · ${currentPlan.name}` : ''}
         </CardDescription>
       </CardHeader>
@@ -82,14 +85,18 @@ export function WorkspaceCard(props: {
         )}
       </CardContent>
       <CardFooter className='gap-2'>
-        <Button
-          render={<a href={`/t/${workspace.slug}/`} />}
-          nativeButton={false}
-          role='link'
-          disabled={workspace.status === 'suspended'}
-        >
-          {t('Enter workspace')}
-        </Button>
+        {entryURL ? (
+          <Button
+            render={<a href={entryURL} />}
+            nativeButton={false}
+            role='link'
+            disabled={workspace.status === 'suspended'}
+          >
+            {t('Enter workspace')}
+          </Button>
+        ) : (
+          <Button disabled>{t('Enter workspace')}</Button>
+        )}
         <WorkspaceLink
           id={workspace.id}
           className={buttonVariants({ variant: 'outline' })}

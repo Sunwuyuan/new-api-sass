@@ -85,7 +85,9 @@ const workspace: WorkspaceUsage = {
   },
   usage: { month: '2026-09', requests: 1000 },
   owner_email: 'owner@example.test',
+  primary_url: 'http://alpha.example.test/',
 }
+const wildcards = [{ id: 1, domain: 'example.test', enabled: true }]
 const plans: HostingPlan[] = [
   {
     id: 1,
@@ -115,13 +117,14 @@ test('workspace creation rejects invalid slugs and opens the workspace after suc
   const user = userEvent.setup()
   vi.mocked(createWorkspace).mockResolvedValue({
     tenant: workspace.tenant,
-    setup_url: '/t/alpha/setup',
+    primary_url: 'http://alpha.example.test/',
+    setup_url: 'http://alpha.example.test/setup',
   })
   await renderWorkspaces(
-    <CreateWorkspace plans={plans} liteAvailable />
+    <CreateWorkspace plans={plans} liteAvailable wildcardDomains={wildcards} />
   )
   await user.type(screen.getByLabelText('Name'), 'Alpha')
-  await user.type(screen.getByLabelText('Workspace address'), 'Invalid/slug')
+  await user.type(screen.getByLabelText('Workspace prefix'), 'Invalid/slug')
   await user.type(screen.getByLabelText('Username'), 'root')
   await user.type(
     screen.getByLabelText('Password'),
@@ -129,25 +132,27 @@ test('workspace creation rejects invalid slugs and opens the workspace after suc
   )
   await user.click(screen.getByRole('button', { name: 'Create workspace' }))
   await waitFor(() =>
-    expect(screen.getByLabelText('Workspace address')).toHaveAttribute(
+    expect(screen.getByLabelText('Workspace prefix')).toHaveAttribute(
       'aria-invalid',
       'true'
     )
   )
   expect(createWorkspace).not.toHaveBeenCalled()
-  await user.clear(screen.getByLabelText('Workspace address'))
-  await user.type(screen.getByLabelText('Workspace address'), 'alpha')
+  await user.clear(screen.getByLabelText('Workspace prefix'))
+  await user.type(screen.getByLabelText('Workspace prefix'), 'alpha')
   await user.click(screen.getByRole('button', { name: 'Create workspace' }))
   expect(
     await screen.findByRole('link', { name: 'Enter workspace' })
-  ).toHaveAttribute('href', '/t/alpha/')
+  ).toHaveAttribute('href', 'http://alpha.example.test/')
   expect(screen.getByRole('link', { name: 'Finish setup' })).toHaveAttribute(
     'href',
-    expect.stringContaining('/t/alpha/setup')
+    'http://alpha.example.test/setup'
   )
   expect(vi.mocked(createWorkspace).mock.calls[0][0]).toEqual({
     name: 'Alpha',
     slug: 'alpha',
+    prefix: 'alpha',
+    wildcard_domain_id: 1,
     username: 'root',
     display_name: '',
     email: '',
@@ -170,7 +175,7 @@ test('owners see usage while plan administration is reserved for administrators'
   ).toHaveAttribute('href', '/platform/workspaces/1')
   expect(screen.getByRole('link', { name: 'Enter workspace' })).toHaveAttribute(
     'href',
-    '/t/alpha/'
+    'http://alpha.example.test/'
   )
   expect(
     screen.queryByRole('button', { name: 'Activate plan manually' })
@@ -218,24 +223,27 @@ test('expired workspaces show their state and stay enterable', async () => {
     />
   )
   expect(screen.getByText(/Expired/)).toBeVisible()
-  expect(screen.getByText('/t/alpha · Lite')).toBeVisible()
+  expect(screen.getByText('alpha.example.test · Lite')).toBeVisible()
   expect(
     screen.getByText('1,000', { exact: true }).parentElement
   ).toHaveTextContent('1,000 / 1,000')
   expect(screen.getByRole('link', { name: 'Enter workspace' })).toHaveAttribute(
     'href',
-    '/t/alpha/'
+    'http://alpha.example.test/'
   )
-  expect(screen.getByRole('link', { name: 'Enter workspace' })).not.toHaveAttribute(
-    'aria-disabled',
-    'true'
-  )
+  expect(
+    screen.getByRole('link', { name: 'Enter workspace' })
+  ).not.toHaveAttribute('aria-disabled', 'true')
 })
 
 test('a second free Lite workspace is blocked until a paid plan is chosen', async () => {
   const user = userEvent.setup()
   await renderWorkspaces(
-    <CreateWorkspace plans={plans} liteAvailable={false} />
+    <CreateWorkspace
+      plans={plans}
+      liteAvailable={false}
+      wildcardDomains={wildcards}
+    />
   )
   expect(
     screen.getByText(
@@ -249,7 +257,7 @@ test('a second free Lite workspace is blocked until a paid plan is chosen', asyn
   expect(screen.getByRole('radio', { name: /Pro/ })).toBeChecked()
   expect(screen.getByLabelText('Redemption code')).toBeVisible()
   await user.type(screen.getByLabelText('Name'), 'Beta')
-  await user.type(screen.getByLabelText('Workspace address'), 'beta')
+  await user.type(screen.getByLabelText('Workspace prefix'), 'beta')
   await user.type(screen.getByLabelText('Username'), 'root')
   await user.type(
     screen.getByLabelText('Password'),

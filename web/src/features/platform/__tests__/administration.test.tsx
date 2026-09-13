@@ -80,6 +80,12 @@ const defaultAdapter: AxiosAdapter = async (config) => {
     return reply(config, session)
   }
   if (config.url === '/plans') return reply(config, { plans: [] })
+  if (config.url === '/wildcard-domains') {
+    return reply(config, { wildcard_domains: [] })
+  }
+  if (config.url === '/admin/wildcard-domains') {
+    return reply(config, { wildcard_domains: [] })
+  }
   if (config.url === '/admin/users') {
     return reply(config, {
       users: [member],
@@ -851,7 +857,9 @@ test('administrators edit plan limits and features in one comparison table', asy
   })
   await user.clear(requests)
   await user.type(requests, '20000')
-  await user.click(screen.getByRole('checkbox', { name: 'Lite: Custom branding' }))
+  await user.click(
+    screen.getByRole('checkbox', { name: 'Lite: Custom branding' })
+  )
   const saveButtons = screen.getAllByRole('button', { name: 'Save changes' })
   expect(saveButtons[0]).toBeEnabled()
   expect(saveButtons[1]).toBeDisabled()

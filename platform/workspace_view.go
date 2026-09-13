@@ -77,7 +77,16 @@ func (s *Server) workspaceDetail(c *gin.Context) {
 		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"success": true, "tenant": workspace, "owner_name": owner.AccountName(), "plan": view, "usage": usage, "history": history, "assignments": assignments, "administrators": workspaceAdministrators(db, c.Request.Context(), workspace), "setup_complete": model.GetSetup(tenant.WithContext(c.Request.Context(), tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})) != nil})
+	var hosts []tenant.Host
+	if db.Where("tenant_id = ?", id).Order("id").Find(&hosts).Error != nil {
+		writeError(c, http.StatusServiceUnavailable, "platform_unavailable")
+		return
+	}
+	hostViews := make([]gin.H, 0, len(hosts))
+	for _, binding := range hosts {
+		hostViews = append(hostViews, s.hostView(binding))
+	}
+	c.JSON(http.StatusOK, gin.H{"success": true, "tenant": workspace, "owner_name": owner.AccountName(), "plan": view, "usage": usage, "history": history, "assignments": assignments, "administrators": workspaceAdministrators(db, c.Request.Context(), workspace), "setup_complete": model.GetSetup(tenant.WithContext(c.Request.Context(), tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})) != nil, "hosts": hostViews, "primary_url": s.workspaceURL(hosts, "/")})
 }
 
 func workspaceAdministrators(db *gorm.DB, ctx context.Context, workspace tenant.Workspace) []gin.H {
@@ -146,11 +155,11 @@ func (s *Server) updateWorkspace(c *gin.Context) {
 			return err
 		}
 		ctx := tenant.WithContext(c.Request.Context(), tenant.Identity{ID: workspace.ID, Slug: workspace.Slug})
-		options := map[string]string{"SystemName": name, "ServerAddress": s.Origin + "/t/" + workspace.Slug}
-		for key, value := range options {
-			if err := tx.WithContext(ctx).Model(&model.Option{}).Where("key = ?", key).Update("value", value).Error; err != nil {
-				return err
-			}
+		if err := tx.WithContext(ctx).Model(&model.Option{}).Where("key = ?", "SystemName").Update("value", name).Error; err != nil {
+			return err
+		}
+		if err := s.refreshServerAddress(tx, workspace); err != nil {
+			return err
 		}
 		return audit(tx, actor.ID, "workspace.update", id, gin.H{"name": name, "slug": workspace.Slug})
 	})

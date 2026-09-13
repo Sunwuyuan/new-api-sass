@@ -27,6 +27,7 @@ import { DataTableRowActionMenu } from '@/components/data-table'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 
 import { getHostingPlans, getWorkspaces, setWorkspaceStatus } from '../api'
+import { workspaceHref, workspaceHostLabel } from '../lib/workspace-url'
 import { WorkspaceLink } from '../navigation'
 import type { Workspace, WorkspaceUsage } from '../types'
 import { AssignPlanDialog } from './assign-plan-dialog'
@@ -64,7 +65,9 @@ export default function PlatformWorkspaces() {
           <WorkspaceLink id={row.original.tenant.id} admin>
             {row.original.tenant.name}
           </WorkspaceLink>
-          <p className='text-muted-foreground'>/t/{row.original.tenant.slug}</p>
+          <p className='text-muted-foreground'>
+            {workspaceHostLabel(row.original)}
+          </p>
         </div>
       ),
     },
@@ -89,9 +92,9 @@ export default function PlatformWorkspaces() {
       id: 'usage',
       header: t('Monthly requests'),
       cell: ({ row }) => {
-        const limit =
-          plans.data?.find((plan) => plan.id === row.original.tenant.plan_id)
-            ?.limits.requests
+        const limit = plans.data?.find(
+          (plan) => plan.id === row.original.tenant.plan_id
+        )?.limits.requests
         return `${row.original.usage.requests.toLocaleString()} / ${
           limit === 0 ? t('Unlimited') : (limit?.toLocaleString() ?? '—')
         }`
@@ -129,8 +132,10 @@ export default function PlatformWorkspaces() {
           })}
         >
           <DropdownMenuItem
+            disabled={!workspaceHref(row.original)}
             onClick={() => {
-              window.location.assign(`/t/${row.original.tenant.slug}/`)
+              const href = workspaceHref(row.original)
+              if (href) window.location.assign(href)
             }}
           >
             {t('Enter workspace')}

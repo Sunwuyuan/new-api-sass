@@ -24,7 +24,6 @@ import { toast } from 'sonner'
 import { ErrorState } from '@/components/error-state'
 import { LoadingState } from '@/components/loading-state'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Card,
   CardContent,
@@ -33,11 +32,8 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-} from '@/components/ui/field'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 
 import {
@@ -45,6 +41,7 @@ import {
   updatePlatformSettings,
   type PlatformOAuthProviderSetting,
 } from '../api'
+import { AdminWildcardDomains } from './wildcard-domains'
 
 type ProviderDraft = PlatformOAuthProviderSetting & { client_secret: string }
 
@@ -136,51 +133,54 @@ export default function PlatformAdminSettings() {
           )}
         </p>
       </header>
+      <AdminWildcardDomains />
       <Card>
         <CardHeader>
           <CardTitle>{t('Sign-in')}</CardTitle>
         </CardHeader>
         <CardContent>
-        <FieldGroup>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-registration'
-              checked={registration}
-              onCheckedChange={(value) => setRegistration(value === true)}
-            />
-            <FieldLabel htmlFor='platform-registration'>
-              {t('Allow registration')}
-            </FieldLabel>
-          </Field>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-password-login'
-              checked={passwordLogin}
-              onCheckedChange={(value) => setPasswordLogin(value === true)}
-            />
-            <FieldLabel htmlFor='platform-password-login'>
-              {t('Password sign-in')}
-            </FieldLabel>
-          </Field>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-oauth-registration'
-              checked={oauthRegistration}
-              onCheckedChange={(value) => setOauthRegistration(value === true)}
-            />
-            <FieldLabel htmlFor='platform-oauth-registration'>
-              {t('Allow creating accounts with OAuth')}
-            </FieldLabel>
-          </Field>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-passkey'
-              checked={passkey}
-              onCheckedChange={(value) => setPasskey(value === true)}
-            />
-            <FieldLabel htmlFor='platform-passkey'>Passkey</FieldLabel>
-          </Field>
-        </FieldGroup>
+          <FieldGroup>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-registration'
+                checked={registration}
+                onCheckedChange={(value) => setRegistration(value === true)}
+              />
+              <FieldLabel htmlFor='platform-registration'>
+                {t('Allow registration')}
+              </FieldLabel>
+            </Field>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-password-login'
+                checked={passwordLogin}
+                onCheckedChange={(value) => setPasswordLogin(value === true)}
+              />
+              <FieldLabel htmlFor='platform-password-login'>
+                {t('Password sign-in')}
+              </FieldLabel>
+            </Field>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-oauth-registration'
+                checked={oauthRegistration}
+                onCheckedChange={(value) =>
+                  setOauthRegistration(value === true)
+                }
+              />
+              <FieldLabel htmlFor='platform-oauth-registration'>
+                {t('Allow creating accounts with OAuth')}
+              </FieldLabel>
+            </Field>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-passkey'
+                checked={passkey}
+                onCheckedChange={(value) => setPasskey(value === true)}
+              />
+              <FieldLabel htmlFor='platform-passkey'>Passkey</FieldLabel>
+            </Field>
+          </FieldGroup>
         </CardContent>
       </Card>
       <Card>
@@ -188,95 +188,95 @@ export default function PlatformAdminSettings() {
           <CardTitle>{t('OAuth providers')}</CardTitle>
         </CardHeader>
         <CardContent>
-        <div className='space-y-6'>
-          {providers.map((provider, index) => (
-            <FieldGroup key={provider.slug} className='rounded-md border p-4'>
-              <Field orientation='horizontal'>
-                <Checkbox
-                  id={`platform-oauth-${provider.slug}`}
-                  checked={provider.enabled}
-                  onCheckedChange={(value) => {
-                    const next = [...providers]
-                    next[index] = { ...provider, enabled: value === true }
-                    setProviders(next)
-                  }}
-                />
-                <FieldLabel htmlFor={`platform-oauth-${provider.slug}`}>
-                  {provider.name}
-                </FieldLabel>
-              </Field>
-              <div className='grid gap-4 sm:grid-cols-2'>
-                <Field>
-                  <FieldLabel htmlFor={`platform-oauth-${provider.slug}-id`}>
-                    {t('Client ID')}
-                  </FieldLabel>
-                  <Input
-                    id={`platform-oauth-${provider.slug}-id`}
-                    value={provider.client_id}
-                    autoComplete='off'
-                    onChange={(event) => {
+          <div className='space-y-6'>
+            {providers.map((provider, index) => (
+              <FieldGroup key={provider.slug} className='rounded-md border p-4'>
+                <Field orientation='horizontal'>
+                  <Checkbox
+                    id={`platform-oauth-${provider.slug}`}
+                    checked={provider.enabled}
+                    onCheckedChange={(value) => {
                       const next = [...providers]
-                      next[index] = {
-                        ...provider,
-                        client_id: event.target.value,
-                      }
+                      next[index] = { ...provider, enabled: value === true }
                       setProviders(next)
                     }}
                   />
-                </Field>
-                <Field>
-                  <FieldLabel
-                    htmlFor={`platform-oauth-${provider.slug}-secret`}
-                  >
-                    {t('Client secret')}
+                  <FieldLabel htmlFor={`platform-oauth-${provider.slug}`}>
+                    {provider.name}
                   </FieldLabel>
-                  <Input
-                    id={`platform-oauth-${provider.slug}-secret`}
-                    type='password'
-                    autoComplete='off'
-                    placeholder={
-                      provider.configured
-                        ? t('Leave blank to keep the existing credential')
-                        : undefined
-                    }
-                    value={provider.client_secret}
-                    onChange={(event) => {
-                      const next = [...providers]
-                      next[index] = {
-                        ...provider,
-                        client_secret: event.target.value,
-                      }
-                      setProviders(next)
-                    }}
-                  />
                 </Field>
-                {(provider.slug === 'logto' || provider.slug === 'oidc') && (
-                  <Field className='sm:col-span-2'>
-                    <FieldLabel
-                      htmlFor={`platform-oauth-${provider.slug}-issuer`}
-                    >
-                      {t('Issuer URL')}
+                <div className='grid gap-4 sm:grid-cols-2'>
+                  <Field>
+                    <FieldLabel htmlFor={`platform-oauth-${provider.slug}-id`}>
+                      {t('Client ID')}
                     </FieldLabel>
                     <Input
-                      id={`platform-oauth-${provider.slug}-issuer`}
-                      value={provider.issuer}
-                      placeholder='https://auth.example.com'
+                      id={`platform-oauth-${provider.slug}-id`}
+                      value={provider.client_id}
                       autoComplete='off'
                       onChange={(event) => {
                         const next = [...providers]
                         next[index] = {
                           ...provider,
-                          issuer: event.target.value,
+                          client_id: event.target.value,
                         }
                         setProviders(next)
                       }}
                     />
                   </Field>
-                )}
-              </div>
-            </FieldGroup>
-          ))}
-        </div>
+                  <Field>
+                    <FieldLabel
+                      htmlFor={`platform-oauth-${provider.slug}-secret`}
+                    >
+                      {t('Client secret')}
+                    </FieldLabel>
+                    <Input
+                      id={`platform-oauth-${provider.slug}-secret`}
+                      type='password'
+                      autoComplete='off'
+                      placeholder={
+                        provider.configured
+                          ? t('Leave blank to keep the existing credential')
+                          : undefined
+                      }
+                      value={provider.client_secret}
+                      onChange={(event) => {
+                        const next = [...providers]
+                        next[index] = {
+                          ...provider,
+                          client_secret: event.target.value,
+                        }
+                        setProviders(next)
+                      }}
+                    />
+                  </Field>
+                  {(provider.slug === 'logto' || provider.slug === 'oidc') && (
+                    <Field className='sm:col-span-2'>
+                      <FieldLabel
+                        htmlFor={`platform-oauth-${provider.slug}-issuer`}
+                      >
+                        {t('Issuer URL')}
+                      </FieldLabel>
+                      <Input
+                        id={`platform-oauth-${provider.slug}-issuer`}
+                        value={provider.issuer}
+                        placeholder='https://auth.example.com'
+                        autoComplete='off'
+                        onChange={(event) => {
+                          const next = [...providers]
+                          next[index] = {
+                            ...provider,
+                            issuer: event.target.value,
+                          }
+                          setProviders(next)
+                        }}
+                      />
+                    </Field>
+                  )}
+                </div>
+              </FieldGroup>
+            ))}
+          </div>
         </CardContent>
       </Card>
       <Card>
@@ -297,95 +297,103 @@ export default function PlatformAdminSettings() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-        <FieldGroup>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-mail-enabled'
-              checked={mailEnabled}
-              onCheckedChange={(value) => setMailEnabled(value === true)}
-            />
-            <FieldLabel htmlFor='platform-mail-enabled'>
-              {t('Enable platform mail')}
-            </FieldLabel>
-          </Field>
-          <div className='grid gap-4 sm:grid-cols-2'>
-            <Field>
-              <FieldLabel htmlFor='platform-mail-from'>{t('From Address')}</FieldLabel>
-              <Input
-                id='platform-mail-from'
-                value={mailFrom}
-                autoComplete='off'
-                onChange={(event) => setMailFrom(event.target.value)}
+          <FieldGroup>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-mail-enabled'
+                checked={mailEnabled}
+                onCheckedChange={(value) => setMailEnabled(value === true)}
               />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='platform-mail-from-name'>
-                {t('From name')}
+              <FieldLabel htmlFor='platform-mail-enabled'>
+                {t('Enable platform mail')}
               </FieldLabel>
-              <Input
-                id='platform-mail-from-name'
-                value={mailFromName}
-                autoComplete='off'
-                onChange={(event) => setMailFromName(event.target.value)}
-              />
             </Field>
-            <Field>
-              <FieldLabel htmlFor='platform-mail-base'>{t('API URL')}</FieldLabel>
-              <Input
-                id='platform-mail-base'
-                value={mailBase}
-                autoComplete='off'
-                onChange={(event) => setMailBase(event.target.value)}
-              />
-            </Field>
-            <Field>
-              <FieldLabel htmlFor='platform-mail-provider'>
-                {t('Provider ID')}
-              </FieldLabel>
-              <Input
-                id='platform-mail-provider'
-                value={mailProvider}
-                autoComplete='off'
-                onChange={(event) => setMailProvider(event.target.value)}
-              />
-            </Field>
-            <Field className='sm:col-span-2'>
-              <FieldLabel htmlFor='platform-mail-key'>{t('API Key')}</FieldLabel>
-              <Input
-                id='platform-mail-key'
-                type='password'
-                autoComplete='off'
-                placeholder={
-                  query.data.mail.configured
-                    ? t('Leave blank to keep the existing credential')
-                    : undefined
+            <div className='grid gap-4 sm:grid-cols-2'>
+              <Field>
+                <FieldLabel htmlFor='platform-mail-from'>
+                  {t('From Address')}
+                </FieldLabel>
+                <Input
+                  id='platform-mail-from'
+                  value={mailFrom}
+                  autoComplete='off'
+                  onChange={(event) => setMailFrom(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor='platform-mail-from-name'>
+                  {t('From name')}
+                </FieldLabel>
+                <Input
+                  id='platform-mail-from-name'
+                  value={mailFromName}
+                  autoComplete='off'
+                  onChange={(event) => setMailFromName(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor='platform-mail-base'>
+                  {t('API URL')}
+                </FieldLabel>
+                <Input
+                  id='platform-mail-base'
+                  value={mailBase}
+                  autoComplete='off'
+                  onChange={(event) => setMailBase(event.target.value)}
+                />
+              </Field>
+              <Field>
+                <FieldLabel htmlFor='platform-mail-provider'>
+                  {t('Provider ID')}
+                </FieldLabel>
+                <Input
+                  id='platform-mail-provider'
+                  value={mailProvider}
+                  autoComplete='off'
+                  onChange={(event) => setMailProvider(event.target.value)}
+                />
+              </Field>
+              <Field className='sm:col-span-2'>
+                <FieldLabel htmlFor='platform-mail-key'>
+                  {t('API Key')}
+                </FieldLabel>
+                <Input
+                  id='platform-mail-key'
+                  type='password'
+                  autoComplete='off'
+                  placeholder={
+                    query.data.mail.configured
+                      ? t('Leave blank to keep the existing credential')
+                      : undefined
+                  }
+                  value={mailKey}
+                  onChange={(event) => setMailKey(event.target.value)}
+                />
+              </Field>
+            </div>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-mail-verify'
+                checked={emailVerification}
+                onCheckedChange={(value) =>
+                  setEmailVerification(value === true)
                 }
-                value={mailKey}
-                onChange={(event) => setMailKey(event.target.value)}
               />
+              <FieldLabel htmlFor='platform-mail-verify'>
+                {t('Require email verification')}
+              </FieldLabel>
             </Field>
-          </div>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-mail-verify'
-              checked={emailVerification}
-              onCheckedChange={(value) => setEmailVerification(value === true)}
-            />
-            <FieldLabel htmlFor='platform-mail-verify'>
-              {t('Require email verification')}
-            </FieldLabel>
-          </Field>
-          <Field orientation='horizontal'>
-            <Checkbox
-              id='platform-mail-notify'
-              checked={notifications}
-              onCheckedChange={(value) => setNotifications(value === true)}
-            />
-            <FieldLabel htmlFor='platform-mail-notify'>
-              {t('Send account notices')}
-            </FieldLabel>
-          </Field>
-        </FieldGroup>
+            <Field orientation='horizontal'>
+              <Checkbox
+                id='platform-mail-notify'
+                checked={notifications}
+                onCheckedChange={(value) => setNotifications(value === true)}
+              />
+              <FieldLabel htmlFor='platform-mail-notify'>
+                {t('Send account notices')}
+              </FieldLabel>
+            </Field>
+          </FieldGroup>
         </CardContent>
         <CardFooter className='justify-end gap-2'>
           {mutation.isError && (

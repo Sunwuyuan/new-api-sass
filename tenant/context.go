@@ -102,10 +102,10 @@ func (s *Settings[T]) Update(update func(*T)) {
 }
 
 // Path returns a server-owned workspace path, never a caller-supplied redirect.
+// Hostnames isolate workspaces, so the path is not prefixed.
 func Path(ctx context.Context, path string) string {
-	identity, err := FromContext(ctx)
-	if err != nil || identity.Slug == "" {
+	if _, err := FromContext(ctx); err != nil {
 		panic(ErrMissing)
 	}
-	return "/t/" + identity.Slug + path
+	return GatewayPath(path)
 }

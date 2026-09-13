@@ -65,6 +65,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 	var alpha, beta struct{ Tenant tenant.Workspace }
 	require.Equal(t, http.StatusCreated, alice.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Phase Two Alpha", "phase2-alpha", saasPassword(t)), &alpha).Code)
 	require.Equal(t, http.StatusCreated, bob.request(t, http.MethodPost, "/platform/api/tenants", platformTenantBody("Phase Two Beta", "phase2-beta", saasPassword(t)), &beta).Code)
+	aliceWorkspace := &saasBrowser{handler: server, host: "phase2-alpha.example.test"}
 
 	t.Run("users cannot reach any administrator endpoint or enumerate foreign workspaces", func(t *testing.T) {
 		for _, path := range []string{"/users", "/tenants", "/plans", "/redemptions", "/redemptions/1/uses", "/audits"} {
@@ -192,7 +193,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/status", alpha.Tenant.ID), map[string]string{"status": "suspended"}, nil).Code)
 		res = alice.request(t, http.MethodPost, "/platform/api/redeem", map[string]any{"tenant_id": alpha.Tenant.ID, "code": batch.Codes[2]}, nil)
 		assert.JSONEq(t, response, res.Body.String())
-		assert.Equal(t, http.StatusForbidden, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		assert.Equal(t, http.StatusForbidden, aliceWorkspace.request(t, http.MethodGet, "/api/status", nil, nil).Code)
 		require.Equal(t, http.StatusOK, admin.request(t, http.MethodPost, fmt.Sprintf("/platform/api/admin/tenants/%d/status", alpha.Tenant.ID), map[string]string{"status": "active"}, nil).Code)
 		var assigned struct{ Assignment plan.Assignment }
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, "/platform/api/redeem", map[string]any{"tenant_id": alpha.Tenant.ID, "code": batch.Codes[2]}, &assigned).Code)
@@ -398,7 +399,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/platform/api/tenants", nil, &listed).Code)
 		assert.False(t, listed.LiteAvailable)
 		assert.Equal(t, 3, listed.WorkspaceCount, "existing workspaces survive a downgrade")
-		assert.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		assert.Equal(t, http.StatusOK, aliceWorkspace.request(t, http.MethodGet, "/api/status", nil, nil).Code)
 		effective, err := plan.Current(ctx, model.DB)
 		require.NoError(t, err)
 		assert.Equal(t, "Lite", effective.Name)
@@ -415,7 +416,7 @@ func testSaaSPhase2(t *testing.T, saas *platform.Server, server http.Handler, ad
 		assert.ErrorIs(t, model.DB.WithContext(ctx).Create(&model.Channel{Name: "phase2-blocked", Key: saasPassword(t)}).Error, plan.ErrExpiredResources)
 		batch := createPlatformCodes(t, admin, 3, 1, 1, 1)
 		require.Equal(t, http.StatusOK, alice.request(t, http.MethodPost, "/platform/api/redeem", map[string]any{"tenant_id": alpha.Tenant.ID, "code": batch.Codes[0]}, nil).Code)
-		assert.Equal(t, http.StatusOK, alice.request(t, http.MethodGet, "/t/phase2-alpha/api/status", nil, nil).Code)
+		assert.Equal(t, http.StatusOK, aliceWorkspace.request(t, http.MethodGet, "/api/status", nil, nil).Code)
 		require.NoError(t, model.DB.WithContext(ctx).Create(&model.Token{UserId: 1, Key: saasPassword(t)}).Error)
 		view.Capabilities.MaxWorkspaces = 0
 		assert.Equal(t, http.StatusBadRequest, admin.request(t, http.MethodPost, "/platform/api/admin/plans/3", view, nil).Code)

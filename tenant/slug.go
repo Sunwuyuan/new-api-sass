@@ -7,10 +7,6 @@ import (
 	"strings"
 )
 
-// WorkspaceHeader lets a same-origin dashboard request name its workspace when
-// the URL was not rewritten to /t/{slug}/.... It is only a routing hint.
-const WorkspaceHeader = "X-New-API-Workspace"
-
 var slugPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
 
 func ValidSlug(slug string) bool {

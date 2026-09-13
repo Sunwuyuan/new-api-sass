@@ -237,8 +237,9 @@ func migrateTenantPrimaryKey(db *gorm.DB, value any) error {
 func EnforceTenantScopes() error {
 	globals := map[string]bool{
 		"platform_users": true, "platform_sessions": true, "platform_auth_attempts": true,
-		"tenants": true, "plans": true, "tenant_usage": true,
-		"plan_assignments": true, "tenant_root_activations": true,
+		"tenants": true, "plans": true, "tenant_usage": true, "tenant_hosts": true,
+		"platform_wildcard_domains": true,
+		"plan_assignments":          true, "tenant_root_activations": true,
 		"platform_admin_guard": true, "platform_audits": true, "platform_settings": true,
 		"platform_redemptions": true, "platform_redemption_uses": true,
 		"platform_auth_flows": true, "platform_oauth_identities": true, "platform_passkeys": true,
