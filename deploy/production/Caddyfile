@@ -1,0 +1,16 @@
+{
+  auto_https off
+  admin off
+  servers {
+    protocols h1 h2
+  }
+}
+:443, :8443 {
+  tls /etc/caddy/certs/cert.pem /etc/caddy/certs/key.pem
+  encode gzip
+  reverse_proxy new-api:3000
+}
+:80 {
+  encode gzip
+  reverse_proxy new-api:3000
+}
